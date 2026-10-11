@@ -52,7 +52,20 @@ class TestParsing(unittest.TestCase):
                                "to": "19:30"})
         self.assertEqual(r, {"name": "Дети", "enabled": True,
                              "devices": ["192.168.1.5", "aa:bb:cc:dd:ee:ff"],
+                             "names": {},
                              "days": [1, 5], "from": "09:00", "to": "19:30"})
+
+    def test_names_kept_only_for_rule_devices(self):
+        r = ds.normalize_rule({
+            "devices": ["AA-BB-CC-DD-EE-FF", "10.0.0.5"],
+            "names": {"aa:bb:cc:dd:ee:ff": "  Телефон\n Маши ",
+                      "10.0.0.5": "10.0.0.5",          # имя = адрес — лишнее
+                      "11:22:33:44:55:66": "чужое",     # не в правиле
+                      "мусор": "x", "10.0.0.6": ""},
+            "from": "09:00", "to": "19:00"})
+        self.assertEqual(r["names"], {"aa:bb:cc:dd:ee:ff": "Телефон Маши"})
+        self.assertEqual(ds.normalize_rule(dict(
+            r, names="не словарь"))["names"], {})
 
     def test_rule_errors(self):
         base = {"devices": ["192.168.1.5"], "from": "09:00", "to": "19:00"}

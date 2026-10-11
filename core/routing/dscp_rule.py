@@ -155,6 +155,15 @@ def _ensure_jump(parent: str, chain: str):
     _run(["iptables", "-t", "mangle", "-A", parent, "-j", chain])
 
 
+def is_hooked() -> bool:
+    """Подцеплена ли наша DSCP-цепочка (iptables). На nft — всегда да:
+    таблицы nft прошивка (fw4) не перезаписывает."""
+    if _backend() == "nftables":
+        return True
+    rc, out, _e = _run(["iptables", "-t", "mangle", "-S", "PREROUTING"])
+    return rc == 0 and ("-A PREROUTING -j %s" % PREROUTING_CHAIN) in out
+
+
 # ─────────────────────── pure builder ────────────────────────────────
 
 def build_mark_rules(chain: str, dscp: int, mark: int,

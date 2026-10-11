@@ -215,7 +215,11 @@ def restore_firewall() -> dict:
     from core.routing import ipset_backend, masquerade
     from core.routing.rules import DscpRoutingRule
     done = {"marks": 0, "ifaces": [], "dscp": 0, "dns": False,
-            "errors": []}
+            "errors": [],
+            # Что из этого реально пропало и было возвращено: хук зовут и
+            # без перезаписи наших правил (Keenetic — по своим таймерам),
+            # и «вернули» в журнале тогда было бы неправдой.
+            "restored": {"marks": 0, "ifaces": [], "dscp": 0}}
     try:
         rules = _enabled_rules()
     except Exception as e:
@@ -237,9 +241,12 @@ def restore_firewall() -> dict:
             for fam in ("v4", "v6"):
                 if not entries[fam]:
                     continue
-                res = ipset_backend.sync_mark_entries(entries[fam], fam)
                 done["marks"] += len(entries[fam])
+                if ipset_backend.marks_in_place(entries[fam], fam):
+                    continue
+                res = ipset_backend.sync_mark_entries(entries[fam], fam)
                 done["errors"] += res.get("errors") or []
+                done["restored"]["marks"] += len(entries[fam])
 
     from core.routing.manager import _is_ndms_native_iface
     ifaces = sorted({r.target_iface for r in rules
@@ -252,15 +259,24 @@ def restore_firewall() -> dict:
             mq = masquerade.ensure_for_iface(ifname)
             if mq.get("ok"):
                 done["ifaces"].append(ifname)
+                if mq.get("added"):
+                    done["restored"]["ifaces"].append(ifname)
         except Exception as e:
             done["errors"].append("masquerade %s: %s" % (ifname, e))
 
-    for rule in rules:
-        if isinstance(rule, DscpRoutingRule):
+    dscp_rules = [r for r in rules if isinstance(r, DscpRoutingRule)]
+    if dscp_rules:
+        from core.routing import dscp_rule
+        try:
+            dscp_missing = not dscp_rule.is_hooked()
+        except Exception:
+            dscp_missing = True
+        for rule in dscp_rules:
             try:
-                from core.routing import dscp_rule
                 dscp_rule.apply_dscp_rule(rule)
                 done["dscp"] += 1
+                if dscp_missing:
+                    done["restored"]["dscp"] += 1
             except Exception as e:
                 done["errors"].append("dscp %s: %s" % (rule.id, e))
 
@@ -271,6 +287,9 @@ def restore_firewall() -> dict:
     except Exception as e:
         done["errors"].append("dns_intercept: %s" % e)
 
+    rest = done["restored"]
+    done["changed"] = bool(rest["marks"] or rest["ifaces"] or rest["dscp"]
+                           or done["dns"])
     done["ok"] = not done["errors"]
     return done
 
@@ -284,22 +303,68 @@ def _iface_exists(ifname: str) -> bool:
     return os.path.exists("/sys/class/net/%s" % ifname)
 
 
+REPEAT_LOG_SEC = 3600     # одинаковое «вернули» — не чаще раза в час
+_last_restore = {"text": "", "at": 0.0, "repeats": 0}
+
+
+def restore_summary(res: dict) -> str:
+    """Что вернули — одной строкой; пусто, если ничего не пропадало."""
+    if not res.get("changed"):
+        return ""
+    rest = res.get("restored") or {}
+    parts = []
+    if rest.get("marks"):
+        parts.append("маркировка доменов: %d" % rest["marks"])
+    if rest.get("ifaces"):
+        parts.append("masquerade: %s" % ", ".join(rest["ifaces"]))
+    if rest.get("dscp"):
+        parts.append("DSCP: %d" % rest["dscp"])
+    if res.get("dns"):
+        parts.append("перехват DNS")
+    return ", ".join(parts)
+
+
+def _log_restore(res: dict, now: float = None):
+    """Журнал сторожа: факт — в INFO, «всё на месте» — в DEBUG.
+
+    Хук netfilter.d Keenetic зовёт и без перезаписи наших правил (у
+    пользователя — ровно раз в 5 минут), и запись «правила возвращены»
+    на каждый вызов забивала журнал. Теперь INFO — только когда что-то
+    реально пропало; одинаковая запись повторно — не чаще раза в час, со
+    счётчиком пропущенных. Ошибки — всегда WARNING.
+    """
+    now = time.time() if now is None else now
+    errors = res.get("errors") or []
+    if errors:
+        log.warning("routing: восстановление после перезаписи netfilter — "
+                    "ошибки: %s" % "; ".join(errors[:3]), source="routing")
+    summary = restore_summary(res)
+    if not summary:
+        log.debug("routing: хук netfilter — наши правила на месте",
+                  source="routing")
+        return
+    last = _last_restore
+    if summary == last["text"] and now - last["at"] < REPEAT_LOG_SEC:
+        last["repeats"] += 1
+        log.debug("routing: правила возвращены (%s)" % summary,
+                  source="routing")
+        return
+    tail = ""
+    if summary == last["text"] and last["repeats"]:
+        tail = " (то же ещё %d раз за последний час — прошивка " \
+               "регулярно сносит наши правила)" % last["repeats"]
+    log.info("routing: правила возвращены после перезаписи netfilter "
+             "(%s)%s" % (summary, tail), source="routing")
+    last.update(text=summary, at=now, repeats=0)
+
+
 def _restore_loop():
     while True:
         _restore_event.wait()
         time.sleep(RESTORE_DELAY)
         _restore_event.clear()
         try:
-            res = restore_firewall()
-            log.info("routing: правила возвращены после перезаписи "
-                     "netfilter (маркировка: %d, интерфейсов: %d, DSCP: %d"
-                     "%s)%s"
-                     % (res.get("marks", 0), len(res.get("ifaces") or []),
-                        res.get("dscp", 0),
-                        ", перехват DNS" if res.get("dns") else "",
-                        (" — ошибки: %s" % "; ".join(res["errors"][:3]))
-                        if res.get("errors") else ""),
-                     source="routing")
+            _log_restore(restore_firewall())
         except Exception as e:
             log.warning("routing: восстановление после netfilter: %s" % e,
                         source="routing")

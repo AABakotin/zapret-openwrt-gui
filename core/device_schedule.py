@@ -113,6 +113,28 @@ def normalize_device(token):
     return "ip", str(net)
 
 
+def normalize_names(names, devices):
+    """Подписи устройств {устройство: имя} — только для устройств правила.
+
+    Имя запоминается при выборе из списка сети: устройство не в сети
+    (выключенный телефон) в /api/devices не попадает, а в форме оно
+    должно остаться «Имя (MAC)», а не голым адресом. Мусор отбрасываем
+    молча — подпись на работу правила не влияет.
+    """
+    out = {}
+    if not isinstance(names, dict):
+        return out
+    for key, value in names.items():
+        try:
+            _, dev = normalize_device(key)
+        except ValueError:
+            continue
+        label = re.sub(r"\s+", " ", str(value or "")).strip()[:64]
+        if dev in devices and label and label != dev:
+            out[dev] = label
+    return out
+
+
 def normalize_rule(rule):
     """Привести правило к каноническому виду. Ошибки → ValueError."""
     if not isinstance(rule, dict):
@@ -159,6 +181,7 @@ def normalize_rule(rule):
         "name": name,
         "enabled": bool(rule.get("enabled", True)),
         "devices": norm_devices,
+        "names": normalize_names(rule.get("names"), norm_devices),
         "days": sorted(norm_days),
         "from": "%02d:%02d" % divmod(start, 60),
         "to": "%02d:%02d" % divmod(end, 60),

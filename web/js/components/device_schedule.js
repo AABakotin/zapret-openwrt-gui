@@ -56,10 +56,36 @@ const DeviceSchedule = (() => {
         return out;
     }
 
-    function deviceLabel(token) {
+    // Имя устройства: запомненное в правиле при выборе из сети (оно есть,
+    // даже когда устройство выключено), иначе — из текущего списка сети.
+    function liveName(token) {
         const t = String(token || '').toLowerCase();
         const d = devices.find(x => (x.mac || '').toLowerCase() === t || x.ip === t);
-        return d && d.hostname ? `${token} (${d.hostname})` : token;
+        return d && d.hostname && d.hostname !== t ? d.hostname : '';
+    }
+
+    function allNames() {
+        return Object.assign({}, ...(st.rules || []).map(r => r.names || {}));
+    }
+
+    // «Имя (MAC)» — по имени ориентироваться проще (issue #381).
+    function deviceLabel(token, names) {
+        const name = (names || {})[token] || liveName(token);
+        return name ? `${name} (${token})` : token;
+    }
+
+    // Адрес из статуса («мимо обхода» — уже IP, в который превратился MAC):
+    // ищем устройство с этим IP и подписываем его именем.
+    function addrLabel(addr) {
+        const names = allNames();
+        const d = devices.find(x => x.ip === addr);
+        const name = names[addr] || (d && (names[(d.mac || '').toLowerCase()]
+                                           || (d.hostname !== addr && d.hostname)));
+        return name ? `${name} (${addr})` : addr;
+    }
+
+    function normToken(v) {
+        return String(v || '').trim().toLowerCase().replace(/-/g, ':');
     }
 
     function statusHtml() {
@@ -72,13 +98,13 @@ const DeviceSchedule = (() => {
         if ((status.active_rules || []).length) {
             parts.push(`Действует: <strong>${esc(status.active_rules.join(', '))}</strong>`);
             parts.push(`Мимо обхода: ${(status.excluded || []).length
-                ? esc(status.excluded.join(', ')) : '—'}`);
+                ? esc(status.excluded.map(addrLabel).join(', ')) : '—'}`);
         } else {
             parts.push('Сейчас ни одно правило не действует — обход для всех.');
         }
         if ((status.unresolved || []).length) {
             parts.push(`<span style="color:#e58;">Не найдены в сети (обход у них есть): `
-                + `${esc(status.unresolved.join(', '))}</span>`);
+                + `${esc(status.unresolved.map(m => deviceLabel(m, allNames())).join(', '))}</span>`);
         }
         (st.errors || []).filter(e => e.startsWith('tz_offset')).forEach(e => {
             parts.push(`<span style="color:#e58;">${esc(e)} — используется время системы</span>`);
@@ -116,17 +142,30 @@ const DeviceSchedule = (() => {
                 </label>`).join('')}
             </div>
             <div style="margin-top:8px;">
-                <textarea class="form-textarea" data-ds="devices" data-i="${i}" rows="2"
-                          placeholder="IP, подсеть или MAC — через запятую или с новой строки"
-                          style="width:100%; font-family:monospace; font-size:12px;">${esc((r.devices || []).join('\n'))}</textarea>
-                ${(r.devices || []).length ? `<div class="text-muted" style="font-size:11px;">
-                    ${esc((r.devices || []).map(deviceLabel).join(', '))}</div>` : ''}
-                ${devices.length ? `
-                <select class="form-select" data-ds-action="pick" data-i="${i}" style="margin-top:6px; font-size:12px;">
-                    <option value="">+ добавить устройство из сети…</option>
-                    ${devices.map(d => `<option value="${esc(d.mac || d.ip)}">
-                        ${esc(d.hostname || d.ip)} — ${esc(d.ip)}${d.mac ? ' / ' + esc(d.mac) : ''}</option>`).join('')}
-                </select>` : ''}
+                <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                    ${(r.devices || []).map((d, k) => `
+                    <span title="${esc(d)}" style="display:inline-flex; align-items:center; gap:4px;
+                                 padding:3px 4px 3px 10px; border-radius:12px; font-size:12px;
+                                 background:var(--bg-secondary); border:1px solid var(--border, transparent);">
+                        ${esc(deviceLabel(d, r.names))}
+                        <button class="btn btn-ghost btn-sm" data-ds-action="rmdev" data-i="${i}" data-k="${k}"
+                                title="Убрать устройство" style="padding:0 6px; line-height:1.4;">✕</button>
+                    </span>`).join('')
+                    || '<span class="text-muted" style="font-size:12px;">Устройства не выбраны.</span>'}
+                </div>
+                <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:6px;">
+                    ${devices.length ? `
+                    <select class="form-select" data-ds-action="pick" data-i="${i}" style="font-size:12px; max-width:100%;">
+                        <option value="">+ добавить устройство из сети…</option>
+                        ${devices.map(d => `<option value="${esc(d.mac || d.ip)}">
+                            ${esc(d.hostname && d.hostname !== d.ip ? d.hostname : d.ip)}
+                            (${esc(d.mac || d.ip)})${d.mac ? ' — ' + esc(d.ip) : ''}</option>`).join('')}
+                    </select>` : ''}
+                    <input type="text" class="form-input" data-ds-manual="${i}"
+                           placeholder="вручную: IP или MAC"
+                           style="width:210px; font-size:12px; font-family:monospace;">
+                    <button class="btn btn-ghost btn-sm" data-ds-action="adddev" data-i="${i}">Добавить</button>
+                </div>
             </div>
         </div>`;
     }
@@ -164,19 +203,21 @@ const DeviceSchedule = (() => {
         host.oninput = onInput;
         host.onchange = onInput;
         host.onclick = onClick;
+        host.onkeydown = e => {
+            if (e.key === 'Enter' && e.target.dataset && e.target.dataset.dsManual != null) {
+                e.preventDefault();
+                addManual(+e.target.dataset.dsManual);
+            }
+        };
     }
 
     function onInput(e) {
         const t = e.target;
         const f = t.dataset && t.dataset.ds;
         if (t.dataset && t.dataset.dsAction === 'pick' && e.type === 'change') {
-            const i = +t.dataset.i;
-            const v = t.value;
-            if (v && !(st.rules[i].devices || []).includes(v)) {
-                st.rules[i].devices = (st.rules[i].devices || []).concat([v]);
-                dirty = true;
-                draw();
-            }
+            const v = normToken(t.value);
+            const d = devices.find(x => normToken(x.mac || x.ip) === v);
+            addDevice(+t.dataset.i, v, d && d.hostname !== d.ip ? d.hostname : '');
             return;
         }
         if (!f) return;
@@ -189,14 +230,30 @@ const DeviceSchedule = (() => {
         if (f === 'enabled') r.enabled = t.checked;
         else if (f === 'name') r.name = t.value;
         else if (f === 'from' || f === 'to') r[f] = t.value;
-        else if (f === 'devices') {
-            r.devices = t.value.split(/[\s,;]+/).map(x => x.trim()).filter(Boolean);
-        } else if (f === 'day') {
+        else if (f === 'day') {
             const d = +t.dataset.day;
             const cur = r.days || [];
             r.days = t.checked ? Array.from(new Set(cur.concat([d]))).sort()
                                : cur.filter(x => x !== d);
         }
+    }
+
+    function addDevice(i, token, name) {
+        const r = st.rules[i];
+        if (!r || !token) return;
+        delete r.error;
+        if (!(r.devices || []).includes(token)) {
+            r.devices = (r.devices || []).concat([token]);
+        }
+        if (name) r.names = Object.assign({}, r.names || {}, { [token]: name });
+        dirty = true;
+        draw();
+    }
+
+    function addManual(i) {
+        const el = host.querySelector(`[data-ds-manual="${i}"]`);
+        const tokens = String(el && el.value || '').split(/[\s,;]+/).map(normToken).filter(Boolean);
+        tokens.forEach(t => addDevice(i, t, ''));
     }
 
     async function onClick(e) {
@@ -209,6 +266,16 @@ const DeviceSchedule = (() => {
                 from: '09:00', to: '19:00' }]);
             dirty = true;
             draw();
+        } else if (a === 'adddev') {
+            addManual(+b.dataset.i);
+        } else if (a === 'rmdev') {
+            const r = st.rules[+b.dataset.i];
+            const token = r.devices[+b.dataset.k];
+            r.devices.splice(+b.dataset.k, 1);
+            if (r.names) delete r.names[token];
+            delete r.error;
+            dirty = true;
+            draw();
         } else if (a === 'del') {
             st.rules.splice(+b.dataset.i, 1);
             dirty = true;
@@ -216,6 +283,9 @@ const DeviceSchedule = (() => {
         } else if (a === 'save') {
             const bad = st.rules.find(r => !(r.days || []).length);
             if (bad) { Toast.error('Отметьте хотя бы один день недели'); return; }
+            if (st.rules.find(r => !(r.devices || []).length)) {
+                Toast.error('В правиле не выбрано ни одного устройства'); return;
+            }
             try {
                 // Все дни отмечены — храним пустой список («каждый день»).
                 const body = Object.assign({}, st, {

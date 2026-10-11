@@ -422,7 +422,7 @@ make upstream-offline    # только локальные сверки (идё�
 | `marks.py` | Метки маршрутов: поле бит `0x0FFF0000`, слоты по ключу без коллизий (`routing.mark_slots`), `--set-xmark`/`ip rule fwmark value/mask` (BusyBox `ip` — без маски), распознавание старых меток. |
 | `set_ttl.py` | Срок записи в наборе = TTL из DNS + запас (`routing.set_ttl`): набор не копит чужие IP CDN, живые соединения держатся на connmark. |
 | `domain_match.py` | Записи доменов: домен (с поддоменами), wildcard, `regexp:`; `Matcher`, `plain_domains` (только домены — dnsmasq/NDMS/резолв), `validate_entry`. |
-| `guardian.py` | Сторож: хук netfilter.d/hotplug (`101-zapret-gui-routing.sh`) → SIGUSR2 → `restore_firewall()` после перезаписи netfilter прошивкой; netlink (link/addr) → `apply_all_on_interface_up` для любого движка. Стартует из `main()`, не из `create_app`. |
+| `guardian.py` | Сторож: хук netfilter.d/hotplug (`101-zapret-gui-routing.sh`) → SIGUSR2 → `restore_firewall()` после перезаписи netfilter прошивкой (сначала проверяет, что пропало — `marks_in_place`/`is_hooked`/`added`; Keenetic зовёт хук и без перезаписи, поэтому «ничего не пропало» — только DEBUG, а одинаковое «вернули» — раз в час со счётчиком, `_log_restore`); netlink (link/addr) → `apply_all_on_interface_up` для любого движка. Стартует из `main()`, не из `create_app`. |
 | `dnsmasq_integration.py` / `doh_resolver.py` | Domain-routing через dnsmasq + DoH-резолв для pre-population set'ов. |
 | `alias_resolver.py` | `geosite:`/`geoip:` → списки доменов/подсетей. |
 | `masquerade.py` | MASQUERADE/SNAT на исходящий tunnel-интерфейс. |

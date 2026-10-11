@@ -129,16 +129,116 @@ class TestRestore(unittest.TestCase):
                            side_effect=lambda i: i.startswith("Wireguard")), \
                 mock.patch("core.routing.dscp_rule.apply_dscp_rule",
                            side_effect=lambda r: dscp_applied.append(r.id)), \
+                mock.patch("core.routing.ipset_backend.marks_in_place",
+                           return_value=False), \
+                mock.patch("core.routing.dscp_rule.is_hooked",
+                           return_value=False), \
                 mock.patch("core.routing.dns_intercept.get_dns_intercept",
                            return_value=fake_di):
             res = guardian.restore_firewall()
         self.assertTrue(res["ok"], res)
+        self.assertTrue(res["changed"])
+        self.assertEqual(res["restored"]["marks"], 1)
+        self.assertEqual(res["restored"]["dscp"], 1)
         self.assertEqual(synced, [("v4", [("awgr_uni_r1_dom", 0x10000,
                                            marks.MASK)])])
         # нативный интерфейс Keenetic NDMS ведёт сам — без нашего NAT
         self.assertEqual(masq, ["awg0"])
         self.assertEqual(dscp_applied, ["d1"])
         self.assertTrue(res["dns"])
+
+
+class TestRestoreWhenNothingIsMissing(unittest.TestCase):
+    """Хук зовут и без перезаписи (Keenetic — раз в 5 минут): тогда
+    правила не переписываются, и в журнале нет «правила возвращены»."""
+
+    def _restore(self, *, in_place=True, added=False, hooked=True,
+                 dns_noop=True):
+        dom = DomainRoutingRule(target_iface="awg0", domains=["a.com"],
+                                rule_id="uni-r1-dom")
+        dscp = DscpRoutingRule(target_iface="awg0", dscp=46, rule_id="d1")
+        fake_di = mock.Mock()
+        fake_di.reassert.return_value = (
+            {"ok": True, "noop": True} if dns_noop else {"ok": True})
+        synced = []
+        with mock.patch.object(guardian, "_enabled_rules",
+                               return_value=[dom, dscp]), \
+                mock.patch.object(guardian, "_existing_ipsets",
+                                  return_value={"awgr_uni_r1_dom"}), \
+                mock.patch.object(guardian, "_iface_exists",
+                                  return_value=True), \
+                mock.patch("core.routing.ipset_backend.available",
+                           return_value=True), \
+                mock.patch("core.routing.ipset_backend.marks_in_place",
+                           return_value=in_place), \
+                mock.patch("core.routing.ipset_backend.sync_mark_entries",
+                           side_effect=lambda e, f: synced.append(f)
+                           or {"ok": True, "errors": []}), \
+                mock.patch("core.routing.domain_rule._mark_for",
+                           return_value=0x10000), \
+                mock.patch("core.routing.masquerade.ensure_for_iface",
+                           return_value={"ok": True, "added": added}), \
+                mock.patch("core.routing.manager._is_ndms_native_iface",
+                           return_value=False), \
+                mock.patch("core.routing.dscp_rule.is_hooked",
+                           return_value=hooked), \
+                mock.patch("core.routing.dscp_rule.apply_dscp_rule"), \
+                mock.patch("core.routing.dns_intercept.get_dns_intercept",
+                           return_value=fake_di):
+            return guardian.restore_firewall(), synced
+
+    def test_all_in_place_is_not_a_restore(self):
+        res, synced = self._restore()
+        self.assertTrue(res["ok"])
+        self.assertFalse(res["changed"])
+        self.assertEqual(synced, [])          # цепочки не переписывали
+        self.assertEqual(guardian.restore_summary(res), "")
+
+    def test_lost_masquerade_is_reported(self):
+        res, _ = self._restore(added=True)
+        self.assertTrue(res["changed"])
+        self.assertEqual(guardian.restore_summary(res), "masquerade: awg0")
+
+    def test_lost_marks_are_resynced(self):
+        res, synced = self._restore(in_place=False)
+        self.assertEqual(synced, ["v4"])
+        self.assertIn("маркировка доменов: 1", guardian.restore_summary(res))
+
+
+class TestRestoreLog(unittest.TestCase):
+
+    def setUp(self):
+        guardian._last_restore.update(text="", at=0.0, repeats=0)
+        self.p = mock.patch.object(guardian, "log")
+        self.log = self.p.start()
+
+    def tearDown(self):
+        self.p.stop()
+
+    @staticmethod
+    def _res(changed=True, errors=None):
+        return {"changed": changed, "errors": errors or [], "dns": False,
+                "restored": {"marks": 0, "ifaces": ["awg0"] if changed
+                             else [], "dscp": 0}}
+
+    def test_nothing_missing_is_debug_only(self):
+        for i in range(5):
+            guardian._log_restore(self._res(changed=False), now=300.0 * i)
+        self.log.info.assert_not_called()
+        self.log.warning.assert_not_called()
+
+    def test_same_restore_is_collapsed_for_an_hour(self):
+        for i in range(12):                      # раз в 5 минут, час
+            guardian._log_restore(self._res(), now=1000.0 + 300 * i)
+        self.assertEqual(self.log.info.call_count, 1)
+        guardian._log_restore(self._res(), now=1000.0 + 3600)
+        self.assertEqual(self.log.info.call_count, 2)
+        self.assertIn("ещё 11 раз", self.log.info.call_args[0][0])
+
+    def test_errors_are_warnings(self):
+        guardian._log_restore(self._res(changed=False,
+                                        errors=["masquerade awg0: x"]))
+        self.log.warning.assert_called_once()
 
 
 def _nlmsg(mtype, body):
@@ -194,3 +294,26 @@ class TestNetlink(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMarksInPlace(unittest.TestCase):
+
+    def _check(self, chain_dump, pre, out):
+        from core.routing import ipset_backend as ib
+        dumps = {ib.PREROUTING_CHAIN: chain_dump, "PREROUTING": pre,
+                 "OUTPUT": out}
+
+        def fake_run(args, timeout=10):
+            return 0, dumps.get(args[-1], ""), ""
+        with mock.patch.object(ib, "_run", side_effect=fake_run):
+            return ib.marks_in_place([("awgr_x", 0x10000, marks.MASK)])
+
+    def test_all_hooked(self):
+        from core.routing import ipset_backend as ib
+        dump = ("-A %s -m set --match-set awgr_x dst -j MARK --set-xmark "
+                "0x10000/0x%x" % (ib.PREROUTING_CHAIN, marks.MASK))
+        pre = "-A PREROUTING -j %s" % ib.PREROUTING_CHAIN
+        out = "-A OUTPUT -j %s" % ib.OUTPUT_CHAIN
+        self.assertTrue(self._check(dump, pre, out))
+        self.assertFalse(self._check(dump, pre, ""))       # OUTPUT снесли
+        self.assertFalse(self._check("", pre, out))        # записей нет

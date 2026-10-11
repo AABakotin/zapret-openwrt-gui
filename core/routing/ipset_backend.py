@@ -264,6 +264,25 @@ def _sync_locked(entries: list, family: str) -> dict:
     return {"ok": ok, "errors": [err] if err else []}
 
 
+def marks_in_place(entries: list, family: str = "v4") -> bool:
+    """Стоят ли наши mangle-записи ровно такими и подцеплены ли цепочки.
+
+    Нужен сторожу (core/routing/guardian.py): хук netfilter.d зовётся и
+    тогда, когда прошивка наши правила не трогала, и «вернули правила»
+    в журнале в таком случае — неправда и шум.
+    """
+    cmd = "iptables" if family == "v4" else "ip6tables"
+    want = {(name, int(mark), int(mask)) for name, mark, mask in entries}
+    if set(_current_entries(cmd)) != want:
+        return False
+    for parent, chain in (("PREROUTING", PREROUTING_CHAIN),
+                          ("OUTPUT", OUTPUT_CHAIN)):
+        rc, out, _e = _run([cmd, "-t", "mangle", "-S", parent])
+        if rc != 0 or ("-A %s -j %s" % (parent, chain)) not in out:
+            return False
+    return True
+
+
 def sync_mark_entries(entries: list, family: str = "v4") -> dict:
     """Переписать наши mangle-цепочки семейства под список записей."""
     with _chain_lock:

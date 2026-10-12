@@ -754,6 +754,19 @@ const SingboxDashboardPage = (() => {
                         'без auto_route не пропускает TCP). Откатился на system. ' +
                         'Обновите sing-box (раздел «Установка») на сборку с gvisor.',
                         14000);
+                } else if (r.stack_tcp_broken) {
+                    // system/mixed ведут TCP через системный стек — без
+                    // auto_route он TCP не пропускает (issue #386).
+                    Toast.warning('TUN-инбаунд добавлен, но со стеком ' + r.stack +
+                        ' без auto_route TCP через него не пойдёт: открываться ' +
+                        'будет только то, что ходит по UDP. Для выборочной ' +
+                        'маршрутизации выберите стек gvisor.', 14000);
+                } else if (r.gvisor_unverified) {
+                    Toast.warning('TUN-инбаунд добавлен в ' + tunForm.config +
+                        ' (стек gvisor). Проверить, собран ли ваш sing-box с ' +
+                        'gvisor, не удалось: если конфиг не стартует с ошибкой ' +
+                        '«gVisor is not included in this build», обновите ' +
+                        'sing-box в разделе «Установка».', 14000);
                 } else {
                     Toast.success('TUN-инбаунд добавлен в ' + tunForm.config +
                         ' (стек ' + (r.stack || 'gvisor') + '). (Пере)запустите ' +

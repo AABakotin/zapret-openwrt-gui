@@ -86,6 +86,12 @@ const RoutingUnifiedPage = (() => {
                         <input type="checkbox" id="ru-monitor" data-action="toggleMonitor">
                         Проверять доступность
                     </label>${typeof Help !== 'undefined' ? Help.button('monitoring') : ''}
+                    <button class="btn btn-ghost btn-sm" data-action="runDoctor"
+                            title="Проверить по шагам цепочку каждого маршрута: интерфейс,
+                                   правила ядра, наборы адресов, сам туннель — и показать,
+                                   где она рвётся. Текст отчёта можно скопировать в issue.">
+                        Диагностика
+                    </button>
                     <button class="btn btn-ghost btn-sm" data-action="applyAll">Применить все</button>
                     <button class="btn btn-ghost btn-sm" data-action="reapplyAll"
                             title="Переприменить все маршруты заново и снять из ядра
@@ -105,6 +111,7 @@ const RoutingUnifiedPage = (() => {
                 </div>
             </div>
             <div id="ru-banners"></div>
+            <div id="ru-doctor"></div>
             <div id="ru-import"></div>
             <div id="ru-overlaps"></div>
             <div id="ru-editor"></div>
@@ -1650,6 +1657,55 @@ const RoutingUnifiedPage = (() => {
         } catch (e) { Toast.error(e.message); }
     }
 
+    /** Пошаговая диагностика (core/routing/doctor): первый ✗ в цепочке —
+     *  место, где маршрут «есть, а трафик мимо». */
+    async function runDoctor() {
+        const box = document.getElementById('ru-doctor');
+        if (!box) return;
+        box.innerHTML = `<div class="card" style="margin-bottom:12px; padding:10px 14px;">
+            <span class="text-muted" style="font-size:12px;">Проверяю маршруты…</span></div>`;
+        let r;
+        try {
+            r = await API.get('/api/routing/doctor');
+        } catch (e) {
+            box.innerHTML = '';
+            Toast.error(e.message);
+            return;
+        }
+        const text = (r && r.text) || (r && r.error) || 'нет данных';
+        box.innerHTML = `
+            <div class="card" style="margin-bottom:12px; padding:10px 14px;">
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
+                    <strong style="font-size:13px;">Диагностика маршрутизации</strong>
+                    <span style="font-size:12px; color:${r && r.ok ? 'var(--success, #4a4)' : '#e58'};">
+                        ${r && r.ok ? 'проблем не найдено' : 'есть ✗ — первый в цепочке и есть причина'}</span>
+                    <span style="margin-left:auto; display:flex; gap:6px;">
+                        <button class="btn btn-ghost btn-sm" data-action="copyDoctor">Скопировать</button>
+                        <button class="btn btn-ghost btn-sm" data-action="closeDoctor">Закрыть</button>
+                    </span>
+                </div>
+                <pre id="ru-doctor-text" style="margin:0; font-size:12px; white-space:pre-wrap;
+                     overflow-wrap:anywhere; max-height:420px; overflow:auto;">${esc(text)}</pre>
+            </div>`;
+    }
+
+    async function copyDoctor() {
+        const el = document.getElementById('ru-doctor-text');
+        if (!el) return;
+        try {
+            await navigator.clipboard.writeText(el.textContent);
+            Toast.success('Отчёт скопирован');
+        } catch (_) {
+            // http без secure context: clipboard недоступен — выделяем текст.
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+            Toast.info('Текст выделен — скопируйте его (Ctrl+C)');
+        }
+    }
+
     async function reapplyLowLevel() {
         try {
             const r = await API.post('/api/routing/apply');
@@ -1801,6 +1857,13 @@ const RoutingUnifiedPage = (() => {
                 case 'refresh': refresh(); break;
                 case 'reapplyAll': reapplyAll(); break;
                 case 'previewSweep': previewSweep(); break;
+                case 'runDoctor': runDoctor(); break;
+                case 'copyDoctor': copyDoctor(); break;
+                case 'closeDoctor': {
+                    const box = document.getElementById('ru-doctor');
+                    if (box) box.innerHTML = '';
+                    break;
+                }
                 case 'reapplyLowLevel': reapplyLowLevel(); break;
                 case 'runDnsmasqSetup': runDnsmasqSetup(); break;
                 case 'runDnsmasqRevert': runDnsmasqRevert(); break;

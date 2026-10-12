@@ -447,6 +447,65 @@ def _diagnose_device_rule(rule) -> list:
     return checks
 
 
+def _singbox_tuns(iface: str, configs: list) -> list:
+    """[(config, tun-inbound | None)] конфигов sing-box, у которых есть
+    TUN-inbound с interface_name == iface. None — файл не прочитать."""
+    out = []
+    for c in configs:
+        try:
+            with open(c["path"], "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            # Битый файл не прячем: list_configs у такого tun_iface не
+            # знает, поэтому смотрим только на те, где он был известен.
+            if c.get("tun_iface") == iface:
+                out.append((c, None))
+            continue
+        for ib in (cfg.get("inbounds") or []):
+            if isinstance(ib, dict) and ib.get("type") == "tun" and \
+                    (ib.get("interface_name") or "singbox-tun") == iface:
+                out.append((c, ib))
+                break
+    return out
+
+
+def _singbox_tun_checks(iface: str, configs: list) -> list:
+    """
+    Звено «внутри sing-box»: ip rule/ipset довели трафик до TUN, но что с
+    ним делает движок. Ищем конфиг, чей TUN-inbound создаёт `iface`
+    (запущенный — в первую очередь: по умолчанию у всех конфигов
+    `singbox-tun`), и проверяем, что он запущен и что стек пропустит TCP:
+    system (и mixed — TCP у него тоже через системный стек) без auto_route
+    TCP не перехватывает — UDP/DNS идут, а сайты и Telegram «не
+    открываются, хотя ошибок нет» (issue #386). Нужен gvisor.
+    """
+    found = _singbox_tuns(iface, configs)
+    if not found:
+        return [_check("конфиг sing-box с TUN %s" % iface, False,
+                       "ни в одном конфиге нет TUN-inbound с таким"
+                       " interface_name")]
+    found.sort(key=lambda x: not x[0].get("running"))
+    c, tun = found[0]
+    running = bool(c.get("running"))
+    checks = [_check("конфиг sing-box «%s» запущен" % c["name"], running,
+                     "" if running else
+                     "остановлен — интерфейс есть, а трафик некому принять")]
+    if tun is None:
+        checks.append(_check("конфиг «%s»" % c["name"], False,
+                             "не читается как JSON"))
+        return checks
+    stack = tun.get("stack") or "mixed"
+    auto_route = bool(tun.get("auto_route"))
+    bad = stack != "gvisor" and not auto_route
+    checks.append(_check(
+        "TUN-стек %s" % stack, not bad,
+        ("без auto_route стек %s не пропускает TCP — открывается только"
+         " то, что ходит по UDP. Пересоздайте TUN-инбаунд со стеком"
+         " gvisor (sing-box → TUN-интерфейс)" % stack) if bad else
+        ("auto_route" if auto_route else "")))
+    return checks
+
+
 # ─────────────────────── публичный API ──────────────────────────────
 
 def diagnose() -> dict:
@@ -525,6 +584,7 @@ def diagnose() -> dict:
                                           _dom_rule_id, active_method)
         from core.unified.model import parse_method
         known = {r.id for r in storage.load_rules()}
+        sb_configs = None   # список конфигов sing-box — один раз на отчёт
         for route in ustorage.load_routes():
             entry = {"id": route.id, "name": route.name, "checks": []}
             checks = entry["checks"]
@@ -582,6 +642,15 @@ def diagnose() -> dict:
                     "" if present else
                     "НЕ создано — apply вернул ошибку и откатился "
                     "(см. лог routing)"))
+            if kind == "singbox":
+                try:
+                    if sb_configs is None:
+                        from core.singbox_manager import get_singbox_manager
+                        sb_configs = get_singbox_manager().list_configs()
+                    checks += _singbox_tun_checks(_target, sb_configs)
+                except Exception as e:
+                    checks.append(_check("sing-box TUN", True,
+                                         "не проверен: %s" % e))
             for dev in (route.devices or []):
                 present = _dev_rule_id(route.id, dev.get("ip", "")) in known
                 checks.append(_check(

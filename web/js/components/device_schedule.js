@@ -142,15 +142,16 @@ const DeviceSchedule = (() => {
                 </label>`).join('')}
             </div>
             <div style="margin-top:8px;">
-                <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                <!-- По устройству на строку: так список читается легче (issue #381). -->
+                <div style="display:flex; flex-direction:column; gap:4px; max-width:520px;">
                     ${(r.devices || []).map((d, k) => `
-                    <span title="${esc(d)}" style="display:inline-flex; align-items:center; gap:4px;
-                                 padding:3px 4px 3px 10px; border-radius:12px; font-size:12px;
+                    <div title="${esc(d)}" style="display:flex; align-items:center; gap:8px;
+                                 padding:3px 4px 3px 10px; border-radius:8px; font-size:12px;
                                  background:var(--bg-secondary); border:1px solid var(--border, transparent);">
-                        ${esc(deviceLabel(d, r.names))}
+                        <span style="flex:1; min-width:0; overflow-wrap:anywhere;">${esc(deviceLabel(d, r.names))}</span>
                         <button class="btn btn-ghost btn-sm" data-ds-action="rmdev" data-i="${i}" data-k="${k}"
                                 title="Убрать устройство" style="padding:0 6px; line-height:1.4;">✕</button>
-                    </span>`).join('')
+                    </div>`).join('')
                     || '<span class="text-muted" style="font-size:12px;">Устройства не выбраны.</span>'}
                 </div>
                 <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:6px;">

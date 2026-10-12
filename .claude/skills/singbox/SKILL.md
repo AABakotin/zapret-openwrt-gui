@@ -28,7 +28,7 @@ description: >-
 1. **sing-box.sagernet.org** — официальная документация конфигурации и CLI;
    `sagernet/sing-box` (Go-исходники) — окончательная истина по схемам.
    §9 сверен с `docs/deprecated.md` + `docs/migration.md` + `docs/changelog.md`
-   апстрима на **v1.14.2** (2026-09-24). **1.14 вышла из беты 2026-08-31
+   апстрима на **v1.14.3** (2026-10-09). **1.14 вышла из беты 2026-08-31
    (v1.14.0) и теперь это актуальная линия**; 1.13 продолжает получать фиксы
    (последняя — `v1.13.21`, 2026-08-30: паники в system-стеке и websocket,
    TUN loopback protection, зависание URLTest), но новых полей конфига в неё
@@ -175,6 +175,19 @@ debug ушёл. Просмотр лога: `GET /api/singbox/configs/<name>/log?
 `auto_route`, `strict_route`. Требует поддержку TUN в ядре
 (`platform.tun_available()`). Не нужен TPROXY — забирает TCP+UDP.
 
+Стек для TUN без `auto_route` (наш единый слой) — **только `gvisor`**:
+`system` (и `mixed`, у которого TCP тоже через системный стек) без
+`auto_route` TCP не перехватывает — UDP/DNS идут, а сайты и Telegram «не
+открываются, ошибок нет». `_apply_singbox_routing` (`api/singbox.py`)
+откатывается на `system` только при уверенном «gvisor нет в сборке»
+(`gvisor_missing`); `sing-box version` ждёт до 15 с (первый запуск бинаря
+на MIPS небыстрый), а если `Tags:` так и не получен — оставляет `gvisor` с
+флагом `gvisor_unverified` (issue #386: раньше «не удалось определить»
+молча давало `system`). Флаг `stack_tcp_broken` в ответе — итоговый стек
+не gvisor и нет `auto_route`. Проверка «стек пропустит TCP + конфиг запущен» есть в
+`core/routing/doctor._singbox_tun_checks` — кнопка «Диагностика» на
+странице «Маршрутизация».
+
 ---
 
 ## 5. Outbounds (исходящие) и endpoints
@@ -317,7 +330,7 @@ endpoint заменил старый `type:wireguard` outbound (он deprecated 
 | 1.11 | **УДАЛЁН** `rule_set_ipcidr_match_source`. deprecated: спец-outbounds **`block`**/**`dns`**; inbound-поля `sniff*`/`domain_strategy`; outbound `wireguard`; `override_address`/`override_port` у direct; TUN `gso` | rule-actions `reject`/`hijack-dns`/`sniff`/`resolve`; `endpoints` для WG; route-опции для override | `block` убран из `make_minimal_config`; sniff/dns-hijack через route |
 | **1.12** | **УДАЛЕНЫ `geoip`/`geosite`** (как route-матчеры) и слитые в 1.10 TUN-поля; формат `dns` переписан на типизированные серверы (legacy-`address` пока принимается); deprecated legacy-ECH поля (`pq_signature_schemes_enabled`, `dynamic_record_sizing_disabled` — уже не работают) | `rule_set`; `type:udp/tcp/tls/…` | geo — через ipset/rule-set; DNS см. §7 |
 | **1.13** | **УДАЛЕНЫ** `block`/`dns` outbounds, legacy inbound-поля (`sniff*`/`domain_strategy`), старый outbound `type:wireguard`, **`override_address`/`override_port` у direct**, **TUN `gso`** | как deprecated в 1.11 | issue #149 — генератор чистый; `validate()` держит block/dns в «известных типах» только для ЧТЕНИЯ старых чужих конфигов |
-| **1.14** (стабильная с 2026-08-31; текущая — 1.14.2) | **УДАЛЁН legacy-формат `dns`** (address-серверы / `type:legacy`). Новые deprecated — **удаление обещано в 1.16**, не сейчас: inline `tls.acme` → `certificate_provider`; address-filter поля DNS-правил (`ip_cidr`/`ip_is_private` без `match_response`) и `rule_set_ip_cidr_accept_empty` → action `evaluate` + `match_response`; `independent_cache` (кэш и так ключуется по транспорту); `store_rdrc` → `store_dns`; legacy `strategy` в DNS rule action; `download_detour` у remote rule-set → `http_client`; неявный HTTP-клиент по умолчанию → явные `http_clients` + `route.default_http_client` | typed DNS-серверы (§7) | на 1.14+ `dns.servers[].address` не запустится — генерить только typed; `independent_cache` не задаём (`singbox_config.py:755`) |
+| **1.14** (стабильная с 2026-08-31; текущая — 1.14.3) | **УДАЛЁН legacy-формат `dns`** (address-серверы / `type:legacy`). Новые deprecated — **удаление обещано в 1.16**, не сейчас: inline `tls.acme` → `certificate_provider`; address-filter поля DNS-правил (`ip_cidr`/`ip_is_private` без `match_response`) и `rule_set_ip_cidr_accept_empty` → action `evaluate` + `match_response`; `independent_cache` (кэш и так ключуется по транспорту); `store_rdrc` → `store_dns`; legacy `strategy` в DNS rule action; `download_detour` у remote rule-set → `http_client`; неявный HTTP-клиент по умолчанию → явные `http_clients` + `route.default_http_client` | typed DNS-серверы (§7) | на 1.14+ `dns.servers[].address` не запустится — генерить только typed; `independent_cache` не задаём (`singbox_config.py:755`) |
 
 > Симптомы по версиям: на 1.12+ — падение на `{"geosite":…}`/`{"geoip":…}` в
 > route или на legacy-DNS уже на 1.14; на 1.13 — `FATAL ... legacy inbound
@@ -329,8 +342,10 @@ endpoint заменил старый `type:wireguard` outbound (он deprecated 
 > ⚠️ **Ловушка 1.14, которая бьёт по чужим конфигам сильнее прочих.**
 > DNS-правило, ссылающееся на rule-set, где лежат ТОЛЬКО `ip_cidr`-элементы
 > (типичный geoip-набор), **без `match_response` отвергается на старте**,
-> когда legacy-режим DNS выключен. То есть это не тихая деградация, а отказ
-> запуска. Готовые конфиги «geoip-cn → local DNS» — самый частый паттерн,
+> когда legacy-режим DNS выключен — то есть когда DNS-правила конфига
+> используют что-то из 1.14 (`evaluate`, `match_response`, `ip_version`);
+> так формулирует условие `docs/migration.md` с 1.14.3, логика та же. Это не
+> тихая деградация, а отказ запуска. Готовые конфиги «geoip-cn → local DNS» — самый частый паттерн,
 > который так ломается; чинится вставкой шага `{"action":"evaluate", …}`
 > перед правилом и `"match_response": true` в самом правиле.
 
@@ -338,16 +353,36 @@ endpoint заменил старый `type:wireguard` outbound (он deprecated 
 
 Про 1.14 надо знать не только «что удалили»: линия добавила крупные вещи, о
 которых будут спрашивать. Сверено с `docs/changelog.md` релиза **v1.14.0**
-(2026-08-31), `v1.14.1` (2026-09-15) и `v1.14.2` (2026-09-24) — обе
-«fixes and improvements», без изменений схемы: `docs/deprecated.md`,
-`docs/migration.md` и регистрации протоколов (`include/`) побайтово те же.
+(2026-08-31), `v1.14.1` (2026-09-15), `v1.14.2` (2026-09-24) и `v1.14.3`
+(2026-10-09) — все «fixes and improvements», без изменений схемы: в
+`option/` и `include/` новых полей и протоколов нет, `docs/deprecated.md` и
+`docs/migration.md` в 1.14.3 только сокращены (смысл тот же).
 Из фиксов 1.14.2 для нас заметны: сброс сети на каждом старте (TUN/auto-route),
 потеря UDP-адреса-домена внутри групп `selector`/`urltest`, half-close в
 gRPC-транспорте, начальный handshake WireGuard-эндпоинта с доменным пиром,
 port hopping hysteria2 к «чужому» адресу. В документации поправлено: дефолт
 `tls.min_version` — TLS 1.2 и для клиента, и для сервера; dashboard
 API-сервиса больше не берёт неявный HTTP-клиент по умолчанию (deprecation
-неявного клиента для remote rule-set/ACME остаётся в силе):
+неявного клиента для remote rule-set/ACME остаётся в силе).
+
+**1.14.3 меняет умолчание `dns_mode` у TUN** (sing-tun «Disable DNS mode by
+default without auto route»): `hijack` теперь только при `auto_route: true`,
+**без `auto_route` по умолчанию `disabled`**. На 1.14.0–1.14.2 пустой
+`dns_mode` значил `hijack` всегда: sing-box брал «следующий за `address`»
+IP (у нас `172.18.0.2`) как DNS-адрес интерфейса и перехватывал на него
+соединения как `hijack-dns`, а на Linux пытался прописать search-domain в
+systemd-resolved — и всё это даже у TUN без `auto_route`. Для нас: наш TUN
+единого слоя (`set_tun_inbound`, `auto_route=False`) DNS через этот механизм
+не обрабатывает — перехват DNS там делает явное правило
+`{"protocol":"dns","action":"hijack-dns"}` (`hijack_dns=True`), оно от
+`dns_mode` не зависит. Конфиги с `auto_route=True` (FakeIP, «весь трафик»)
+по-прежнему получают `hijack`. Если чужой конфиг на TUN без `auto_route`
+рассчитывал на неявный DNS-адрес `address+1`, на 1.14.3 нужно явно
+`"dns_mode": "hijack"`. Остальные фиксы 1.14.3, заметные нам: сброс сети при
+смене DNS-серверов, чтение TUN (system-стек) больше не останавливается на
+ошибке записи, UDP-фрагментация и нулевая контрольная сумма UDP, проверка
+GSO у TUN, local DNS-сервер учитывает глобальные DNS systemd-resolved,
+закрытие простаивающих соединений неиспользуемых outbound'ов:
 
 - **JSON Schema конфига** — команда `sing-box schema` + поле
   `$schema` (см. §2).
@@ -410,7 +445,8 @@ API-сервиса больше не берёт неявный HTTP-клиент
 - **`sniff` до матчинга** (pre-match), новые матчеры `source_mac_address`,
   `source_hostname`, `package_name_regex`, `query_client_subnet`,
   `query_dnssec`; у TUN — `include_mac_address`/`exclude_mac_address` и
-  настраиваемый DNS-режим (перехват DNS интерфейса включён по умолчанию).
+  настраиваемый DNS-режим `dns_mode` (`disabled`/`native`/`hijack`; с 1.14.3
+  `hijack` по умолчанию только при `auto_route`, см. выше).
 - **L3-forwarding и `bridge` outbound**: TCP/UDP из L3-inbound (TUN,
   WireGuard, Tailscale) можно форвардить прямо в WireGuard/Tailscale-endpoint
   без L3→L4 трансляции. **Network namespaces** (`network_namespaces`, поле
@@ -485,6 +521,10 @@ kort0881 → `*_for_mirror.txt`), `configs.txt`/`vless.txt` в корне мог
 6. **TPROXY** недоступен (§10) → redirect/TUN.
 7. **DNS**: на 1.12+ legacy-формат — частая причина; hijack-dns через route.
 8. **Лишний/удалённый ключ** (`block`/`dns` outbound, inbound `sniff`) на 1.13.
+9. **Маршрут на TUN есть, а TCP не идёт** (UDP/DNS работают, сайты и
+   Telegram — нет): стек TUN `system`/`mixed` без `auto_route` (§4) или
+   конфиг с этим TUN остановлен. «Маршрутизация → Диагностика»
+   (`core/routing/doctor`) показывает и это, и первый ✗ в цепочке ядра.
 
 ---
 

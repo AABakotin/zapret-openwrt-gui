@@ -460,6 +460,43 @@ class TestGvisorStackFallback(unittest.TestCase):
                    if ib.get("type") == "tun")
         self.assertEqual(tun["stack"], "gvisor")
 
+    def test_unknown_keeps_gvisor_and_flags(self):
+        # `version` без Tags / не успел за таймаут: раньше молча давало
+        # system, и TUN без auto_route не пропускал TCP (issue #386).
+        from api import singbox as sb
+        mgr = self._mgr()
+        with mock.patch.object(sb, "_binary_has_gvisor",
+                               return_value=None) as probe, \
+                mock.patch("os.path.isfile", return_value=True):
+            save = sb._apply_singbox_routing(mgr, "vpn", self._cfg())
+        # один вызов, но с запасом на медленный роутер
+        self.assertEqual(probe.call_count, 1)
+        self.assertGreaterEqual(probe.call_args.kwargs.get("timeout"), 10)
+        self.assertFalse(save["gvisor_missing"])
+        self.assertTrue(save["gvisor_unverified"])
+        self.assertFalse(save["stack_tcp_broken"])
+        self.assertEqual(save["stack"], "gvisor")
+
+    def test_no_binary_is_not_unverified(self):
+        # Бинаря нет — это «не установлен», а не «gvisor не проверен».
+        from api import singbox as sb
+        mgr = self._mgr()
+        with mock.patch.object(sb, "_binary_has_gvisor", return_value=None), \
+                mock.patch("os.path.isfile", return_value=False):
+            save = sb._apply_singbox_routing(mgr, "vpn", self._cfg())
+        self.assertFalse(save["gvisor_unverified"])
+        self.assertEqual(save["stack"], "gvisor")
+
+    def test_stack_tcp_broken_flag(self):
+        from api import singbox as sb
+        mgr = self._mgr()
+        with mock.patch.object(sb, "_binary_has_gvisor", return_value=False):
+            save = sb._apply_singbox_routing(mgr, "vpn", self._cfg())
+        self.assertTrue(save["stack_tcp_broken"])
+        mgr = self._mgr()
+        save = sb._apply_singbox_routing(mgr, "vpn", self._cfg(),
+                                         stack="system", auto_route=True)
+        self.assertFalse(save["stack_tcp_broken"])
 
 if __name__ == "__main__":
     unittest.main()

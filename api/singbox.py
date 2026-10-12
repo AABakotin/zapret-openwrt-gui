@@ -376,7 +376,7 @@ def _should_auto_route(cfg: dict) -> bool:
     return bool(list_user_outbound_tags(cfg))
 
 
-def _binary_has_gvisor(binary):
+def _binary_has_gvisor(binary, timeout=4):
     """
     Собран ли sing-box с with_gvisor (по `version` → строка `Tags:`).
     True — есть; False — Tags распарсились, gvisor нет; None — не определить.
@@ -387,7 +387,7 @@ def _binary_has_gvisor(binary):
     import re as _re
     try:
         r = _sp.run([binary, "version"], capture_output=True, text=True,
-                    timeout=4)
+                    timeout=timeout)
     except (FileNotFoundError, OSError, _sp.SubprocessError):
         return None
     m = _re.search(r"^\s*Tags:\s*(.+)$", r.stdout or "", _re.I | _re.M)
@@ -410,7 +410,8 @@ def _apply_singbox_routing(mgr, name, cfg, *, iface="singbox-tun",
       • clash_api (нужен health-watchdog'у и учёту трафика).
     Формат DNS подбираем под версию движка через `sing-box check`
     (legacy → typed 1.12+). Без бинаря оставляем legacy (валиден 1.8–1.13).
-    Возвращает save-dict (+ interface_name, dns_format, stack, gvisor_missing).
+    Возвращает save-dict (+ interface_name, dns_format, stack, gvisor_missing,
+    gvisor_unverified, stack_tcp_broken).
     """
     import secrets as _secrets
     from core.singbox_config import (
@@ -426,19 +427,31 @@ def _apply_singbox_routing(mgr, name, cfg, *, iface="singbox-tun",
 
     # gvisor нужен для выборочной маршрутизации (system-стек без auto_route не
     # перехватывает TCP). Но если бинарь собран БЕЗ gvisor — старт TUN падает
-    # с «gVisor is not included in this build». Поэтому используем gvisor
-    # только когда он ТОЧНО есть; иначе откатываемся на system (без FATAL) и
-    # помечаем gvisor_missing — UI подскажет обновить sing-box.
+    # с «gVisor is not included in this build». Поэтому на system откатываемся
+    # только когда gvisor ТОЧНО нет (gvisor_missing — UI подскажет обновить
+    # sing-box). «Не удалось определить» (нет `Tags:`, `version` не успел за
+    # таймаут на медленном роутере) раньше тоже молча давало system — и TUN
+    # без auto_route пропускал только UDP/DNS: «сайты/Telegram не открываются,
+    # ошибок нет» (issue #386). Теперь ждём `version` дольше, а если так и не
+    # выяснили — оставляем gvisor: наши сборки его содержат, а без него старт
+    # упадёт с понятной ошибкой вместо тихо неработающего TCP.
     gvisor_missing = False
+    gvisor_unverified = False
     if stack in ("gvisor", "mixed"):
         try:
             binpath = mgr._binary() if hasattr(mgr, "_binary") else ""
         except Exception:
             binpath = ""
-        has_gvisor = _binary_has_gvisor(binpath)
-        if has_gvisor is not True:
-            gvisor_missing = (has_gvisor is False)
+        # Первый запуск 30-мегабайтного Go-бинаря с флеша на MIPS идёт
+        # секунды, поэтому таймаут с запасом.
+        has_gvisor = _binary_has_gvisor(binpath, timeout=15)
+        if has_gvisor is False:
+            gvisor_missing = True
             stack = "system"
+        elif has_gvisor is None:
+            # Нет бинаря — это «не установлен», а не «не проверили gvisor».
+            import os as _os
+            gvisor_unverified = bool(binpath) and _os.path.isfile(binpath)
 
     dns_format = "none"
     if not hijack_dns:
@@ -485,6 +498,10 @@ def _apply_singbox_routing(mgr, name, cfg, *, iface="singbox-tun",
         save["dns_format"] = dns_format
         save["stack"] = stack
         save["gvisor_missing"] = gvisor_missing
+        save["gvisor_unverified"] = gvisor_unverified
+        # system/mixed ведут TCP через системный стек, а он без auto_route
+        # TCP не перехватывает: конфиг стартует, UDP идёт, сайты — нет.
+        save["stack_tcp_broken"] = stack != "gvisor" and not auto_route
     return save
 
 
@@ -1131,7 +1148,9 @@ def register(app):
                     routed = _apply_singbox_routing(mgr, name, cfg)
                     if isinstance(routed, dict) and routed.get("ok"):
                         res["routing_ready"] = True
-                        res["interface_name"] = routed.get("interface_name")
+                        for k in ("interface_name", "stack", "gvisor_missing",
+                                  "gvisor_unverified", "stack_tcp_broken"):
+                            res[k] = routed.get(k)
             except Exception:
                 pass
         return res

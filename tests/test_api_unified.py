@@ -21,12 +21,19 @@ class TestUnifiedApiFlow(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp(prefix="uni-api-")
-        from core.config_manager import init_config
-        init_config(cls.tmp)
+        import core.config_manager as cm_mod
+        # Глобальный ConfigManager возвращаем в tearDownClass: иначе он
+        # продолжал смотреть в удалённый каталог, и следующие тесты,
+        # пишущие рядом с settings.json (журнал/откат MCP), падали в
+        # зависимости от порядка запуска.
+        cls._saved_cm = cm_mod._config_manager
+        cm_mod.init_config(cls.tmp)
         cls.client = WSGIClient(build_test_app())
 
     @classmethod
     def tearDownClass(cls):
+        import core.config_manager as cm_mod
+        cm_mod._config_manager = cls._saved_cm
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def test_01_lists_crud(self):

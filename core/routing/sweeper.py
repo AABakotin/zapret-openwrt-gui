@@ -395,24 +395,43 @@ def sweep(dry_run: bool = False) -> dict:
                 errors.append("%s destroy %s: %s"
                               % (kind, name, res.get("error")))
 
-    # 3) наши таблицы маршрутизации, чей интерфейс исчез
+    # 3) наши таблицы маршрутизации, чей интерфейс исчез.
+    #
+    # Blackhole kill-switch'а в таблице, на которую смотрят живые правила,
+    # — не мусор: он и нужен ровно тогда, когда интерфейс пропал (демон
+    # упал, туннель перезапускается). Его не трогаем.
+    from core.routing import killswitch
+    hold_blackhole = killswitch.enabled()
     for ifname, table in sorted(table_map.items()):
         if _iface_exists(ifname):
             continue
+        keep_bh = hold_blackhole and table in expected["tables"]
         empty = True
         for family in ("-4", "-6"):
             rc, out, _e = _run(["ip", family, "route", "show", "table",
                                 str(table)], timeout=5)
-            if rc == 0 and (out or "").strip():
+            if rc != 0:
+                continue
+            lines = [l for l in (out or "").splitlines() if l.strip()]
+            if keep_bh:
+                lines = [l for l in lines
+                         if not l.strip().startswith("blackhole default")]
+            if lines:
                 empty = False
         if empty:
             continue
         found_tables.append("table %d (%s)" % (table, ifname))
         if dry_run:
             continue
+        held = []
+        if keep_bh:
+            held = [fam for fam, flag in (("v4", "-4"), ("v6", "-6"))
+                    if killswitch.present(table, flag)]
         for family in ("-4", "-6"):
             _run(["ip", family, "route", "flush", "table", str(table)],
                  timeout=5)
+        if held:
+            killswitch.ensure(table, families=held)
 
     total = len(found_rules) + len(found_sets) + len(found_tables)
     if total:

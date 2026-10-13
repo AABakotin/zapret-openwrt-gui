@@ -103,6 +103,10 @@ def _pid_is_our_daemon(pid: int, ifname: str = "") -> bool:
     туннель — «уже поднят»), а `_cleanup_iface` слал бы SIGTERM/SIGKILL
     постороннему процессу от root.
 
+    Если ifname задан, демон обязан обслуживать именно этот интерфейс
+    (имя — отдельный аргумент): иначе демон соседнего туннеля, ошибочно
+    попавший в pid-файл, считался бы «своим» и получал SIGKILL.
+
     Если /proc недоступен (не-Linux, песочница) — не мешаем: True.
     """
     if not _pid_alive(pid):
@@ -111,11 +115,23 @@ def _pid_is_our_daemon(pid: int, ifname: str = "") -> bool:
     if not cmd:
         return True
     low = cmd.lower()
+    if ifname:
+        # Имя интерфейса — отдельный аргумент (в имени пробелов нет,
+        # поэтому split по пробелам из _pid_cmdline безопасен).
+        if ifname not in cmd.split()[1:]:
+            return False
     if "amneziawg-go" in low or "wireguard-go" in low:
         return True
     # Демон мог быть запущен как `<путь>/awg-go <iface>` — сверяем по
     # имени интерфейса рядом с любым awg-подобным бинарём.
-    return bool(ifname) and ("awg" in low and ifname.lower() in low.split())
+    return bool(ifname) and "awg" in low
+
+
+# Приоритет исключения «Endpoint туннеля — мимо правил маршрутизации»
+# (см. AwgManager._add_endpoint_bypass): раньше всех наших правил
+# (CIDR 10000, домены 10100, DSCP 10150, устройства 10200) и вне
+# диапазона, который чистит core/routing/sweeper.
+ENDPOINT_BYPASS_PRIORITY = 9990
 
 
 _AWG_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,15}$")
@@ -622,9 +638,14 @@ class AwgManager:
         Принимает либо имя реального интерфейса (`opkgtun0`), либо имя
         конфига (`awg0-opkgtun0`) — во втором случае резолвим в реальный.
         """
-        resolved = self._iface_for_name(iface)
-        if resolved and resolved != iface and resolved in self._wg_interfaces():
-            iface = resolved
+        # Имя реального интерфейса — без резолва, если оно и так активно
+        # (list_interfaces зовёт нас ровно с такими именами): резолв по
+        # PublicKey стоит `awg show dump` на каждый активный интерфейс.
+        active = self._wg_interfaces()
+        if iface not in active:
+            resolved = self._iface_for_name(iface)
+            if resolved and resolved != iface and resolved in active:
+                iface = resolved
         info = {
             "name":     iface,
             "active":   False,
@@ -974,11 +995,32 @@ class AwgManager:
                 continue
         return name  # не нашли — прежнее поведение
 
+    def has_config_for(self, name: str) -> bool:
+        """Есть ли у интерфейса/конфига `name` наш .conf (иначе — чужой)."""
+        try:
+            return os.path.isfile(self._config_path(self._config_for_name(name)))
+        except Exception:
+            return False
+
     def restart(self, name: str) -> dict:
         with self._lock:
             # Принимаем и имя конфига, и имя интерфейса (как status()).
             cfg_name = self._config_for_name(name)
-            res_down = self._do_down(cfg_name)
+            if _is_native_ndms_iface(name):
+                # Тот же понятный отказ, что у up/down для Wireguard0..N.
+                return self._do_down(name)
+            if not os.path.isfile(self._config_path(cfg_name)):
+                # Интерфейс без нашего конфига (поднят другим инструментом)
+                # поднять обратно нечем — а `down` его бы снёс насовсем.
+                return {"ok": False, "message":
+                        "Конфиг для %s не найден — интерфейс не наш,"
+                        " перезапуск невозможен" % name}
+            # Правила маршрутизации на время рестарта НЕ снимаем: ip rule,
+            # доменные set'ы (с IP, выученными dnsmasq) и blackhole
+            # kill-switch'а должны пережить перезапуск. Иначе на время
+            # рестарта — а если `up` не удался, то и насовсем — трафик
+            # правил уходил мимо туннеля, даже с включённым kill-switch.
+            res_down = self._do_down(cfg_name, keep_routing=True)
             time.sleep(0.3)
             res_up = self._do_up(cfg_name)
             return {
@@ -1077,6 +1119,7 @@ class AwgManager:
         # с жёстким таймаутом (на случай реально недоступного резолвера) и
         # подставляем IP только в то, что уходит демону — на диске конфиг
         # остаётся с хостнеймом (перерезолвится при следующем `up`).
+        endpoint_ips = []
         for peer in cfg.get("peers", []):
             ep = (peer.get("Endpoint") or "").strip()
             if not ep:
@@ -1085,6 +1128,8 @@ class AwgManager:
             if not host or not port:
                 continue
             ip, timed_out = _resolve_endpoint_ip(host)
+            if ip and ip not in endpoint_ips:
+                endpoint_ips.append(ip)
             if ip and ip != host:
                 peer["Endpoint"] = ("[%s]:%s" % (ip, port)) if ":" in ip \
                     else ("%s:%s" % (ip, port))
@@ -1097,10 +1142,18 @@ class AwgManager:
                         " DNS-резолвер роутера или укажите в Endpoint IP-адрес"
                         " вместо хоста." % (host, why)}
 
+        # Защита от петли: собственный UDP демона к Endpoint не должен
+        # попадать ни под одно правило маршрутизации (CIDR, домен, geoip),
+        # уводящее в этот же туннель. Ставим ДО setconf — демон начинает
+        # handshake сразу, а правила прошлой сессии (рестарт их не снимает)
+        # уже могут стоять в ядре.
+        bypass = self._add_endpoint_bypass(endpoint_ips)
+
         setconf_text = render_setconf(cfg)
         applied = self._apply_setconf(ifname, setconf_text)
         if not applied["ok"]:
             # откатываем
+            self._del_endpoint_bypass(bypass)
             self._cleanup_iface(ifname)
             return applied
 
@@ -1111,12 +1164,24 @@ class AwgManager:
 
         for addr in _as_list(iface.get("Address")):
             family = "-6" if ":" in addr else "-4"
-            _run(["ip", family, "address", "add", addr, "dev", ifname])
+            rc, _out, err = _run(["ip", family, "address", "add", addr,
+                                  "dev", ifname])
+            if rc != 0 and "File exists" not in (err or ""):
+                # Не фатально: на роутере с выключенным IPv6 v6-адрес WARP
+                # не встаёт, а v4-часть туннеля работает.
+                log.warning("ip address add %s dev %s: %s"
+                            % (addr, ifname, (err or "").strip()),
+                            source="awg_manager")
 
         rc, _out, err = _run(["ip", "link", "set", "dev", ifname, "up"])
         if rc != 0:
-            log.warning("ip link set up %s: %s" % (ifname, err.strip()),
-                        source="awg_manager")
+            # Без поднятого линка туннель не несёт трафик, а «ok» в ответе
+            # заставил бы routing навесить правила в никуда.
+            self._del_endpoint_bypass(bypass)
+            _run(["ip", "link", "delete", "dev", ifname])
+            self._cleanup_iface(ifname)
+            return {"ok": False, "message": "ip link set up %s: %s"
+                    % (ifname, (err or "").strip() or "ошибка")}
 
         # 4) маршруты из AllowedIPs (если не Table=off)
         #
@@ -1129,7 +1194,7 @@ class AwgManager:
         # схема (`ip rule not fwmark X table X` + `suppress_prefixlength
         # 0`) принудительно загоняла весь трафик в туннель, даже когда
         # пользователь ожидал, что без правил он будет идти напрямую.
-        added_routes = []
+        added_routes = list(bypass)
         table_off = str(iface.get("Table", "")).lower() == "off"
         table_id  = self._table_id_for(ifname)
 
@@ -1488,7 +1553,14 @@ class AwgManager:
                 % (need["generation"], ", ".join(need["fields"]),
                    (" (" + "; ".join(versions) + ")") if versions else ""))
 
-    def _do_down(self, name: str) -> dict:
+    def _do_down(self, name: str, keep_routing: bool = False) -> dict:
+        """
+        Опустить интерфейс.
+
+        keep_routing=True (рестарт): правила маршрутизации интерфейса
+        остаются в ядре, а blackhole kill-switch'а возвращается в таблицу
+        после её очистки — туннель вот-вот поднимется заново.
+        """
         if not _valid_iface_name(name):
             return {"ok": False, "message": "Недопустимое имя"}
         # Если конфиг назван `awg0-opkgtun0`, а реальный интерфейс —
@@ -1521,15 +1593,16 @@ class AwgManager:
                 self._run_hook(cmd, ifname, "PreDown")
 
         # Снять routing-правила, привязанные к этому интерфейсу
-        try:
-            from core.routing.applier import remove_all_on_interface_down
-            remove_all_on_interface_down(ifname)
-        except Exception as e:
-            log.warning("routing remove on down %s: %s" % (ifname, e),
-                        source="awg_manager")
+        if not keep_routing:
+            try:
+                from core.routing.applier import remove_all_on_interface_down
+                remove_all_on_interface_down(ifname)
+            except Exception as e:
+                log.warning("routing remove on down %s: %s" % (ifname, e),
+                            source="awg_manager")
 
         # Удалить добавленные нами маршруты/правила
-        self._remove_added_routes(ifname)
+        self._remove_added_routes(ifname, keep_killswitch=keep_routing)
 
         # Снять адреса/линк
         _run(["ip", "link", "set", "dev", ifname, "down"])
@@ -1548,7 +1621,9 @@ class AwgManager:
         # возвращались назад». Если есть ещё активные туннели,
         # systemd-resolved/dnsmasq оставляем как есть.
         try:
-            if not self._wg_interfaces():
+            # На рестарте (keep_routing) туннель сейчас же поднимется —
+            # откат dnsmasq между down и up лишь дёрнул бы DNS/DHCP впустую.
+            if not keep_routing and not self._wg_interfaces():
                 from core.routing.dnsmasq_integration import DnsmasqIntegration
                 rev = DnsmasqIntegration().revert_if_applied()
                 if rev.get("ok") and not rev.get("skipped"):
@@ -1600,7 +1675,7 @@ class AwgManager:
                 except OSError:
                     pass
 
-    def _remove_added_routes(self, ifname: str):
+    def _remove_added_routes(self, ifname: str, keep_killswitch: bool = False):
         """
         Teardown маршрутов, добавленных в _do_up.
 
@@ -1608,7 +1683,27 @@ class AwgManager:
         просто флашим её для обеих семей. Старые записи с
         `endpoint`/`cidr` без table (от версий ≤ 0.19.14) — снимаем
         точечно для обратной совместимости со старым routes.json.
+
+        keep_killswitch=True — blackhole kill-switch'а, стоявший в таблице,
+        возвращается после flush (рестарт: правила остаются, и пока туннель
+        лежит, их трафик должен упираться в blackhole, а не утекать).
         """
+        from core.routing import killswitch
+
+        table_id = self._table_id_for(ifname)
+        held = []
+        if keep_killswitch:
+            held = [fam for fam, flag in (("v4", "-4"), ("v6", "-6"))
+                    if killswitch.present(table_id, flag)]
+
+        # Современная схема: всё в нашей таблице — флашим оба семейства
+        # один раз, независимо от того, что лежит в routes.json (и даже
+        # если его нет: файл мог не записаться, а таблица — заполниться).
+        for fam in ("-4", "-6"):
+            _run(["ip", fam, "route", "flush", "table", str(table_id)])
+        if held:
+            killswitch.ensure(table_id, families=held)
+
         path = self._routes_path(ifname)
         if not os.path.isfile(path):
             return
@@ -1618,16 +1713,15 @@ class AwgManager:
         except (IOError, OSError, ValueError):
             routes = []
 
-        table_id = self._table_id_for(ifname)
-        # Современная схема: всё в нашей таблице — флашим оба семейства
-        # один раз, независимо от того, что лежит в routes.json.
-        for fam in ("-4", "-6"):
-            _run(["ip", fam, "route", "flush", "table", str(table_id)])
+        self._del_endpoint_bypass(
+            [r for r in routes if isinstance(r, dict) and r.get("bypass")])
 
         # Старые записи из routes.json (≤ 0.19.14) могли быть в main —
         # подчищаем точечно, чтобы апгрейд с уже поднятого интерфейса
         # не оставил мусора.
         for r in routes:
+            if not isinstance(r, dict) or r.get("bypass"):
+                continue
             family = r.get("family", "-4")
             if r.get("default") and not r.get("table"):
                 # Это было wg-quick-схема с правилами в main.
@@ -1649,6 +1743,61 @@ class AwgManager:
             os.remove(path)
         except OSError:
             pass
+
+    # ─────────── endpoint bypass ───────────
+
+    def _endpoint_bypass_enabled(self) -> bool:
+        """`awg.endpoint_bypass` (по умолчанию вкл.), см. _add_endpoint_bypass."""
+        try:
+            from core.config_manager import get_config_manager
+            return bool(get_config_manager().get(
+                "awg", "endpoint_bypass", default=True))
+        except Exception:
+            return True
+
+    def _add_endpoint_bypass(self, ips) -> list:
+        """
+        `ip rule to <endpoint> iif lo lookup main` перед всеми правилами
+        маршрутизации (ENDPOINT_BYPASS_PRIORITY < 10000).
+
+        Без этого любое правило, накрывшее Endpoint туннеля — CIDR
+        `162.159.0.0/16`, geoip:cloudflare, доменное правило, — заворачивало
+        зашифрованный UDP самого amneziawg-go в этот же туннель: петля,
+        handshake умирает. `iif lo` — только трафик самого роутера:
+        устройства LAN, которые ходят к тому же IP, правила по-прежнему
+        касаются. Main, а не «таблица провайдера»: WARP-in-WARP кладёт
+        маршрут к Endpoint внутреннего туннеля именно в main.
+
+        Выключается `awg.endpoint_bypass=false` — для тех, кто намеренно
+        ведёт Endpoint AWG через другой туннель правилом маршрутизации.
+        Возвращает записи для routes.json.
+        """
+        if not ips or not self._endpoint_bypass_enabled():
+            return []
+        entries = []
+        for ip in ips:
+            fam = "-6" if ":" in ip else "-4"
+            dest = "%s/%d" % (ip, 128 if fam == "-6" else 32)
+            argv = ["to", dest, "iif", "lo", "lookup", "main",
+                    "priority", str(ENDPOINT_BYPASS_PRIORITY)]
+            _run(["ip", fam, "rule", "del"] + argv)
+            rc, _o, err = _run(["ip", fam, "rule", "add"] + argv)
+            if rc == 0 or "File exists" in (err or ""):
+                entries.append({"family": fam, "bypass": dest})
+            else:
+                log.warning("endpoint bypass %s не поставлен: %s"
+                            % (dest, (err or "").strip()),
+                            source="awg_manager")
+        return entries
+
+    def _del_endpoint_bypass(self, entries) -> None:
+        for e in entries or []:
+            dest = e.get("bypass")
+            if not dest:
+                continue
+            _run(["ip", e.get("family", "-4"), "rule", "del", "to", dest,
+                  "iif", "lo", "lookup", "main",
+                  "priority", str(ENDPOINT_BYPASS_PRIORITY)])
 
     # ─────────── hooks ───────────
 
@@ -1726,9 +1875,15 @@ def _compute_i1_lengths(cfg_parsed: dict, awg_show: str) -> dict:
     Хранится в виде hex-string; «байты» считаем как len(hex)//2.
     Если демон вернул другие байты — обфускация ломается ещё до
     нашего кода до того, как пакеты пойдут.
+
+    None — I1 задан набором тегов, сравнение не имеет смысла.
     """
     iface_d = (cfg_parsed or {}).get("interface") or {}
     i1_cfg = (iface_d.get("I1") or "").strip()
+    if i1_cfg.startswith("<"):
+        # Теговая форма (`<r 32><t>`, `<b 0x..><r 16>`): случайная часть
+        # меняется на каждом пакете, побайтно сравнивать не с чем.
+        return None
     i1_cfg_hex = i1_cfg[2:] if i1_cfg.lower().startswith("0x") else i1_cfg
     i1_cfg_hex = i1_cfg_hex.lower()
 
@@ -1849,35 +2004,56 @@ def _safe_int(v, default=0):
         return default
 
 
+def _argv_has_seq(argv: list, cmd_parts: list) -> bool:
+    """
+    Есть ли в argv подряд идущие аргументы cmd_parts — ПОТОКЕННО, а не
+    подстрокой. Первый элемент сравниваем и целиком, и по basename
+    (`amneziawg-go` ↔ `/opt/usr/sbin/amneziawg-go`). Чистая.
+
+    Подстрока здесь опасна: «amneziawg-go warp» входит в
+    «amneziawg-go warp2», и в pid-файл `warp` попадал демон `warp2` —
+    `down warp` потом убивал соседний туннель.
+    """
+    parts = [str(p) for p in cmd_parts if str(p)]
+    if not parts or len(argv) < len(parts):
+        return False
+    head, rest = parts[0], parts[1:]
+    for i in range(len(argv) - len(parts) + 1):
+        tok = argv[i]
+        if tok != head and os.path.basename(tok) != os.path.basename(head):
+            continue
+        if argv[i + 1:i + len(parts)] == rest:
+            return True
+    return False
+
+
+def _pid_argv(pid) -> list:
+    """argv процесса из /proc (пустой список — нет процесса/доступа)."""
+    try:
+        with open("/proc/%s/cmdline" % pid, "rb") as f:
+            raw = f.read()
+    except (IOError, OSError):
+        return []
+    return [t.decode("utf-8", "replace") for t in raw.split(b"\0") if t]
+
+
 def _pgrep_first(cmd_parts: list):
     """
-    Найти PID процесса по фрагменту командной строки. Возвращает первый
-    подходящий.
+    Найти PID процесса, чей argv содержит cmd_parts подряд (потокенно,
+    см. _argv_has_seq). Возвращает наименьший подходящий PID или None.
     """
-    needle = " ".join(cmd_parts).strip()
-    if not needle:
+    if not [p for p in cmd_parts if str(p)]:
         return None
-    rc, out, _ = _run(["pgrep", "-f", shlex.quote(needle)])
-    if rc != 0 or not out.strip():
-        # fallback: ручной обход /proc
-        try:
-            for entry in os.listdir("/proc"):
-                if not entry.isdigit():
-                    continue
-                try:
-                    with open("/proc/%s/cmdline" % entry, "rb") as f:
-                        cmdline = f.read().replace(b"\x00", b" ").decode(errors="ignore")
-                except (IOError, OSError):
-                    continue
-                if needle in cmdline:
-                    return int(entry)
-        except OSError:
-            pass
+    try:
+        entries = sorted(int(e) for e in os.listdir("/proc") if e.isdigit())
+    except OSError:
         return None
-    for line in out.splitlines():
-        line = line.strip()
-        if line.isdigit():
-            return int(line)
+    me = os.getpid()
+    for pid in entries:
+        if pid == me:
+            continue
+        if _argv_has_seq(_pid_argv(pid), cmd_parts):
+            return pid
     return None
 
 

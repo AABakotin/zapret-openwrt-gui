@@ -238,6 +238,12 @@ DEFAULT_CONFIG = {
         # подписок, поэтому по умолчанию хуки ВЫКЛЮЧЕНЫ — иначе строка
         # `PostUp = ...` в чужом конфиге = RCE на роутере. Включать осознанно.
         "allow_hooks":        False,
+        # Исключение «Endpoint туннеля — мимо правил маршрутизации»
+        # (`ip rule to <endpoint> iif lo lookup main`, AwgManager.
+        # _add_endpoint_bypass): без него правило, накрывшее Endpoint,
+        # заворачивает UDP самого демона в этот же туннель. Выключать,
+        # только если Endpoint AWG намеренно ведётся через другой туннель.
+        "endpoint_bypass":    True,
     },
 
     # --- BlockCheck ---

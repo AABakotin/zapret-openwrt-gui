@@ -180,6 +180,36 @@ def _is_ndms_native_iface(ifname: str) -> bool:
     ))
 
 
+def _release_mark(rule_id: str) -> None:
+    """Вернуть слот метки правила (core/routing/marks), best-effort."""
+    try:
+        from core.routing import marks
+        marks.release(marks.rule_key(rule_id))
+    except Exception:
+        pass
+
+
+def _reject_reason(rule: RoutingRule) -> str:
+    """
+    Правило, которое заведомо ломает роутер, — не сохраняем. Чистая.
+
+    CIDR `0.0.0.0/0` / `::/0` даёт `ip rule to 0.0.0.0/0 lookup <T>`, а в
+    таблице туннеля из маршрутов только `default dev <tun>`: туда уезжают
+    и ответы самого роутера клиентам LAN (веб-GUI, DNS, DHCP), и роутер
+    пропадает из сети. «Весь трафик через туннель» — это device-правило
+    на устройство/подсеть: у него есть исключения для локальной сети.
+    """
+    if isinstance(rule, CidrRoutingRule):
+        whole = [c for c in rule.cidrs if c.endswith("/0")]
+        if whole:
+            return ("CIDR %s накрывает весь интернет вместе с локальной"
+                    " сетью — роутер потеряет связь с LAN. Чтобы пустить"
+                    " весь трафик через туннель, добавьте правило"
+                    " устройства (можно на подсеть, напр. 192.168.1.0/24)"
+                    % ", ".join(whole))
+    return ""
+
+
 # ───────────────────────── manager ───────────────────────────────────
 
 class RoutingManager:
@@ -213,6 +243,9 @@ class RoutingManager:
         успело примениться. Иначе UI оставался с фантомной строкой,
         а часть firewall-правил продолжала висеть.
         """
+        bad = _reject_reason(rule)
+        if bad:
+            return {"ok": False, "error": bad}
         with self._lock:
             storage.add_rule(rule)
             if apply_now and rule.enabled:
@@ -226,9 +259,11 @@ class RoutingManager:
                 ok = bool(applied.get("ok", True)) or deferred
                 if not ok:
                     # Rollback: убираем то, что успело лечь в firewall,
-                    # и выкидываем правило из storage.
+                    # и выкидываем правило из storage (вместе со слотом
+                    # метки — иначе каждый неудачный add съедал бы слот).
                     self._remove(rule)
                     storage.remove_rule(rule.id)
+                    _release_mark(rule.id)
                     return {
                         "ok": False,
                         "error": _summarize_apply_error(applied),
@@ -241,6 +276,9 @@ class RoutingManager:
 
     def update_rule(self, rule: RoutingRule, apply_now: bool = True) -> dict:
         """Обновить правило (сначала откатываем старое, потом ставим новое)."""
+        bad = _reject_reason(rule)
+        if bad:
+            return {"ok": False, "error": bad}
         with self._lock:
             old = storage.get_rule(rule.id)
             if old is not None:
@@ -251,12 +289,24 @@ class RoutingManager:
                 deferred = bool(applied.get("deferred"))
                 ok = bool(applied.get("ok", True)) or deferred
                 if not ok:
-                    # Откатываем новое правило целиком. Старое уже снято
-                    # выше — восстанавливать его сложно (не факт что оно
-                    # работало), поэтому просто выкидываем обновлённое
-                    # из storage, чтобы UI отражал реальное состояние.
+                    # Новое правило не встало — возвращаем СТАРОЕ (и в
+                    # storage, и в ядро). Раньше обновлённое правило просто
+                    # выкидывалось: временная ошибка (резолв, занятый
+                    # ip rule) молча уничтожала рабочий маршрут, в т.ч.
+                    # производные правила единого слоя.
                     self._remove(rule)
-                    storage.remove_rule(rule.id)
+                    if old is not None:
+                        storage.update_rule(old)
+                        if old.enabled:
+                            try:
+                                self._apply(old)
+                            except Exception as e:
+                                log.warning("routing: возврат прежнего %s:"
+                                            " %s" % (old.id, e),
+                                            source="routing")
+                    else:
+                        storage.remove_rule(rule.id)
+                        _release_mark(rule.id)
                     return {
                         "ok": False,
                         "error": _summarize_apply_error(applied),
@@ -276,11 +326,7 @@ class RoutingManager:
             self._remove(rule)
             storage.remove_rule(rule_id)
             # Слот метки правила свободен (core/routing/marks).
-            try:
-                from core.routing import marks
-                marks.release(marks.rule_key(rule_id))
-            except Exception:
-                pass
+            _release_mark(rule_id)
             return {"ok": True, "id": rule_id}
 
     # ─────────── apply / remove (одно правило) ───────────
@@ -370,16 +416,22 @@ class RoutingManager:
     # ─────────── apply ALL on iface up/down ───────────
 
     def apply_all_for_iface(self, ifname: str) -> dict:
-        """Применить все правила, привязанные к интерфейсу."""
+        """Применить все правила, привязанные к интерфейсу.
+
+        Под тем же замком, что и remove_all_for_iface/add/update: сюда
+        приходят и AwgManager.up, и поток сторожа (core/routing/guardian),
+        и без замка apply мог перемешаться с одновременным снятием.
+        """
         results = []
-        for rule in self.list_rules():
-            if rule.target_iface != ifname or not rule.enabled:
-                continue
-            results.append({
-                "id":     rule.id,
-                "type":   rule.type_name,
-                "result": self._apply(rule),
-            })
+        with self._lock:
+            for rule in self.list_rules():
+                if rule.target_iface != ifname or not rule.enabled:
+                    continue
+                results.append({
+                    "id":     rule.id,
+                    "type":   rule.type_name,
+                    "result": self._apply(rule),
+                })
         return {"ok": True, "iface": ifname, "applied": results}
 
     def remove_all_for_iface(self, ifname: str) -> dict:

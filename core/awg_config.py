@@ -293,6 +293,16 @@ def parse_conf(text: str) -> dict:
         # Без этой обработки парсер брал только `<b`, и I1 терялся
         # при render_setconf — handshake проходил, но data-пакеты
         # сервер дропал (это и было «92 B in / 20 KB out»).
+        #
+        # Значение — последовательность тегов (`<b …>`, `<r N>`, `<rd N>`,
+        # `<rc N>`, `<t>`). В hex-форму «склеиваем» ТОЛЬКО одиночный
+        # `<b 0xHEX>`; любое сочетание тегов (`<b 0x..><r 16>`, `<r 32><t>`)
+        # храним дословно — иначе мы выкидывали пробелы из `<r 16>` и
+        # заворачивали всё в `<b 0x…>`, и демон получал мусор.
+        if value.startswith("<") and not _is_single_b_tag(value):
+            if not (value.startswith("<b") and ">" not in value):
+                target[key] = value
+                continue
         if value.startswith("<b"):
             tail = value[2:].strip()
             # Single-line форма закрывается `>` на этой же строке —
@@ -338,6 +348,14 @@ def _is_hex_continuation(line: str) -> bool:
     if not s:
         return False
     return bool(_HEX_RE.match(s))
+
+
+_SINGLE_B_TAG_RE = re.compile(r"^<b\s*(?:0[xX])?[0-9a-fA-F\s]*>$")
+
+
+def _is_single_b_tag(value: str) -> bool:
+    """`<b 0xHEX>` — ровно один тег статических байт и ничего больше."""
+    return bool(_SINGLE_B_TAG_RE.match((value or "").strip()))
 
 
 def _clean_hex(s: str) -> str:
@@ -496,7 +514,9 @@ def _emit(lines: list, key: str, value):
             # после этого показывал «похожие, но не те» байты: тулза
             # парсила их по другому правилу и в I1 уходил мусор. Теперь
             # эмитим в оригинальной обёртке.
-            if v and v != "<b":
+            # Значение уже в теговой форме (`<r 32><t>`, `<b 0x..><r 16>`)
+            # — отдаём как есть: заворачивать его ещё раз в `<b 0x…>` нельзя.
+            if v and v != "<b" and not v.startswith("<"):
                 inner = v
                 if inner.lower().startswith("0x"):
                     inner = inner[2:]

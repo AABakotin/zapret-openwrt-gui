@@ -158,10 +158,16 @@ WireGuard, **сохраняя его крипто и производитель�
 | `<rc [size]>` | `[size]` случайных букв `[a-zA-Z]` |
 | `<t>` | 4 байта текущего времени в формате UNIX |
 
-Теги можно комбинировать в одной строке. Наш парсер (§3.2) заточен под самый
-частый случай — многострочный `<b …>` — и остальные теги переносит как есть
-(мы их не интерпретируем, это делает демон). Если правишь `parse_conf`, не
-считай, что содержимое `I*` обязано быть hex: `<r 32><t>` — валидное значение.
+Теги можно комбинировать в одной строке. Наш парсер (§3.2) сводит в hex
+ТОЛЬКО одиночный `<b 0xHEX>` (одно- или многострочный); любое сочетание
+тегов (`<r 32><t>`, `<b 0x..><r 16>`) хранится дословно, а `_emit` отдаёт
+значение, начинающееся с `<`, как есть, не заворачивая в `<b 0x…>`. Если
+правишь `parse_conf`, не считай, что содержимое `I*` обязано быть hex.
+
+> ⚠️ Раньше парсер выкидывал пробелы из всего хвоста (`<r 16>` → `<r16>`),
+> а рендер заворачивал любое значение в `<b 0x…>` (`<b 0x<r 32><t>>`) —
+> профиль с такими тегами не поднимался или давал «92 B in / 20 KB out».
+> Сторож — `TestSignatureTags` в `tests/test_awg_routing_safety.py`.
 
 > **`Jmax` и MTU.** README: «если `Jmax` ≥ системного MTU (не того, что задан в
 > AWG), система нарежет пакет на фрагменты, что со стороны цензора выглядит
@@ -421,18 +427,30 @@ I1 = <b
 ### 5.1 Подъём — `_do_up`
 1. `validate()` конфига; если ошибки — не стартуем.
 2. `PreUp`-хуки.
-3. `amneziawg-go <iface>` (subprocess) — форкает демон + TUN. PID находим через
-   `pgrep`, пишем в `<run_dir>/awg-<iface>.pid`.
+3. `amneziawg-go <iface>` (subprocess) — форкает демон + TUN. PID находим
+   обходом `/proc` с ПОТОКЕННОЙ сверкой argv (`_argv_has_seq`), пишем в
+   `<run_dir>/awg-<iface>.pid`. Подстрокой искать нельзя: «amneziawg-go
+   warp» входит в «amneziawg-go warp2», и `down warp` убивал бы соседа;
+   `_pid_is_our_daemon(pid, iface)` тоже требует имя интерфейса в argv.
 4. короткая пауза (UAPI-сокет `/var/run/wireguard/<iface>.sock` должен подняться).
-5. `awg setconf <iface> <filtered.conf>` — крипто + обфускация.
-6. `ip link set dev <iface> mtu <MTU>` (если задан).
-7. `ip addr add <Address>` (каждый адрес).
-8. `ip link set dev <iface> up`.
-9. маршруты из `AllowedIPs` → `table <id>` (если `Table != off`). `id` —
+5. резолв Endpoint'ов в IP и **исключение для собственного Endpoint**:
+   `ip rule add to <ep>/32 iif lo lookup main priority 9990`
+   (`ENDPOINT_BYPASS_PRIORITY`, раньше всех правил маршрутизации). Без него
+   CIDR/домен/geoip, накрывший Endpoint, заворачивал UDP демона в этот же
+   туннель — петля. `iif lo` — только трафик роутера; `main` — потому что
+   WARP-in-WARP кладёт маршрут к Endpoint inner'а именно туда. Ставится ДО
+   setconf, пишется в `routes.json` (`{"bypass": …}`), снимается при down.
+   Выключатель — `awg.endpoint_bypass` (по умолчанию вкл.).
+6. `awg setconf <iface> <filtered.conf>` — крипто + обфускация.
+7. `ip link set dev <iface> mtu <MTU>` (если задан).
+8. `ip addr add <Address>` (каждый адрес; ошибка — предупреждение: v6 на
+   роутере без IPv6 не встаёт, а v4 работает).
+9. `ip link set dev <iface> up` — ошибка здесь фатальна: откат и `ok=False`.
+10. маршруты из `AllowedIPs` → `table <id>` (если `Table != off`). `id` —
    стабильный хэш имени интерфейса в диапазоне **100…999**.
-10. снимок состояния `<run_dir>/awg-<iface>.last_up.json` + список добавленных
+11. снимок состояния `<run_dir>/awg-<iface>.last_up.json` + список добавленных
     маршрутов `<run_dir>/awg-<iface>.routes.json` (чтобы корректно снять при down).
-11. `PostUp`-хуки → `core.routing.applier.apply_all_on_interface_up()`.
+12. `PostUp`-хуки → `core.routing.applier.apply_all_on_interface_up()`.
 
 ### 5.2 Снятие — `_do_down`
 Обратный порядок: `PreDown` → снять правила роутинга → удалить добавленные
@@ -440,7 +458,15 @@ I1 = <b
 SIGKILL) демону по PID → удалить pid-файл и UAPI-сокет → `PostDown` →
 откат auto-dnsmasq (если это был последний AWG-интерфейс).
 
-`restart` = down → up. `status(name)` парсит `awg show <iface> dump`
+`restart` = `_do_down(keep_routing=True)` → up. На рестарте правила
+маршрутизации НЕ снимаются (ip rule, доменные set'ы с IP от dnsmasq), а
+blackhole kill-switch'а возвращается в таблицу сразу после `flush` — иначе
+на время рестарта (а при неудачном `up` — навсегда) трафик правил уходил
+мимо туннеля. Явный `down` по-прежнему снимает всё. `restart` интерфейса
+без нашего `.conf` отказывает, ничего не трогая (watchdog такие и вовсе
+пропускает: `has_config_for`).
+
+`status(name)` парсит `awg show <iface> dump`
 (per-peer: `latest_handshake` unix-ts, `rx_bytes`, `tx_bytes`).
 
 ---
@@ -525,7 +551,10 @@ SIGKILL) демону по PID → удалить pid-файл и UAPI-соке�
 ### 8.3 WARP-in-WARP (двойной туннель, `awg_warp_in_warp.py`)
 Состояние в `config["awg"]["warp_in_warp"]`. Подъём:
 1. **Резолв endpoint внутреннего** туннеля ДО подъёма (пока маршрут «наружу» ещё
-   прямой).
+   прямой) и проверка, что он **не совпадает** с endpoint'ом outer
+   (`_endpoint_ips_of`): иначе `/32` из шага 3 завернул бы в outer его же UDP.
+   Два WARP-профиля часто смотрят на один `162.159.192.x` — такая пара
+   отклоняется с подсказкой взять другой адрес Cloudflare.
 2. поднять **внешний** туннель (если не запущен).
 3. добавить `/32` (или `/128`) маршрут к IP внутреннего endpoint **через внешний**
    интерфейс (чтобы внутренний handshake пошёл сквозь внешний).
@@ -555,7 +584,8 @@ SIGKILL) демону по PID → удалить pid-файл и UAPI-соке�
 
 ## 10. Watchdog и автозапуск
 
-**Watchdog** (`awg_watchdog.py`) — перезапуск при «протухшем» handshake:
+**Watchdog** (`awg_watchdog.py`) — перезапуск при «протухшем» handshake
+(только интерфейсов с нашим `.conf` — чужие пропускаются):
 `handshake_timeout_sec=180`, `check_interval_sec=30`, `cooldown_sec=300`,
 `max_restarts_per_hour=6`, опциональный TCP-`probe` (host:port сквозь туннель).
 `decide_restart()`: рестарт, если возраст handshake ≥ timeout **или** probe

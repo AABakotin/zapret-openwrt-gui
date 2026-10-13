@@ -433,6 +433,14 @@ class AwgWatchdog:
             if not entry.get("active"):
                 # Туннель уже не поднят — пользователь сам решил, не лезем.
                 continue
+            # Интерфейс без нашего конфига поднят другим инструментом
+            # (kernel-AWG от netifd, awg-quick, чужой скрипт): поднять его
+            # обратно нам нечем, а `down` при рестарте снёс бы его насовсем.
+            try:
+                if not mgr.has_config_for(name):
+                    continue
+            except Exception:
+                continue
 
             self._maybe_restart(mgr, name, entry, settings, now)
 

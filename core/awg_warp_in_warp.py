@@ -11,17 +11,19 @@ WARP-in-WARP: двойной туннель.
   * Пользовательский трафик идёт через inner.
 
 Технически:
-  1) Поднимаем outer. AwgManager._add_default_via() кладёт default
-     маршрут в отдельную таблицу T_outer и добавляет ip rule
-     «not fwmark T_outer → T_outer».
-  2) Резолвим IP endpoint'а inner-конфига.
-  3) В main-таблицу добавляем /32 route на inner_endpoint_ip через
-     dev <outer>. Это гарантирует, что handshake-пакеты inner'а,
-     помеченные его fwmark и потому не попадающие в его собственную
-     таблицу, всё равно находят дорогу — через outer.
-  4) Поднимаем inner. Его ip rule имеет более высокий приоритет
-     (добавлен позже) — весь незамаркированный трафик уходит через
-     inner.
+  1) Резолвим IP endpoint'а inner-конфига (пока путь «наружу» прямой) и
+     проверяем, что он НЕ совпадает с endpoint'ом outer: иначе /32 из
+     шага 3 завернул бы в outer его же собственный UDP — петля, outer
+     умирает (два WARP-профиля часто смотрят на один и тот же
+     162.159.192.x).
+  2) Поднимаем outer. Его таблица T_outer трафик не забирает: куда что
+     идёт, решают только правила «Маршрутизации».
+  3) В main-таблицу добавляем /32 (/128) route на inner_endpoint_ip через
+     dev <outer>. Исключение «Endpoint туннеля — мимо правил
+     маршрутизации» (AwgManager._add_endpoint_bypass) смотрит именно в
+     main, поэтому handshake inner'а уходит через outer.
+  4) Поднимаем inner. Пользовательский трафик в него заворачивают
+     правила «Маршрутизации» с target_iface = inner.
 
 Состояние сохраняем в settings.json (config["awg"]["warp_in_warp"]):
   {
@@ -125,6 +127,40 @@ def _read_inner_endpoint(name: str):
     if not host:
         raise ValueError("Не удалось разобрать Endpoint конфига %s" % name)
     return host, port
+
+
+def _endpoint_ips_of(name: str) -> set:
+    """
+    Все IP, на которые может смотреть Endpoint конфига `name`: адреса
+    из резолва хоста плюс то, что демон реально использует сейчас
+    (`awg show`), если интерфейс поднят. Пустое множество — не удалось.
+    """
+    ips = set()
+    try:
+        host, _port = _read_inner_endpoint(name)
+    except Exception:
+        host = ""
+    if host:
+        try:
+            ipaddress.ip_address(host)
+            ips.add(host)
+        except ValueError:
+            try:
+                for info in socket.getaddrinfo(host, None,
+                                               type=socket.SOCK_DGRAM):
+                    ips.add(info[4][0])
+            except (socket.gaierror, OSError):
+                pass
+    try:
+        mgr = get_awg_manager()
+        if mgr.is_running(name):
+            for peer in (mgr.status(name) or {}).get("peers") or []:
+                h, _p = _split_endpoint(peer.get("endpoint") or "")
+                if h:
+                    ips.add(h)
+    except Exception:
+        pass
+    return ips
 
 
 def _route_exists(family: str, dest: str, dev: str) -> bool:
@@ -253,6 +289,18 @@ def _do_setup(outer: str, inner: str) -> dict:
 
     log.info("WiW: inner endpoint %s → v4=%s v6=%s" %
              (host, inner_v4, inner_v6), source="awg_wiw")
+
+    # Endpoint inner совпал с endpoint'ом outer — /32 через outer завернул
+    # бы в outer его же UDP (петля). Типично для двух WARP-профилей:
+    # Cloudflare раздаёт один и тот же engage-адрес.
+    clash = {ip for ip in (inner_v4, inner_v6) if ip} & _endpoint_ips_of(outer)
+    if clash:
+        return {"ok": False, "error":
+                "Endpoint inner (%s) совпадает с endpoint'ом outer — трафик"
+                " outer'а ушёл бы в него же. Укажите inner'у другой адрес"
+                " Cloudflare (например, 162.159.193.x или"
+                " 188.114.96.x вместо 162.159.192.x)"
+                % ", ".join(sorted(clash))}
 
     # 1) Поднять outer (если ещё не поднят)
     outer_was_up = mgr.is_running(outer)

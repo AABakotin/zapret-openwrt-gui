@@ -218,8 +218,13 @@ def ip_rule_add(mark: int, table: int, family: str = "v4",
         if rc == 0 or "File exists" in err:
             return {"ok": True, "error": "", "masked": True}
         low = err.lower()
-        if not any(s in low for s in ("fwmark", "invalid", "argument",
-                                      "usage")):
+        # Маску не понял сам `ip` (разбор аргументов) — а не ядро: ответ
+        # ядра «RTNETLINK answers: Invalid argument» про другое (таблица,
+        # приоритет…), и по нему нельзя навсегда переходить на сравнение
+        # метки целиком — пострадали бы все правила до перезапуска GUI.
+        parse_error = ("rtnetlink" not in low and any(
+            s in low for s in ("fwmark", "invalid", "argument", "usage")))
+        if not parse_error:
             return {"ok": False, "error": err.strip(), "masked": True}
         _mask_unsupported = True
         log.info("routing: `ip rule` не понимает маску fwmark (BusyBox?) — "

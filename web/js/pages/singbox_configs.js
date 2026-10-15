@@ -15,7 +15,6 @@ const SingboxConfigsPage = (() => {
     let editName = '';
     let editText = '';
     let editDirty = false;
-    let validateResult = null;
 
     // Импорт подписки
     let importUrl = '';
@@ -207,7 +206,6 @@ const SingboxConfigsPage = (() => {
             editName = name;
             editText = r.text || '';
             editDirty = false;
-            validateResult = null;
             switchTab('editor');
         } catch (e) {
             Toast.error(e.message);
@@ -234,13 +232,11 @@ const SingboxConfigsPage = (() => {
             "route": { "final": "direct" }
         }, null, 2);
         editDirty = true;
-        validateResult = null;
         switchTab('editor');
     }
 
     function renderEditorTab(box) {
         const isNew = !editName;
-        const validateBlock = validateResult ? renderValidateBlock(validateResult) : '';
 
         box.innerHTML = `
             <div class="card">
@@ -255,11 +251,12 @@ const SingboxConfigsPage = (() => {
                             onclick="SingboxConfigsPage.save()">
                         Сохранить
                     </button>
-                    ${editName ? `
                     <button class="btn btn-ghost btn-sm"
-                            onclick="SingboxConfigsPage.validate(SingboxConfigsPage.currentName())">
-                        sing-box check
+                            onclick="SingboxConfigsPage.validateDraft()"
+                            title="Проверить текст в редакторе, не сохраняя: разбор + sing-box check, если установлен">
+                        Проверить
                     </button>
+                    ${editName ? `
                     <button class="btn btn-ghost btn-sm"
                             onclick="SingboxConfigsPage.wrapIn('urltest')"
                             title="Обернуть все outbound'ы в urltest — sing-box будет автоматически выбирать самый быстрый">
@@ -277,21 +274,7 @@ const SingboxConfigsPage = (() => {
                           style="width:100%; min-height:480px; font-family:monospace; font-size:12px;"
                           oninput="SingboxConfigsPage.onTextChange()"
                 >${escapeHtml(editText)}</textarea>
-                ${validateBlock}
             </div>`;
-    }
-
-    function renderValidateBlock(r) {
-        if (r.ok) {
-            return `<div class="alert alert-success" style="margin-top:10px;">
-                <div class="alert-title">sing-box check: OK</div>
-                ${r.stdout ? `<pre style="font-size:11px; margin:6px 0 0;">${escapeHtml(r.stdout)}</pre>` : ''}
-            </div>`;
-        }
-        return `<div class="alert alert-warning" style="margin-top:10px;">
-            <div class="alert-title">sing-box check: ошибки</div>
-            <pre style="font-size:11px; margin:6px 0 0;">${escapeHtml(r.stderr || r.stdout || r.error || '?')}</pre>
-        </div>`;
     }
 
     function onTextChange() {
@@ -359,16 +342,17 @@ const SingboxConfigsPage = (() => {
         }
     }
 
-    async function validate(name) {
-        try {
-            const r = await API.post(
-                `/api/singbox/configs/${encodeURIComponent(name)}/validate`);
-            validateResult = r || { ok: false, error: 'no result' };
-            renderTab();
-        } catch (e) {
-            validateResult = { ok: false, error: e.message };
-            renderTab();
-        }
+    // «Проверить» в списке — сохранённый конфиг; в редакторе — текущий
+    // текст. Итог — в окне поверх страницы (ConfigCheck), видно на любой
+    // вкладке.
+    function validate(name) {
+        return ConfigCheck.show('singbox', { name });
+    }
+
+    function validateDraft() {
+        const ta = document.getElementById('sb-editor-text');
+        const text = ta ? ta.value : editText;
+        return ConfigCheck.show('singbox', { text, label: currentName() || 'черновик' });
     }
 
     async function toggle(name, on) {
@@ -1665,7 +1649,7 @@ const SingboxConfigsPage = (() => {
     return {
         render, destroy, switchTab,
         openEditor, newConfig, removeConfig,
-        save, validate, toggle, wrapIn,
+        save, validate, validateDraft, toggle, wrapIn,
         onTextChange, currentName,
         importPreview, importApply,
         onImportUrlChange, onImportTextChange,

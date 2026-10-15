@@ -9,7 +9,8 @@ API генератора конфигов на инфраструктуре WARP
   POST /api/vpngen/generate         — сгенерировать (и при save — сохранить)
   POST /api/vpngen/save             — сохранить показанный ранее конфиг
                                       {target, name, text}
-  POST /api/vpngen/check            — проверить синтаксис {target, text};
+  POST /api/vpngen/check            — проверить синтаксис {target, text}
+                                      или сохранённый {target, name};
                                       target — движок или proton-import
 
 Ответ ``generate`` содержит тексты конфигов с приватными ключами: их
@@ -98,12 +99,21 @@ def register(app):
     def vpngen_check():
         """Проверить синтаксис конфига (ничего не сохраняет)."""
         from core.vpngen import generate as gen
+        from core.vpngen.net import GenError
         body = _body()
-        text = str(body.get("text") or "")
+        target = str(body.get("target") or "")
+        if body.get("text") is None and body.get("name"):
+            # Сохранённый конфиг — кнопка «Проверить» в списках движков.
+            try:
+                text = gen.load_saved(target, str(body.get("name")))
+            except (GenError, OSError) as e:
+                return {"ok": False, "errors": [str(e)], "checked_by": []}
+        else:
+            text = str(body.get("text") or "")
         if len(text) > 256 * 1024:
             return {"ok": False, "errors": ["конфиг слишком большой"],
                     "checked_by": []}
-        return gen.check_output(str(body.get("target") or ""), text)
+        return gen.check_output(target, text)
 
     @app.route("/api/vpngen/save", method="POST")
     def vpngen_save():

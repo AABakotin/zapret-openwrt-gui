@@ -238,16 +238,24 @@ localhost; имя группы — подпись без запятых (ина�
 
 ### Проверка синтаксиса (`check_output`)
 
-`POST /api/vpngen/check {target, text}` и MCP `vpngen_check` (read): target —
+`POST /api/vpngen/check {target, text}` (или `{target, name}` — сохранённый
+конфиг, `load_saved`: awg/singbox/mihomo через `tunnels_control.config_get`,
+usque — по пути из `list_configs`) и MCP `vpngen_check` (read): target —
 движок или `proton-import`. Сначала встроенный разбор (`awg_config.validate`,
 поля и IP usque `config.json`, `singbox_config.validate`, YAML mihomo с
 `proxies`, `proton.from_config`), затем — если бинарь установлен —
 `SingboxManager.check_text` (уникальный временный файл 0600: проверки идут
 параллельно) / `MihomoManager.validate_via_binary(text=…)`; их вердикт
-главнее. mihomo с GEOIP/GEOSITE/RULE-SET/провайдерами не запускается —
+главнее — замечания встроенного разбора sing-box тогда уходят в
+`warnings` (он знает не все типы новых версий). `_engine_error` чистит
+вывод: ANSI-цвета, путь временного файла, строки logrus (только
+`level=error|fatal msg=…`). mihomo с GEOIP/GEOSITE/RULE-SET/провайдерами не запускается —
 `mihomo -t` мог бы пойти качать базы, а проверка обещает «без сети». Нет бинаря — `warnings` «проверен только синтаксис».
 Ответ `{ok, errors, checked_by, warnings, summary?}`; ничего не сохраняет.
-UI: «Проверить» в карточке результата; у полей для готового конфига
+UI: общий `web/js/components/config_check.js` (`ConfigCheck.show(target,
+{name}|{text})`, итог — в окне `Confirm` с одной кнопкой): списки конфигов
+AWG (обзор и редактор), usque, sing-box (список + несохранённый текст
+редактора), mihomo; «Проверить» в карточке результата генератора; у полей для готового конфига
 (`Wizard.configInput`) — перетаскивание файла и автопроверка через 600 мс
 после правки (ответ на устаревший текст отбрасывается по счётчику).
 Автоматически забрать конфиг с сайта Proton нельзя (same-origin, у Proton

@@ -954,10 +954,16 @@ const UsquePage = (() => {
         }
     }
 
+    // Экранирует и для текста, и для значений атрибутов. Прежний вариант
+    // (textContent → innerHTML) кавычки не трогал, а результат попадает и в
+    // value="…"/data-name="…": `"` в значении закрывал атрибут.
     function esc(s) {
-        const d = document.createElement("div");
-        d.textContent = s;
-        return d.innerHTML;
+        return String(s == null ? "" : s)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
     }
 
     return { render, destroy, start, stop, remove, install };

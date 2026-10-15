@@ -511,3 +511,167 @@ class TestUsqueRegisterError(unittest.TestCase):
         fwd = mock.Mock(connections=0)
         msg = UsqueManager()._register_error(proc, "awg:wg0", fwd)
         self.assertIn("ни одного", msg)
+
+
+class TestUsqueRegisterSafety(unittest.TestCase):
+    """Регистрация не должна ни перезаписывать профиль, ни светить ключ."""
+
+    def _mgr(self, tmp):
+        mgr = UsqueManager()
+        mgr._config_dir = lambda: tmp
+        return mgr
+
+    def test_register_refuses_existing_profile_any_extension(self):
+        """`usque register` на существующий файл спрашивает y/n в stdin —
+        `--accept-tos` этого не снимает (cmd/register.go апстрима)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            open(os.path.join(tmp, "warp.json"), "w").close()
+            mgr = self._mgr(tmp)
+            with mock.patch.object(UsqueManager, "_find_binary",
+                                   return_value="/usr/bin/usque"), \
+                 mock.patch("core.usque_manager.subprocess.run") as run:
+                r = mgr.register(os.path.join(tmp, "warp.conf"))
+            self.assertFalse(r["ok"])
+            self.assertIn("уже существует", r["error"])
+            run.assert_not_called()
+
+    def test_register_closes_stdin_and_hides_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "warp.conf")
+
+            def fake_run(cmd, **kw):
+                # usque создаёт файл через os.Create → 0644 под umask 022.
+                with open(path, "w") as f:
+                    f.write("{}")
+                os.chmod(path, 0o644)
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            mgr = self._mgr(tmp)
+            with mock.patch.object(UsqueManager, "_find_binary",
+                                   return_value="/usr/bin/usque"), \
+                 mock.patch("core.usque_manager.subprocess.run",
+                            side_effect=fake_run) as run:
+                r = mgr.register(path)
+            self.assertTrue(r["ok"], r)
+            self.assertIs(run.call_args.kwargs.get("stdin"),
+                          __import__("subprocess").DEVNULL)
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_import_refuses_name_of_registered_profile(self):
+        """`warp.conf` (регистрация) и `warp.json` (импорт) — один профиль."""
+        with tempfile.TemporaryDirectory() as tmp:
+            open(os.path.join(tmp, "warp.conf"), "w").close()
+            r = self._mgr(tmp).import_config(
+                "warp", json.dumps({"private_key": "k", "access_token": "t",
+                                    "id": "i", "ipv4": "172.16.0.2"}))
+            self.assertFalse(r["ok"])
+            self.assertFalse(os.path.exists(os.path.join(tmp, "warp.json")))
+
+
+class TestUsqueStartSafety(unittest.TestCase):
+
+    @mock.patch.object(UsqueManager, "_find_binary", return_value="/usr/bin/usque")
+    @mock.patch.object(UsqueManager, "_iface_busy", return_value=True)
+    @mock.patch("core.usque_manager.subprocess.Popen")
+    @mock.patch("core.usque_manager.os.path.isfile", return_value=True)
+    def test_start_refuses_name_taken_by_foreign_iface(
+            self, _isfile, popen, _busy, _binary):
+        """Чужой `opkgtun0` (AWG) не должен получить наш адрес и MTU."""
+        mgr = UsqueManager()
+        with mock.patch.object(mgr, "_configure_iface") as conf:
+            r = mgr.start("opkgtun0", "/tmp/warp.conf")
+        self.assertFalse(r["ok"])
+        self.assertIn("уже существует", r["error"])
+        popen.assert_not_called()
+        conf.assert_not_called()
+
+    @mock.patch.object(UsqueManager, "_configure_iface",
+                       return_value={"ok": True, "ipv4": "172.16.0.2"})
+    @mock.patch.object(UsqueManager, "_find_binary", return_value="/usr/bin/usque")
+    @mock.patch.object(UsqueManager, "_iface_busy", return_value=False)
+    @mock.patch.object(UsqueManager, "_iface_exists", return_value=True)
+    @mock.patch("core.usque_manager.subprocess.Popen")
+    @mock.patch("core.usque_manager.os.path.isfile", return_value=True)
+    @mock.patch("core.usque_manager.os.makedirs")
+    @mock.patch("core.usque_manager.time.sleep")
+    def test_custom_mtu_goes_to_usque_and_iface_together(
+            self, _sleep, _mk, _isfile, popen, _exists, _busy, _binary, conf):
+        popen.return_value = mock.Mock(pid=7, stderr=None,
+                                       poll=mock.Mock(return_value=None))
+        r = UsqueManager().start("usque0", "/tmp/warp.conf", mtu=1350)
+        self.assertTrue(r["ok"], r)
+        argv = popen.call_args.args[0]
+        self.assertEqual(argv[argv.index("-m") + 1], "1350")
+        self.assertEqual(conf.call_args.kwargs["mtu"], 1350)
+
+    @mock.patch.object(UsqueManager, "_find_binary", return_value="/usr/bin/usque")
+    @mock.patch("core.usque_manager.os.path.isfile", return_value=True)
+    def test_mtu_below_ipv6_minimum_rejected(self, _isfile, _binary):
+        r = UsqueManager().start("usque0", "/tmp/warp.conf", mtu=1200)
+        self.assertFalse(r["ok"])
+
+    def test_configure_iface_requires_some_address(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".conf",
+                                         delete=False) as fh:
+            json.dump({"private_key": "k", "access_token": "t", "id": "i"}, fh)
+            path = fh.name
+        try:
+            with mock.patch("core.usque_manager._run") as run:
+                r = UsqueManager()._configure_iface("usque0", path)
+            self.assertFalse(r["ok"])
+            run.assert_not_called()
+        finally:
+            os.unlink(path)
+
+    def test_stop_counts_stops(self):
+        mgr = UsqueManager()
+        with mock.patch.object(mgr, "_read_pid", return_value=None), \
+             mock.patch.object(mgr, "_run_files_for_iface", return_value=[]):
+            self.assertEqual(mgr.stop_seq("usque0"), 0)
+            mgr.stop("usque0")
+            self.assertEqual(mgr.stop_seq("usque0"), 1)
+
+
+class TestPidIsUsque(unittest.TestCase):
+    """Проверка PID из pid-файла, пережившего перезагрузку."""
+
+    def _check(self, argv, iface="usque0"):
+        raw = b"\0".join(a.encode() for a in argv) + (b"\0" if argv else b"")
+        with mock.patch("builtins.open", mock.mock_open(read_data=raw)):
+            return UsqueManager()._pid_is_usque(42, iface)
+
+    def test_our_process(self):
+        self.assertTrue(self._check(
+            ["/opt/usr/bin/usque", "nativetun", "--config", "/x.conf",
+             "--interface-name", "usque0", "--no-iproute2"]))
+
+    def test_awg_on_usque_named_iface_is_not_ours(self):
+        """`amneziawg-go usque0` содержит «usque», но это AWG."""
+        self.assertFalse(self._check(["/opt/usr/sbin/amneziawg-go", "usque0"]))
+
+    def test_gui_cli_is_not_ours(self):
+        self.assertFalse(self._check(
+            ["python3", "/opt/zapret-gui/zapret-gui", "usque", "status"]))
+
+    def test_other_interface_is_not_ours(self):
+        self.assertFalse(self._check(
+            ["/opt/usr/bin/usque", "nativetun", "--interface-name", "usque1"]))
+
+    def test_empty_cmdline_is_not_ours(self):
+        self.assertFalse(self._check([]))
+
+
+class TestUsqueArch(unittest.TestCase):
+
+    def test_file_lsb_mips_is_mipsel(self):
+        out = ("usque: ELF 32-bit LSB executable, MIPS, MIPS32 rel2 version 1"
+               " (SYSV), statically linked")
+        with mock.patch("core.usque_manager.subprocess.run",
+                        return_value=mock.Mock(stdout=out)):
+            self.assertEqual(UsqueManager()._get_arch("/x"), "mipsel")
+
+    def test_file_msb_mips_is_mips(self):
+        out = "usque: ELF 32-bit MSB executable, MIPS, MIPS32 rel2 version 1"
+        with mock.patch("core.usque_manager.subprocess.run",
+                        return_value=mock.Mock(stdout=out)):
+            self.assertEqual(UsqueManager()._get_arch("/x"), "mips")

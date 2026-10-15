@@ -46,8 +46,52 @@ class TestOptimizeIface(unittest.TestCase):
         ]
         res = to.optimize_nested_tunnel("opkgtun0", "warp", "awg0", "awg", "balanced")
         self.assertTrue(res["ok"])
-        self.assertEqual(res["inner"]["mtu"], 1350)
+        # Вычитается overhead ВНУТРЕННЕГО протокола (AWG, 80): им обёрнут
+        # пакет, который идёт через outer.
+        self.assertEqual(res["inner"]["mtu"], 1340)
         self.assertGreaterEqual(res["inner"]["mtu"], 576)
+
+    @mock.patch("core.tunnel_optimizer.optimize_iface")
+    def test_awg_inside_masque_gets_mtu_below_outer(self, mock_optimize_iface):
+        """MASQUE+AWG: outer usque держит 1280, inner AWG обязан быть меньше.
+
+        Раньше расчёт давал 1210 < 1280 и возвращал ошибку — inner
+        оставался с MTU больше outer и терял крупные пакеты.
+        """
+        mock_optimize_iface.side_effect = [
+            {"ok": True, "mtu": 1280, "applied": ["mtu"], "errors": []},
+            {"ok": True, "mtu": 1200, "applied": ["mtu"], "errors": []},
+        ]
+        res = to.optimize_nested_tunnel("usque0", "warp", "awg0", "awg")
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(res["inner"]["mtu"], 1200)
+        self.assertEqual(mock_optimize_iface.call_args_list[1].kwargs[
+            "mtu_override"], 1200)
+        self.assertIn("IPv6", res.get("note", ""))
+
+    @mock.patch("core.tunnel_optimizer.optimize_iface")
+    def test_masque_inside_masque_keeps_1280_and_needs_stream(
+            self, mock_optimize_iface):
+        """MTU TUN usque — инвариант 1280; в outer 1280 H3 не помещается."""
+        mock_optimize_iface.side_effect = [
+            {"ok": True, "mtu": 1280, "applied": ["mtu"], "errors": []},
+            {"ok": True, "mtu": 1280, "applied": ["mss_clamp"], "errors": []},
+        ]
+        res = to.optimize_nested_tunnel("usque0", "warp", "usque1", "warp")
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(res["inner"]["mtu"], 1280)
+        self.assertTrue(res["inner_stream_required"])
+
+    @mock.patch("core.tunnel_optimizer.optimize_iface")
+    def test_masque_inside_awg_never_raises_usque_mtu(self, mock_optimize_iface):
+        """Inner usque не получает MTU выше своего `-m` 1280."""
+        mock_optimize_iface.side_effect = [
+            {"ok": True, "mtu": 1420, "applied": ["mtu"], "errors": []},
+            {"ok": True, "mtu": 1280, "applied": ["mtu"], "errors": []},
+        ]
+        res = to.optimize_nested_tunnel("awg0", "awg", "usque0", "warp")
+        self.assertEqual(res["inner"]["mtu"], 1280)
+        self.assertFalse(res["inner_stream_required"])
 
     @mock.patch("core.tunnel_optimizer.optimize_iface")
     def test_nested_tunnel_mtu_never_below_576(self, mock_optimize_iface):

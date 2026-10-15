@@ -81,6 +81,17 @@ class TestDevices(unittest.TestCase):
             self.assertEqual([d["ip"] for d in sw.devices()],
                              ["192.168.1.50"])
 
+    def test_default_route_on_lan_keeps_devices(self):
+        # Точка доступа / роутер за роутером: маршрут по умолчанию через
+        # мост LAN — фильтр «стороны провайдера» не должен выкинуть всех.
+        found = [{"ip": "192.168.1.50", "mac": "b", "iface": "br0"}]
+        with mock.patch("core.devices_discovery.list_devices",
+                        return_value=found), \
+             mock.patch.object(sw, "_own_addresses", return_value=set()), \
+             mock.patch.object(sw, "_wan_ifaces", return_value={"br0"}):
+            self.assertEqual([d["ip"] for d in sw.devices()],
+                             ["192.168.1.50"])
+
     def test_unknown_list_rejected(self):
         with mock.patch.object(sw, "_known_list_ids", return_value={"a"}):
             self.assertEqual(sw._destination({"list_ids": ["a"]})["list_ids"],
@@ -250,6 +261,14 @@ class TestApplyGuards(unittest.TestCase):
         self.assertFalse(res["ok"])
         self.assertIn("ipset отказал", res["error"])
         self.assertFalse(res["steps"][-1]["ok"])
+        # Туннель и маршрут уже есть — UI не предлагает повтор с нуля.
+        self.assertTrue(res["partial"])
+        self.assertEqual(res["route_id"], "r1")
+
+    def test_apply_error_from_derived_rules(self):
+        self.assertEqual(sw.apply_error({"ok": False, "applied": [
+            {"ok": True}, {"ok": False, "deferred": True},
+            {"ok": False, "error": "нет ipset"}]}), "нет ipset")
 
     def test_concurrent_apply_rejected(self):
         self.assertTrue(sw._apply_lock.acquire(blocking=False))

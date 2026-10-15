@@ -558,6 +558,13 @@ const SetupWizardPage = (() => {
                     <a class="btn btn-primary" href="#routing">Маршрутизация →</a>
                     <a class="btn btn-ghost" href="#${ENGINE_PAGE[state.engine]}">Открыть программу</a>
                     <a class="btn btn-ghost" href="#tunnel-monitor">Мониторинг</a>`
+                  : r.partial
+                  // Туннель и маршрут уже есть — повтор с нуля создал бы
+                  // дубли; разбираться — диагностикой маршрутизации.
+                  ? `<div class="note-box warn" style="flex-basis:100%;">VPN запущен, маршрут
+                        сохранён, но в системе не применился. Откройте «Маршрутизацию» и
+                        нажмите «Диагностика» — она покажет, на каком шаге сбой.</div>
+                     <a class="btn btn-primary" href="#routing">Маршрутизация →</a>`
                   : `<button class="btn btn-primary" id="sw-retry">Попробовать ещё раз</button>`}
                 <button class="btn btn-ghost" id="sw-restart">Настроить ещё один</button>
             </div>`;

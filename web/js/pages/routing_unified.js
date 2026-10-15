@@ -743,8 +743,10 @@ const RoutingUnifiedPage = (() => {
         }
     }
 
+    // По классу body, а не по localStorage: при заблокированном хранилище
+    // режим включается (класс есть), а сохранить его нельзя.
     function _expert() {
-        return typeof Expert !== 'undefined' && Expert.enabled();
+        return document.body.classList.contains('expert-mode');
     }
 
     function renderBody() {
@@ -1552,6 +1554,13 @@ const RoutingUnifiedPage = (() => {
         return route;
     }
 
+    // Текст ошибки применения: у маршрута или у его производных правил.
+    function _applyError(ap) {
+        if (ap.error) return ap.error;
+        return (ap.applied || []).filter(x => x && !x.ok && !x.deferred && x.error)
+            .map(x => x.error).join('; ') || 'ошибка применения';
+    }
+
     function wzCreate(body, st) {
         const r = st.created;
         if (r && r.ok) {
@@ -1561,7 +1570,7 @@ const RoutingUnifiedPage = (() => {
             // не поднят, ядро отказало) — маршрут сохранён, но не работает.
             const head = ap.ok === false
                 ? `<div class="note-box warn">Маршрут «${esc(r.route.name)}» сохранён,
-                    но пока не применён: ${esc(ap.error || (ap.errors || []).join('; ') || 'ошибка применения')}.
+                    но пока не применён: ${esc(_applyError(ap))}.
                     Запустите туннель и нажмите «Диагностика».</div>`
                 : `<div class="note-box ok">Маршрут «${esc(r.route.name)}» создан и
                     применён. Он появился в таблице ниже — там его можно поправить.</div>`;
@@ -1956,7 +1965,13 @@ const RoutingUnifiedPage = (() => {
             const r = await API.post('/api/unified/monitor', { enabled, interval: 60 });
             Toast.success('Мониторинг: ' + (r && r.running ? 'включён' : 'выключен'));
         } catch (e) { Toast.error(e.message); }
-        finally { await refreshStatus(); }
+        finally {
+            await refreshStatus();
+            // Запрос не прошёл — галка должна вернуться к реальному
+            // состоянию (renderSettings в опросе — только при его смене).
+            const cb = document.getElementById('ru-monitor');
+            if (cb) cb.checked = monitorRunning;
+        }
     }
 
     async function scan(id) {

@@ -141,18 +141,23 @@ def devices() -> list:
         return []
     own = _own_addresses()
     wan = _wan_ifaces()
-    out = []
+    out, wan_side = [], []
     for d in items:
         ip = str(d.get("ip") or "").strip()
         if not ip or ip in own:
             continue
         # Соседи со стороны провайдера (шлюз, модем) — не устройства LAN:
         # «все устройства» не должны завернуть в VPN и их.
+        item = {"ip": ip, "mac": d.get("mac") or "",
+                "hostname": d.get("hostname") or d.get("name") or ""}
         if d.get("iface") and d.get("iface") in wan:
+            wan_side.append(item)
             continue
-        out.append({"ip": ip, "mac": d.get("mac") or "",
-                    "hostname": d.get("hostname") or d.get("name") or ""})
-    return out
+        out.append(item)
+    # Маршрут по умолчанию идёт через сам мост LAN (точка доступа, роутер
+    # за роутером, ПК с одной сетевой картой) — тогда «сторона провайдера»
+    # и есть LAN, и фильтр выкинул бы всех.
+    return out or wan_side
 
 
 def _wan_ifaces() -> set:
@@ -713,11 +718,18 @@ def _apply(plan: dict) -> dict:
         r = manager.save_route(route_doc, apply=True, validate=True)
         applied = r.get("applied") or {}
         # save_route отвечает ok и тогда, когда маршрут сохранён, но в
-        # ядре не применился (ipset/ip rule) — это тоже провал шага.
+        # ядре не применился (ipset/ip rule) — это тоже провал шага. Но
+        # туннель и маршрут уже есть: «Попробовать ещё раз» с нуля дало
+        # бы второе устройство WARP и дубль маршрута, поэтому отдаём
+        # route_id и предлагаем диагностику, а не повтор.
         if r.get("ok") and applied.get("ok") is False:
-            r = {"ok": False, "error": "маршрут сохранён, но не применён: %s"
-                 % (applied.get("error") or "; ".join(
-                     map(str, applied.get("errors") or [])) or "ошибка")}
+            msg = "маршрут сохранён, но не применён: %s" % apply_error(applied)
+            step("route", False, msg)
+            return {"ok": False, "error": msg, "steps": steps,
+                    "name": name, "engine": engine, "iface": iface,
+                    "method": method, "partial": True,
+                    "route_id": (r.get("route") or {}).get("id", ""),
+                    "warnings": warnings}
         if not r.get("ok"):
             step("route", False, r.get("error") or "маршрут не создан")
             return {"ok": False, "error": r.get("error"), "steps": steps,
@@ -733,6 +745,16 @@ def _apply(plan: dict) -> dict:
     return {"ok": True, "engine": engine, "name": name, "iface": iface,
             "method": method, "route_id": route_id, "steps": steps,
             "warnings": warnings}
+
+
+def apply_error(applied: dict) -> str:
+    """Текст ошибки применения маршрута: из него самого или из правил."""
+    if applied.get("error"):
+        return str(applied["error"])
+    errs = [str(x.get("error")) for x in applied.get("applied") or []
+            if isinstance(x, dict) and not x.get("ok")
+            and not x.get("deferred") and x.get("error")]
+    return "; ".join(errs) or "ошибка применения"
 
 
 def _route_name(p: dict, name: str) -> str:

@@ -81,7 +81,10 @@ const RoutingUnifiedPage = (() => {
                     <p class="page-description">${subtitle}</p>
                 </div>
                 <div class="page-actions">
-                    <button class="btn btn-primary btn-sm" data-action="newRoute">+ Маршрут</button>
+                    <button class="btn btn-primary btn-sm" data-action="routeWizard"
+                            title="Пошаговый мастер: что пускать → через что → готово">Маршрут по шагам</button>
+                    <button class="btn btn-ghost btn-sm" data-action="newRoute"
+                            title="Полная форма маршрута — все возможности">+ Маршрут вручную</button>
                     <label class="text-muted" style="font-size:12px; display:flex; gap:6px; align-items:center;"
                            title="Фоновая проверка доступности маршрутов с включённым мониторингом">
                         <input type="checkbox" id="ru-monitor" data-action="toggleMonitor">
@@ -114,6 +117,7 @@ const RoutingUnifiedPage = (() => {
             <div id="ru-doctor"></div>
             <div id="ru-import"></div>
             <div id="ru-overlaps"></div>
+            <div id="ru-wizard"></div>
             <div id="ru-editor"></div>
             <div class="card" style="margin-bottom:12px; padding:10px 14px;">
                 <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap;">
@@ -676,8 +680,9 @@ const RoutingUnifiedPage = (() => {
         if (!box) return;
         if (!routes.length) {
             box.innerHTML = `<div class="card"><div class="text-muted">
-                Маршрутов пока нет. Нажмите «+ Маршрут» или подключите
-                список на странице <a href="#lists">«Списки маршрутизации»</a>.</div></div>`;
+                Маршрутов пока нет. Нажмите «Маршрут по шагам» (проще всего),
+                «+ Маршрут вручную» или подключите список на странице
+                <a href="#lists">«Списки маршрутизации»</a>.</div></div>`;
             _setCount(0, 0);
             return;
         }
@@ -1200,7 +1205,292 @@ const RoutingUnifiedPage = (() => {
 
     function newRoute() {
         if (!confirmDiscard()) return;
+        closeWizard();
         editing = blankRoute(); editorDirty = false; renderEditor();
+    }
+
+    // ─────── мастер «маршрут по шагам» (для новичков) ───────
+    //
+    // Четыре вопроса вместо полной формы: что пускать → через что →
+    // надёжность → создать. Сохраняет тот же объект маршрута, что и
+    // редактор (POST /api/unified/routes), — после создания он обычная
+    // строка таблицы и правится полной формой. Полная форма («+ Маршрут
+    // вручную») никуда не делась: мастер — дополнительный вход.
+
+    let wzOptions = null;
+
+    function closeWizard() {
+        const box = document.getElementById('ru-wizard');
+        if (box) box.innerHTML = '';
+    }
+
+    async function openWizard() {
+        if (!confirmDiscard()) return;
+        if (editing) { editing = null; editorDirty = false; renderEditor(); }
+        const box = document.getElementById('ru-wizard');
+        if (!box || typeof Wizard === 'undefined') return;
+        box.innerHTML = `<div class="card" style="margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+                <div class="card-title" style="margin:0;">Новый маршрут по шагам</div>
+                <button class="btn btn-ghost btn-sm" data-action="closeWizard">Закрыть</button>
+            </div>
+            <div id="ru-wz-root" style="margin-top:12px;"><div class="text-muted">Загрузка…</div></div>
+        </div>`;
+        if (!wzOptions) {
+            try { wzOptions = await API.get('/api/setup-wizard/options'); }
+            catch (_) { wzOptions = { services: [] }; }
+        }
+        const root = document.getElementById('ru-wz-root');
+        if (!root) return;
+        const state = { what: 'sites', services: ['youtube'], domains: [],
+                        list_ids: [], devices: null, picked: [], manual: '',
+                        method: '', fallback: '', monitor: true };
+        const tunnels = methodTargets();
+        const firstActive = tunnels.find(t => t.active) || tunnels[0];
+        state.method = firstActive ? firstActive.token : 'nfqws2';
+        const steps = [
+            { id: 'what', title: 'Что пускать', render: wzWhat,
+              validate: st => {
+                  if (st.what === 'sites' && !st.services.length
+                      && !st.domains.length && !st.list_ids.length)
+                      return 'Отметьте сервис, впишите сайт или выберите список';
+                  if (st.what === 'devices' && !wzDevices(st).length)
+                      return 'Выберите хотя бы одно устройство';
+                  return '';
+              } },
+            { id: 'via', title: 'Через что', render: wzVia,
+              validate: st => st.method ? '' : 'Выберите, через что пускать' },
+            { id: 'safe', title: 'Надёжность', render: wzSafe },
+            { id: 'create', title: 'Создать', render: wzCreate },
+        ];
+        const wz = Wizard.create(root, {
+            state, steps, scroll: false, finishLabel: 'Создать маршрут',
+            async onFinish(st, w) {
+                if (st.created && st.created.ok) return;
+                st.created = null;
+                try {
+                    const r = await API.post('/api/unified/routes', wzRoute(st));
+                    st.created = r;
+                } catch (e) {
+                    st.created = { ok: false, error: String(e.message || e) };
+                }
+                if (st.created.ok) {
+                    steps[3].hideNext = true;
+                    await refresh();
+                }
+                w.rerender();
+            },
+        });
+        wz.go(0);
+    }
+
+    function wzDevices(st) {
+        const manual = (st.manual || '').split(/[\s,;]+/).map(x => x.trim()).filter(Boolean);
+        return Array.from(new Set(st.picked.concat(manual)));
+    }
+
+    function wzWhat(body, st, w) {
+        const services = (wzOptions && wzOptions.services) || [];
+        const lists = namedLists || [];
+        body.innerHTML = `
+            <p class="wizard-q">Что пускать особым путём?</p>
+            <div class="choice-grid">
+                <button class="choice-card ${st.what === 'sites' ? 'active' : ''}" data-wz-what="sites">
+                    <div class="choice-title">Сайты и сервисы
+                        <span class="badge badge-accent">чаще всего</span></div>
+                    <div class="choice-desc">YouTube, Telegram, ChatGPT или свои адреса.</div>
+                </button>
+                <button class="choice-card ${st.what === 'devices' ? 'active' : ''}" data-wz-what="devices">
+                    <div class="choice-title">Устройства целиком</div>
+                    <div class="choice-desc">Весь интернет телевизора, приставки или телефона.</div>
+                </button>
+            </div>
+            <div id="ru-wz-what" style="margin-top:12px;"></div>`;
+        body.querySelectorAll('[data-wz-what]').forEach(b => b.onclick = () => {
+            st.what = b.dataset.wzWhat; w.rerender();
+        });
+        const box = body.querySelector('#ru-wz-what');
+        if (st.what === 'sites') {
+            box.innerHTML = `
+                <div class="gen-actions">${services.map(s => `
+                    <button class="btn btn-sm ${st.services.includes(s.id) ? 'btn-primary' : 'btn-ghost'}"
+                            data-wz-svc="${escAttr(s.id)}">${st.services.includes(s.id) ? '✓ ' : ''}${esc(s.label)}</button>`).join('')}
+                </div>
+                <div class="form-group" style="margin-top:8px;">
+                    <label class="form-label">Свои сайты (по одному в строке)</label>
+                    <textarea class="form-input" id="ru-wz-domains" rows="3"
+                              placeholder="example.com">${esc(st.domains.join('\n'))}</textarea>
+                </div>
+                ${lists.length ? `<details><summary style="cursor:pointer;">Мои списки (${lists.length})</summary>
+                    <div class="gen-actions" style="margin-top:6px;">${lists.map(l => `
+                        <label style="display:flex;gap:6px;align-items:center;">
+                            <input type="checkbox" data-wz-list="${escAttr(l.id)}"
+                                   ${st.list_ids.includes(l.id) ? 'checked' : ''}> ${esc(l.name || l.id)}</label>`).join('')}
+                    </div></details>` : ''}`;
+            box.querySelectorAll('[data-wz-svc]').forEach(b => b.onclick = () => {
+                const id = b.dataset.wzSvc;
+                const i = st.services.indexOf(id);
+                if (i >= 0) st.services.splice(i, 1); else st.services.push(id);
+                wzWhat(body, st, w);
+            });
+            box.querySelector('#ru-wz-domains').oninput = (e) => {
+                st.domains = e.target.value.split(/[\s,;]+/).map(x => x.trim()).filter(Boolean);
+            };
+            box.querySelectorAll('[data-wz-list]').forEach(cb => cb.onchange = () => {
+                st.list_ids = st.list_ids.filter(x => x !== cb.dataset.wzList);
+                if (cb.checked) st.list_ids.push(cb.dataset.wzList);
+            });
+            return;
+        }
+        if (st.devices === null) {
+            box.innerHTML = '<div class="text-muted">Ищу устройства…</div>';
+            API.get('/api/setup-wizard/devices')
+                .then(r => { st.devices = (r && r.devices) || []; })
+                .catch(() => { st.devices = []; })
+                .then(() => w.rerender());
+            return;
+        }
+        box.innerHTML = `
+            ${st.devices.length ? `<div style="display:grid;gap:6px;">${st.devices.map(d => `
+                <label style="display:flex;gap:8px;align-items:center;">
+                    <input type="checkbox" data-wz-dev="${escAttr(d.ip)}" ${st.picked.includes(d.ip) ? 'checked' : ''}>
+                    <strong>${esc(d.hostname || 'без имени')}</strong>
+                    <span class="text-muted">${esc(d.ip)}</span></label>`).join('')}</div>`
+              : '<div class="text-muted">Устройства не найдены — впишите IP вручную.</div>'}
+            <div class="form-group" style="margin-top:8px;">
+                <label class="form-label">IP вручную</label>
+                <input class="form-input" id="ru-wz-manual" value="${escAttr(st.manual)}"
+                       placeholder="192.168.1.50">
+            </div>`;
+        box.querySelectorAll('[data-wz-dev]').forEach(cb => cb.onchange = () => {
+            st.picked = st.picked.filter(x => x !== cb.dataset.wzDev);
+            if (cb.checked) st.picked.push(cb.dataset.wzDev);
+        });
+        box.querySelector('#ru-wz-manual').oninput = (e) => { st.manual = e.target.value; };
+    }
+
+    function wzChoices(st) {
+        // nfqws2 и «напрямую» не умеют устройства, а nfqws2 — ещё и
+        // сервисы-geosite (они разворачиваются только для туннелей).
+        const onlyGeo = st.what === 'sites' && st.services.length
+            && !st.domains.length && !st.list_ids.length;
+        const out = methodTargets().map(t => ({
+            token: t.token, title: methodLabel(t.token),
+            desc: t.active ? 'Туннель запущен' : 'Туннель сейчас не запущен — маршрут заработает, когда он поднимется',
+            badge: t.active ? 'работает' : '' }));
+        if (st.what === 'sites') {
+            out.push({ token: 'nfqws2', title: 'Обход DPI без VPN',
+                       desc: onlyGeo ? 'Для сервисов из списка не подходит — нужен туннель или свои сайты'
+                                     : 'Быстро, но не для всех сайтов',
+                       disabled: onlyGeo });
+            out.push({ token: 'direct', title: 'Напрямую (исключение)',
+                       desc: 'Мимо VPN и обхода — например, банки и Госуслуги' });
+        }
+        return out;
+    }
+
+    function wzVia(body, st, w) {
+        const choices = wzChoices(st);
+        if (!choices.some(c => c.token === st.method && !c.disabled)) {
+            const first = choices.find(c => !c.disabled);
+            st.method = first ? first.token : '';
+        }
+        const noTunnels = !methodTargets().length;
+        body.innerHTML = `
+            <p class="wizard-q">Через что пускать?</p>
+            ${noTunnels ? `<div class="note-box warn">Пока нет ни одного VPN-туннеля.
+                Настройте его в <a href="#setup-wizard">Мастере настройки</a> — это
+                несколько кликов, — и вернитесь сюда.</div>` : ''}
+            <div class="choice-grid">${choices.map(c => `
+                <button class="choice-card ${st.method === c.token ? 'active' : ''}"
+                        data-wz-method="${escAttr(c.token)}" ${c.disabled ? 'disabled' : ''}>
+                    <div class="choice-title">${esc(c.title)}
+                        ${c.badge ? `<span class="badge badge-success">${esc(c.badge)}</span>` : ''}</div>
+                    <div class="choice-desc">${esc(c.desc)}</div>
+                </button>`).join('')}</div>`;
+        body.querySelectorAll('[data-wz-method]').forEach(b => b.onclick = () => {
+            st.method = b.dataset.wzMethod;
+            if (st.fallback === st.method) st.fallback = '';
+            w.rerender();
+        });
+    }
+
+    function wzSafe(body, st) {
+        const others = wzChoices(st).filter(c => c.token !== st.method && !c.disabled
+                                               && c.token !== 'direct');
+        body.innerHTML = `
+            <p class="wizard-q">Что делать, если ${esc(methodLabel(st.method))} перестанет работать?</p>
+            <div class="form-group" style="max-width:480px;">
+                <select class="form-input" id="ru-wz-fb">
+                    <option value="">Ничего не делать</option>
+                    ${others.map(c => `<option value="${escAttr(c.token)}" ${st.fallback === c.token ? 'selected' : ''}>
+                        Переключиться на: ${esc(c.title)}</option>`).join('')}
+                </select>
+                <div class="form-hint">Мастер включит проверку доступности и сам вернёт
+                    основной путь, когда он оживёт.</div>
+            </div>
+            <label style="display:flex;gap:8px;align-items:center;">
+                <input type="checkbox" id="ru-wz-mon" ${st.monitor ? 'checked' : ''}>
+                Проверять, открываются ли сайты</label>`;
+        body.querySelector('#ru-wz-fb').onchange = (e) => { st.fallback = e.target.value; };
+        body.querySelector('#ru-wz-mon').onchange = (e) => { st.monitor = e.target.checked; };
+    }
+
+    function wzRoute(st) {
+        const services = ((wzOptions && wzOptions.services) || [])
+            .filter(s => st.services.includes(s.id));
+        const labels = services.map(s => s.label);
+        let name = st.what === 'devices'
+            ? 'Устройства → ' + methodLabel(st.method)
+            : (labels.slice(0, 2).join(', ') || st.domains[0] || 'Сайты')
+              + ' → ' + methodLabel(st.method);
+        const route = {
+            name: name.slice(0, 60), method: st.method, enabled: true,
+            fallbacks: st.fallback ? [st.fallback] : [],
+            failover_enabled: !!st.fallback,
+            monitor_enabled: !!(st.monitor || st.fallback),
+        };
+        if (st.what === 'devices') {
+            route.devices = wzDevices(st).map(ip => {
+                const d = (st.devices || []).find(x => x.ip === ip) || {};
+                return { ip, mac: d.mac || '', hostname: d.hostname || '' };
+            });
+        } else {
+            route.destination = {
+                geosite: Array.from(new Set(services.flatMap(s => s.geosite || []))),
+                geoip: Array.from(new Set(services.flatMap(s => s.geoip || []))),
+                domains: st.domains, list_ids: st.list_ids, cidrs: [],
+            };
+        }
+        return route;
+    }
+
+    function wzCreate(body, st) {
+        const r = st.created;
+        if (r && r.ok) {
+            const skipped = ((r.applied || {}).skipped_selectors || []);
+            body.innerHTML = `<div class="note-box ok">Маршрут «${esc(r.route.name)}» создан и
+                    применён. Он появился в таблице ниже — там его можно поправить.</div>
+                ${skipped.map(x => `<div class="note-box warn">${esc(x)}</div>`).join('')}
+                <button class="btn btn-ghost" data-action="routeWizard">Ещё один маршрут</button>`;
+            return;
+        }
+        const route = wzRoute(st);
+        const what = st.what === 'devices'
+            ? 'устройства: ' + wzDevices(st).join(', ')
+            : [].concat(((wzOptions && wzOptions.services) || [])
+                  .filter(s => st.services.includes(s.id)).map(s => s.label),
+                  st.domains).join(', ') || 'мои списки';
+        body.innerHTML = `
+            ${r && !r.ok ? `<div class="note-box err">${esc(r.error || 'не создан')}</div>` : ''}
+            <p class="wizard-q">Проверьте и создайте</p>
+            <div class="note-box">
+                <div><b>Что:</b> ${esc(what)}</div>
+                <div><b>Через:</b> ${esc(methodLabel(route.method))}</div>
+                <div><b>Если не работает:</b> ${route.fallbacks.length
+                    ? esc(methodLabel(route.fallbacks[0])) : 'ничего'}</div>
+                <div><b>Название:</b> ${esc(route.name)}</div>
+            </div>`;
     }
 
     function confirmDiscard() {
@@ -1858,6 +2148,8 @@ const RoutingUnifiedPage = (() => {
             const action = el.dataset.action;
             switch (action) {
                 case 'newRoute': newRoute(); break;
+                case 'routeWizard': openWizard(); break;
+                case 'closeWizard': closeWizard(); break;
                 case 'applyAll': applyAll(); break;
                 case 'refresh': refresh(); break;
                 case 'reapplyAll': reapplyAll(); break;
@@ -1967,7 +2259,7 @@ const RoutingUnifiedPage = (() => {
 
     return {
         render, destroy, refresh,
-        newRoute, edit, closeEditor, save, del, apply, applyAll,
+        newRoute, openWizard, edit, closeEditor, save, del, apply, applyAll,
         toggleMonitor, scan,
         setVia, setSearch,
         addDevice, addDeviceManual, removeDevice,

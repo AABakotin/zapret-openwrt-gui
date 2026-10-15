@@ -15,6 +15,12 @@ const TunnelOptimizerPage = (() => {
                 <span class="page-subtitle">MTU/PMTU, безопасные TCP/QUIC buffers, BBR и полный restore</span>
             </div>
 
+            <div class="card" id="opt-wizard" style="margin-bottom:16px;"></div>
+
+            <details class="advanced-block" id="opt-expert">
+                <summary>Подробные настройки — для опытных
+                    <span class="text-muted">(профили, TCP, PMTU, сравнение)</span></summary>
+
             <div class="card-grid">
                 <div class="card">
                     <div class="card-title">Профиль</div>
@@ -61,12 +67,127 @@ const TunnelOptimizerPage = (() => {
                     </div>
                 </div>
             </div>
+            </details>
         `;
 
+        _renderWizard(document.getElementById("opt-wizard"));
         await _refresh();
     }
 
     function destroy() {}
+
+    // ══════════════ мастер для новичков ══════════════
+    //
+    // Три вопроса вместо таблицы sysctl: что важнее → что изменится →
+    // готово. Под капотом — тот же POST /api/optimizer/optimize-all, что и у
+    // кнопки «Применить ко всем туннелям», и тот же откат.
+
+    const GOALS = [
+        { id: "balanced", title: "Обычный интернет", badge: "рекомендуем",
+          desc: "Сайты, видео, соцсети. Подходит почти всем." },
+        { id: "low_latency", title: "Игры и звонки",
+          desc: "Меньше задержка и «подвисаний» в играх, Discord, Zoom." },
+        { id: "throughput", title: "Скачивание и 4K-видео",
+          desc: "Максимум скорости на больших файлах и торрентах." },
+    ];
+
+    const GOAL_CHANGES = {
+        balanced: ["MTU туннелей 1420 (меньше обрывов из-за больших пакетов)",
+                   "TCP-буферы не меньше 1 МБ"],
+        low_latency: ["MTU туннелей 1280 — пакеты гарантированно пролезают через любой путь",
+                      "TCP-буферы не уменьшаются"],
+        throughput: ["MTU туннелей 1420", "TCP-буферы не меньше 4 МБ"],
+    };
+
+    function _renderWizard(root) {
+        if (!root || typeof Wizard === "undefined") return;
+        const steps = [
+            { id: "goal", title: "Что важнее", render(body, st, w) {
+                body.innerHTML = `
+                    <p class="wizard-q">Для чего в основном используете VPN?</p>
+                    <p class="wizard-sub">Подберём настройки сети роутера под это.
+                        Всё можно вернуть одной кнопкой.</p>
+                    <div class="choice-grid">${GOALS.map(g => `
+                        <button class="choice-card ${st.goal === g.id ? "active" : ""}" data-goal="${g.id}">
+                            <div class="choice-title">${esc(g.title)}
+                                ${g.badge ? `<span class="badge badge-accent">${esc(g.badge)}</span>` : ""}</div>
+                            <div class="choice-desc">${esc(g.desc)}</div>
+                        </button>`).join("")}</div>`;
+                body.querySelectorAll("[data-goal]").forEach(b => b.onclick = () => {
+                    st.goal = b.dataset.goal;
+                    w.rerender();
+                });
+            } },
+            { id: "check", title: "Применить", render(body, st) {
+                if (st.applying) {
+                    body.innerHTML = `<div class="note-box">⏳ Применяю…</div>`;
+                    return;
+                }
+                if (st.result) return _renderWizardResult(body, st, root);
+                const status = _status || {};
+                const bbr = String(status.available_cc || "").includes("bbr");
+                const items = (GOAL_CHANGES[st.goal] || []).concat([
+                    bbr ? "Алгоритм BBR — быстрее разгоняется на плохих каналах"
+                        : "BBR в ядре роутера нет — оставим стандартный алгоритм",
+                    "Для MASQUE (WARP/usque) — больше места под QUIC-пакеты",
+                ]);
+                body.innerHTML = `
+                    <p class="wizard-q">Вот что сделаем</p>
+                    <ul style="margin:8px 0 12px 18px;">${items.map(i => `<li>${esc(i)}</li>`).join("")}</ul>
+                    <div class="note-box">Применяется ко всем запущенным туннелям.
+                        Прежние значения сохраняются — вернуть их можно кнопкой
+                        «Вернуть как было».</div>`;
+            } },
+        ];
+        const wz = Wizard.create(root, {
+            state: { goal: "balanced" }, steps, scroll: false,
+            finishLabel: "Применить",
+            async onFinish(st, w) {
+                if (st.result) return;
+                st.applying = true;
+                w.rerender();
+                try {
+                    st.result = await API.post("/api/optimizer/optimize-all",
+                        { profile: st.goal }, { timeout: 60000 });
+                    await _loadStatus();
+                } catch (err) {
+                    st.result = { error: String(err.message || err) };
+                } finally {
+                    st.applying = false;
+                }
+                steps[1].hideNext = true;
+                w.rerender();
+            },
+        });
+        wz.go(0);
+    }
+
+    function _renderWizardResult(body, st, root) {
+        const r = st.result;
+        if (r.error) {
+            body.innerHTML = `<div class="note-box err">Не получилось: ${esc(r.error)}</div>
+                <button class="btn btn-ghost" id="opt-wz-again">Начать заново</button>`;
+            body.querySelector("#opt-wz-again").onclick = () => _renderWizard(root);
+            return;
+        }
+        const ifaces = Object.entries(r.results || {});
+        body.innerHTML = `
+            <div class="note-box ${r.ok ? "ok" : "warn"}">${r.ok
+                ? "Готово! Настройки применены."
+                : "Применено частично — подробности ниже."}</div>
+            ${ifaces.length ? `<ul style="list-style:none;padding:0;">${ifaces.map(([name, x]) => `
+                <li style="margin:4px 0;">${x.ok ? "✅" : "⚠️"} <b>${esc(name)}</b> —
+                    ${esc((x.applied || []).join(", ") || "без изменений")}
+                    ${(x.errors || []).length ? `<span class="text-muted">(${esc(x.errors.join("; "))})</span>` : ""}</li>`).join("")}</ul>`
+                : `<div class="note-box warn">Запущенных туннелей не нашлось — применены только
+                   общие настройки. Запустите туннель и пройдите мастер ещё раз.</div>`}
+            <div class="gen-actions">
+                <button class="btn btn-ghost" id="opt-wz-undo">Вернуть как было</button>
+                <button class="btn btn-ghost" id="opt-wz-again">Начать заново</button>
+            </div>`;
+        body.querySelector("#opt-wz-undo").onclick = restoreAll;
+        body.querySelector("#opt-wz-again").onclick = () => _renderWizard(root);
+    }
 
     async function _refresh() {
         await Promise.all([_loadStatus(), _renderProfile()]);

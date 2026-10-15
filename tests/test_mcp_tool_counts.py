@@ -120,18 +120,23 @@ from core.mcp import registry
 # Приёмы d2k: + 1 под `probes` (dpi_classify — дифференциальные вопросы
 # к DPI: целиком → разрез на первом байте → чужое имя на тот же адрес).
 # Состояния не меняет, но выпускает трафик — поэтому `probes`.
+# Генератор конфигов WARP/Proton: + 1 на чтение (vpngen_options — что
+# вообще можно сгенерировать, сети не трогает) и + 2 под
+# `tunnels_write`: vpngen_generate (регистрирует устройство и СОХРАНЯЕТ
+# конфиги; откат удаляет их) и vpngen_proton_servers — последний ничего
+# не меняет, но ходит к стороннему сервису, поэтому не в чтении.
 # Разрешение `secrets` своих инструментов не добавляет — как и
 # `self_edit_core`: оно снимает маскировку в ответе (по явному
 # `raw: true`) и запрет на запись секретных полей настроек. Ноль
 # напротив него — это его смысл.
 BY_SCOPE = {
-    "read": 38,
+    "read": 39,
     "control": 8,
     "strategies_write": 12,
     "config_write": 1,
     "probes": 13,
     "experiments": 7,
-    "tunnels_write": 10,
+    "tunnels_write": 12,
     "dangerous": 2,
     "shell_readonly": 11,
     "shell_full": 3,
@@ -212,6 +217,8 @@ class TestToolCounts(unittest.TestCase):
         "lists_list", "lua_functions_list",
         # S4 — перехват и трафик
         "firewall_status", "traffic_recent",
+        # генератор конфигов WARP/Proton
+        "vpngen_options",
         # S5 — туннели, диагностика, обновления
         "diagnostics_run", "dpi_report", "tunnels_status", "updates_check",
         # S6 — что можно менять и что уже менялось
@@ -260,6 +267,9 @@ class TestToolCounts(unittest.TestCase):
         "pool_refresh", "subscription_refresh", "tunnel_config_get",
         "tunnel_config_save", "tunnel_down", "tunnel_restart", "tunnel_up",
         "unified_route_apply", "unified_route_delete", "unified_route_save",
+        # генератор конфигов: серверы Proton (сеть, без изменений) и
+        # генерация с сохранением.
+        "vpngen_generate", "vpngen_proton_servers",
     ]
     # S10 — движок экспериментов: и мутирующие, и опрос под одним
     # разрешением.
@@ -364,6 +374,10 @@ class TestToolCounts(unittest.TestCase):
         # потерялась бы при первом же обновлении. Наружу уезжает текст
         # секции — дальше он едет в git.
         "strategy_export_catalog",
+        # Серверы Proton: список с чужого сервиса, на роутере ничего не
+        # меняется. Под `tunnels_write` — потому что это сеть к третьей
+        # стороне, а не потому что пишет.
+        "vpngen_proton_servers",
     }
 
     # Обратный случай (S12): инструмент объявлен мутирующим под

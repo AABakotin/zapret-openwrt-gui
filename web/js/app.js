@@ -49,6 +49,8 @@ const App = (() => {
         'updates':         UpdateCheckerPage,
         lists:       ListsPage,
         routing:     RoutingUnifiedPage,
+        vpngen:      VpnGenPage,
+        'setup-wizard': SetupWizardPage,
         mcp:         McpPage,
         agent:       AgentPage,
         settings:    SettingsPage,

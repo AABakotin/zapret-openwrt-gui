@@ -5577,3 +5577,82 @@ body.expert-mode .expert-note { display: none !important; }
     .bd-table tr { padding: 10px 0; border-bottom: 1px solid var(--border); }
     .bd-table td { padding: 2px 0; border: none; }
 }
+
+/* ─────────── Пошаговые мастера (components/wizard.js) ───────────
+   Общие для генератора конфигов и мастера sing-box/mihomo. Только
+   переменные темы — светлая тема подхватывается сама. */
+.wizard-steps {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    list-style: none; padding: 0; margin: 0 0 16px 0;
+}
+.wizard-step {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px; border-radius: 999px;
+    border: 1px solid var(--border-hover);
+    color: var(--text-secondary); font-size: 13px;
+}
+.wizard-step.done { color: var(--text-primary); cursor: pointer; }
+.wizard-step.active {
+    border-color: var(--accent); color: var(--text-heading);
+    background: var(--accent-glow);
+}
+.wizard-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; border-radius: 50%;
+    background: var(--bg-input); font-size: 12px; font-weight: 600;
+}
+.wizard-step.active .wizard-num { background: var(--accent); color: #fff; }
+.wizard-step.done .wizard-num { background: var(--success-bg); color: var(--success); }
+.wizard-error {
+    margin-bottom: 12px; padding: 8px 12px; border-radius: var(--radius-sm);
+    background: var(--error-bg); color: var(--error); font-size: 13px;
+}
+.wizard-nav {
+    display: flex; justify-content: space-between; gap: 8px;
+    margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border);
+}
+.wizard-q { font-size: 16px; font-weight: 600; color: var(--text-heading); margin: 0 0 4px 0; }
+.wizard-sub { color: var(--text-secondary); font-size: 13px; margin: 0 0 14px 0; }
+.choice-grid {
+    display: grid; gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+.choice-card {
+    text-align: left; cursor: pointer; font: inherit;
+    padding: 12px 14px; border-radius: var(--radius);
+    border: 1px solid var(--border-hover);
+    background: var(--bg-secondary); color: var(--text-primary);
+    transition: border-color var(--transition), background var(--transition);
+}
+.choice-card:hover { border-color: var(--accent); }
+.choice-card.active {
+    border-color: var(--accent); background: var(--accent-glow);
+    box-shadow: inset 0 0 0 1px var(--accent);
+}
+.choice-card:disabled { opacity: .5; cursor: not-allowed; }
+.choice-title { font-weight: 600; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.choice-desc { font-size: 12px; color: var(--text-secondary); margin-top: 4px; line-height: 1.4; }
+.note-box {
+    padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px;
+    border-left: 3px solid var(--info); background: var(--info-bg);
+    margin: 10px 0;
+}
+.note-box.warn { border-left-color: var(--warning); background: var(--warning-bg); }
+.note-box.ok { border-left-color: var(--success); background: var(--success-bg); }
+.note-box.err { border-left-color: var(--error); background: var(--error-bg); }
+.gen-result { margin-top: 14px; }
+.gen-result textarea {
+    width: 100%; min-height: 220px; font-family: var(--font-mono);
+    font-size: 12px; padding: 10px; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); background: var(--bg-input);
+    color: var(--text-primary); box-sizing: border-box;
+}
+.gen-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.settings-grid {
+    display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+@media (max-width: 600px) {
+    .wizard-step span:not(.wizard-num) { display: none; }
+    .wizard-step.active span { display: inline; }
+}

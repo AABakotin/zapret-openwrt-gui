@@ -1374,12 +1374,13 @@ Desktop и VS Code они видны как готовые команды, мо�
 невыданное не просто запрещено, оно **не публикуется**, и модель о нём
 не знает.
 
-**Чтение — всегда, отдельного разрешения нет** (38):
+**Чтение — всегда, отдельного разрешения нет** (39):
 
 | Инструменты | Про что |
 |---|---|
 | `system_status`, `nfqws_status`, `tunnels_status`, `diagnostics_run`, `connectivity_matrix` | что за устройство, что поднято, что сломано |
 | `logs_tail`, `traffic_recent`, `firewall_status` | журнал, «дошёл ли трафик до движка», правила перехвата |
+| `vpngen_options` | что умеет генератор конфигов WARP/Proton на этом устройстве |
 | `strategy_list`, `strategy_get`, `strategy_state_list`, `catalog_search`, `nfqws_command_preview` | стратегии, каталоги и итоговая команда nfqws2 |
 | `hostlists_list`, `hostlist_get`, `ipsets_list`, `lists_list`, `blobs_list`, `lua_functions_list` | списки доменов и IP, блобы, функции `--lua-desync` этого устройства |
 | `config_get`, `config_describe`, `config_writable_paths` | настройки, что они значат и что из них можно менять |
@@ -1501,10 +1502,13 @@ pull request. Файлы каталогов при этом не трогают�
 `code_export_patch`, `code_write`, `code_patch`, `code_apply`,
 `code_commit`, `code_rollback`. Подробности — ниже.
 
-**`tunnels_write` — туннели, подписки и маршруты** (10): `tunnel_up`,
+**`tunnels_write` — туннели, подписки и маршруты** (12): `tunnel_up`,
 `tunnel_down`, `tunnel_restart`, `tunnel_config_get`,
 `tunnel_config_save`, `subscription_refresh`, `pool_refresh`,
-`unified_route_save`, `unified_route_delete`, `unified_route_apply`.
+`unified_route_save`, `unified_route_delete`, `unified_route_apply`,
+`vpngen_generate`, `vpngen_proton_servers` (генератор конфигов WARP и
+Proton: регистрирует устройство и сохраняет конфиги AWG/usque/sing-box/
+mihomo; приватные ключи модели не показываются).
 *Может править конфиги туннелей и поднимать их — трафик пойдёт через
 указанный ею сервер.* Маршрут единого слоя связывает домены (CIDR,
 списки, geosite) с методом — `direct`, `nfqws2`, `awg:<iface>`,

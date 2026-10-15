@@ -56,6 +56,10 @@ const Sidebar = (() => {
             label: 'VPN и маршрутизация',
             items: [
                 { id: 'routing', label: 'Маршрутизация', icon: 'globe' },
+                // Мастер и генератор — первые точки входа для новичка:
+                // «настроить VPN по шагам» и «получить бесплатный конфиг».
+                { id: 'setup-wizard', label: 'Мастер настройки', icon: 'play' },
+                { id: 'vpngen', label: 'Генератор конфигов', icon: 'awg' },
                 { id: 'awg', label: 'AmneziaWG', icon: 'awg', children: [
                     { id: 'awg-configs', label: 'Конфиги',  icon: 'lua' },
                     { id: 'awg-warp',    label: 'WARP',      icon: 'awg' },

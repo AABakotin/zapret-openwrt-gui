@@ -112,7 +112,13 @@ def request_json(method: str, url: str, *, body=None, headers=None,
     так выглядит его страница ограничения частоты (код 1015).
     """
     host = urllib.request.urlparse(url).hostname or url
-    hdrs = {"Accept": "application/json", "Accept-Encoding": "identity"}
+    
+    # Добавляем User-Agent современного браузера, чтобы обойти ошибку Cloudflare 1010
+    hdrs = {
+        "Accept": "application/json", 
+        "Accept-Encoding": "identity",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
     hdrs.update(headers or {})
     data = None
     if body is not None:
@@ -180,6 +186,7 @@ def request_json(method: str, url: str, *, body=None, headers=None,
         return json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as e:
         raise GenError("%s вернул не JSON: %s" % (host, e))
+
 
 
 def _short(text: str) -> str:

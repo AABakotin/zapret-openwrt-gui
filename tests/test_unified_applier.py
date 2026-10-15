@@ -110,6 +110,35 @@ class TestApplyTunnel(unittest.TestCase):
         self.assertIn("a.com", dom.domains)
         self.assertNotIn("geosite:google", dom.domains)
 
+    def test_geosite_folded_for_singbox_without_auto_route(self):
+        # TUN без auto_route (конфиг мастера): sing-box видит только то,
+        # что ему отдало ядро, — geo надо развернуть в наборы ядра.
+        with mock.patch("core.unified.applier._singbox_sees_all",
+                        return_value=False), \
+             mock.patch("core.unified.applier._apply_geo") as geo:
+            r = UnifiedRoute(name="g", method="singbox:sbtun0",
+                             destination=Destination(geosite=["youtube"]))
+            res = apply_route(r)
+        self.assertTrue(res["ok"])
+        geo.assert_not_called()
+        dom = next((c.args[0] for c in self.mgr.add_rule.call_args_list
+                    if c.args[0].id == _dom_rule_id(r.id)), None)
+        self.assertIsNotNone(dom)
+        self.assertIn("geosite:youtube", dom.domains)
+
+    def test_singbox_sees_all_reads_tun_auto_route(self):
+        from core.unified import applier
+        cfgs = [({"name": "a", "running": True},
+                 {"type": "tun", "auto_route": False})]
+        with mock.patch("core.routing.doctor._singbox_tuns",
+                        return_value=cfgs), \
+             mock.patch("core.singbox_manager.get_singbox_manager"):
+            self.assertFalse(applier._singbox_sees_all("sbtun0"))
+        with mock.patch("core.routing.doctor._singbox_tuns",
+                        return_value=[]), \
+             mock.patch("core.singbox_manager.get_singbox_manager"):
+            self.assertTrue(applier._singbox_sees_all("x"))
+
     def test_tunnel_creates_device_and_dscp_rules(self):
         r = _route("awg:awg0",
                    devices=[{"ip": "192.168.1.50", "mac": "aa",

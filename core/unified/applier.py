@@ -103,7 +103,7 @@ def apply_route(route: UnifiedRoute, method: str = None) -> dict:
         # эмиттера geo) заворачиваем geo через dnsmasq + ipset/nftset:
         # geosite → домены, geoip → CIDR в interval-set — тот же путь, что
         # у обычных доменов (domain_rule._expand_rule/_add_static_cidrs).
-        geo_native = (kind == "singbox")
+        geo_native = (kind == "singbox") and _singbox_sees_all(target)
         tun_domains = list(domains)
         if not geo_native and has_geo:
             tun_domains += ["geosite:%s" % g
@@ -190,6 +190,26 @@ def remove_route(route: UnifiedRoute) -> dict:
     _rebuild_nfqws_aggregate()
     log.info("unified: маршрут %s снят" % rid, source="unified")
     return {"ok": True, "id": rid}
+
+
+def _singbox_sees_all(iface: str) -> bool:
+    """Видит ли sing-box с этим TUN весь трафик (``auto_route``).
+
+    geo-правила внутри sing-box работают только для трафика, который до
+    него дошёл. С ``auto_route: false`` (так собирает конфиг мастер
+    настройки) в TUN попадает лишь то, что туда отправило ядро, — и
+    geosite/geoip надо разворачивать в наборы ядра, как для AWG.
+    Конфиг не найден или не читается — прежнее поведение (нативно).
+    """
+    try:
+        from core.routing.doctor import _singbox_tuns
+        from core.singbox_manager import get_singbox_manager
+        found = _singbox_tuns(iface, get_singbox_manager().list_configs())
+    except Exception:
+        return True
+    found.sort(key=lambda x: not x[0].get("running"))
+    tun = next((t for _c, t in found if t is not None), None)
+    return True if tun is None else bool(tun.get("auto_route"))
 
 
 def _apply_geo(route, method) -> dict:

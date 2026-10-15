@@ -383,6 +383,29 @@ class WarpInWarpManager:
         with self._lock:
             return self._get_status_locked()
 
+    def usque_ifaces(self) -> frozenset:
+        """usque-интерфейсы текущего режима — даже если слой сейчас лежит.
+
+        Нужно usque-watchdog'у: эти туннели он трогать не должен. Рестарт
+        одного слоя в обход нас уничтожает интерфейс, а вместе с ним ядро
+        удаляет закреплённый через него /32-маршрут inner-endpoint — после
+        такого «рестарта» inner идёт мимо outer, и двойной туннель
+        становится фикцией. Слоями WARP-in-WARP занимается свой watchdog
+        (core/warp_in_warp_watchdog.py), он перезапускает пару целиком.
+        """
+        with self._lock:
+            self._restore_runtime_locked()
+            mode = self._mode
+            if mode == "masque_masque":
+                names = (self._outer_iface, self._inner_iface)
+            elif mode == "masque_awg":
+                names = (self._outer_iface,)
+            elif mode == "awg_masque":
+                names = (self._inner_iface,)
+            else:
+                names = ()
+            return frozenset(n for n in names if n)
+
     def _restore_runtime_locked(self) -> None:
         """Поднять состояние из настроек, если процесс GUI перезапускали.
 
@@ -515,8 +538,13 @@ class WarpInWarpManager:
             if transport_profile not in ("performance", "restricted", "auto"):
                 return {"ok": False, "error": "Неизвестный transport_profile: %s" % transport_profile}
             if mode == "masque_masque" and transport_profile == "restricted":
+                # transport_profile здесь — транспорт OUTER. Inner в
+                # MASQUE+MASQUE всегда идёт по H2 (см. _start_masque_masque),
+                # так что restricted дал бы TCP поверх TCP.
                 return {"ok": False,
-                        "error": "H2 внутри H2 запрещён: выберите performance или auto"}
+                        "error": "H2 внутри H2 запрещён: для MASQUE+MASQUE"
+                                 " внешний туннель — performance или auto"
+                                 " (внутренний и так идёт по H2/TCP)"}
             current = self._get_status_locked()
             if current.get("mode"):
                 return {"ok": False,
@@ -614,9 +642,17 @@ class WarpInWarpManager:
                 mgr.stop(outer_iface)
                 return {"ok": False,
                         "error": "Не удалось закрепить endpoint inner через outer"}
-        inner_profile = ("performance" if
-                         result.get("transport_profile") == "restricted"
-                         else transport_profile)
+        # Inner — всегда H2/TCP. MTU внешнего TUN у usque — 1280 (другие
+        # значения апстрим не поддерживает), и H3-датаграмма inner'а,
+        # несущая IP-пакет в 1280 байт, в него не помещается: quic-go
+        # ставит DF, крупные пакеты просто пропадают. TCP-поток H2 сам
+        # подстраивается под MTU outer через MSS. Раньше inner шёл по H3,
+        # и через двойной туннель проходили только мелкие пакеты.
+        inner_profile = "restricted"
+        if result.get("transport_profile") == "restricted":
+            log.warning("warp-in-warp: outer поднялся на H2 (fallback auto) —"
+                        " получилось H2 внутри H2, возможна деградация"
+                        " при потерях", source="warp_in_warp")
         result = mgr.start(inner_iface, inner_config, sni=inner_sni,
                            transport_profile=inner_profile,
                            apply_optimizer=False)
@@ -644,6 +680,7 @@ class WarpInWarpManager:
             "outer": outer_iface,
             "inner": inner_iface,
             "transport_profile": transport_profile,
+            "inner_transport_profile": inner_profile,
             "experimental": True,
         }
 

@@ -220,6 +220,13 @@ endpoint заменил старый `type:wireguard` outbound (он deprecated 
 **удалён в 1.13.0** — на 1.13+ `{"type":"wireguard"}` в `outbounds` не парсится,
 нужен `endpoints`). Это встроенный WG sing-box; про AmneziaWG-туннели — skill `awg`.
 
+> Генератор конфигов (`core/vpngen`, скил `vpngen`) пишет WARP/Proton для
+> sing-box именно как `endpoints[{type: "wireguard"}]` с `reserved` из
+> `client_id` WARP и `domain_resolver` для имени сервера. Обфускации
+> AmneziaWG у официального sing-box нет — конфиг обычный WireGuard. Мастер
+> настройки (`core/setup_wizard.py`) кладёт такой endpoint в конфиг с TUN
+> (`sbtunN`, gvisor, `auto_route: false`) и маршрутизирует единым слоем.
+
 ### 5.4 TLS / Transport / Multiplex (вложенные объекты)
 - **tls**: `enabled`, `server_name`(SNI), `insecure`, `alpn`,
   `utls`(`{enabled, fingerprint:"chrome"}` — маскировка ClientHello),

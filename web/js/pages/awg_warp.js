@@ -113,11 +113,11 @@ const AwgWarpPage = (() => {
             <p class="text-muted" style="margin: 0 0 12px 0;">
                 Вставьте содержимое .conf, сгенерированного на стороннем сервисе,
                 или загрузите файл. Конфиг будет сохранён как обычный AWG-туннель.
-                Генераторы конфигов:
-                <a href="https://warp-generation.github.io" target="_blank" rel="noopener">warp-generation.github.io</a>
-                (Cloudflare WARP),
-                <a href="https://proton-generation.github.io" target="_blank" rel="noopener">proton-generation.github.io</a>
-                (Proton VPN).
+                Сгенерировать конфиг можно прямо здесь —
+                <a href="#vpngen">Генератор конфигов</a> (WARP и Proton VPN),
+                или на сторонних сервисах:
+                <a href="https://warp-generation.github.io" target="_blank" rel="noopener">warp-generation.github.io</a>,
+                <a href="https://proton-generation.github.io" target="_blank" rel="noopener">proton-generation.github.io</a>.
             </p>
 
             <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
@@ -170,6 +170,10 @@ const AwgWarpPage = (() => {
                 Cloudflare WARP API — без сторонних сайтов. На вашем
                 устройстве должен быть выход в интернет.
             </p>
+            <div class="note-box">Больше возможностей — в
+                <a href="#vpngen">Генераторе конфигов</a>: WARP и Proton VPN,
+                маскировка QUIC/SIP, регистрация через обход при блокировке,
+                конфиги сразу для AmneziaWG, usque, sing-box и mihomo.</div>
 
             <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; margin-bottom:8px;">
                 <div style="display:flex; flex-direction:column; gap:4px; flex: 1 1 220px;">

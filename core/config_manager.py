@@ -349,6 +349,13 @@ DEFAULT_CONFIG = {
         },
     },
 
+    # --- Генератор конфигов WARP/Proton (core/vpngen) ---
+    "vpngen": {
+        # Сервис, через который берутся сессия и серверы Proton VPN
+        # (ключ WireGuard при этом создаётся на роутере). Только https://.
+        "proton_service": "https://www.api-proton.workers.dev",
+    },
+
     # --- WARP-in-WARP ---
     # Двойной туннель: MASQUE+MASQUE / MASQUE+AWG / AWG+MASQUE.
     "warp_in_warp": {

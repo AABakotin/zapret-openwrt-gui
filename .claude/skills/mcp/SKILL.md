@@ -188,6 +188,7 @@ scope, mutating, файл, аргументы), имя в README и число �
 | `core/lua_capture.py` | **не в пакете MCP**: lua-дамп движка — `--writable` для стратегий с `pcap`, вставка `pcap` в профили argv, разбор и удаление дампов |
 | `core/mcp/tools/jobs.py` | `job_wait` — ожидание конца долгой операции вместо опроса в цикле |
 | `core/mcp/tools/memory.py` | `strategy_memory` — что уже срабатывало на домене в этой сети |
+| `core/mcp/tools/vpngen.py` | генератор конфигов WARP/Proton: `vpngen_options`, `vpngen_proton_servers`, `vpngen_generate` (ключи скрыты; снимок `generated_config` — откат удаляет созданное) |
 | `core/strategy_memory.py` | **не в пакете MCP**: память подбора — файл рядом с `settings.json`, метка сети, наблюдения «домен + argv + чем кончилось» |
 | `core/catalog_export.py` | **не в пакете MCP и без I/O**: argv → секция `catalogs/*.txt` с проверкой round-trip |
 | `core/agent_runner.py` | **не в пакете MCP**: встроенный агент — цикл «модель → инструмент → модель» поверх `registry.call` |
@@ -392,6 +393,9 @@ UI), и `tools_by_scope`.
 | `unified_route_save` | tunnels_write | **да** | `tools/routing.py` | method, id?, name?, destination?, fallbacks?, devices?, enabled?, monitor_enabled?, failover_enabled?, probe_domain?, priority?, apply? | создать/заменить маршрут ЦЕЛИКОМ; непереданные поля берутся из прежней записи |
 | `unified_route_delete` | tunnels_write | **да** | `tools/routing.py` | id | удалить маршрут и снять его с ядра |
 | `unified_route_apply` | tunnels_write | **да** | `tools/routing.py` | id | разложить ОДИН маршрут заново (домены резолвятся заново) |
+| `vpngen_options` | read | нет | `tools/vpngen.py` | — | что умеет генератор конфигов WARP/Proton: провайдеры, движки (и установлены ли), пресеты, транспорты; сети не трогает |
+| `vpngen_proton_servers` | tunnels_write | нет | `tools/vpngen.py` | transport?, country?, refresh? | бесплатные серверы Proton через сервис proton-generation; ничего не меняет, но ходит в сеть |
+| `vpngen_generate` | tunnels_write | **да** | `tools/vpngen.py` | provider, protocol?, targets?, source?, transport?, server_id?, country?, port?, license?, options?, names? | зарегистрировать WARP (WireGuard/MASQUE) или взять сервер Proton и СОХРАНИТЬ конфиги под awg/usque/singbox/mihomo; ключи в ответе скрыты; откат удаляет созданное |
 | `unified_reapply_all` | dangerous | **да** | `tools/routing.py` | — | sweep протухших `ip rule`/таблиц + переприменение ВСЕЙ маршрутизации |
 | `shell_exec` | shell_readonly | **да** | `tools/shell.py` | command?, argv?, timeout_sec?, workdir?, guard? | команда на роутере; safe-список и argv — по `shell_readonly`, произвольная строка (`sh -c`) — по `shell_full` |
 | `shell_exec_async` | shell_readonly | **да** | `tools/shell.py` | command?, argv?, timeout_sec?, workdir?, label?, guard? | то же фоном: ответ — `job_id`, сразу |

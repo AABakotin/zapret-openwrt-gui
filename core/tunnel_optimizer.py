@@ -34,8 +34,9 @@
 
 6. Добавлена optimize_nested_tunnel() — специально для WARP-in-WARP и
    любых других вложенных туннелей: считает MTU внутреннего интерфейса
-   как MTU внешнего минус overhead протокола внешнего туннеля, вместо
-   применения одного и того же профиля к обоим уровням вслепую.
+   как MTU внешнего минус overhead протокола ВНУТРЕННЕГО туннеля (им
+   обёрнут пакет, идущий через внешний), вместо применения одного и того
+   же профиля к обоим уровням вслепую. Inner MASQUE всегда держит 1280.
 
 7. Интегрировано автоматическое сохранение оригинальных настроек
    в defaults settings.json перед изменением с возможностью отката
@@ -60,9 +61,11 @@ MTU_PROFILES = {
     "throughput": 1420,
 }
 
-# Консервативная оценка overhead протокола внешнего туннеля — сколько
-# байт нужно вычесть из MTU внешнего интерфейса, чтобы инкапсулированный
-# пакет внутреннего туннеля не фрагментировался при выходе через внешний.
+# Консервативная оценка overhead протокола — сколько байт он добавляет к
+# IP-пакету при инкапсуляции (вместе с внешним IP/UDP-заголовком). Для
+# вложенных туннелей вычитается overhead ВНУТРЕННЕГО протокола: пакет
+# inner-интерфейса размером inner_mtu, обёрнутый inner-протоколом, должен
+# пролезть в MTU outer-интерфейса.
 TUNNEL_OVERHEAD_BYTES = {
     # UDP(8) + WG data header(16) + Poly1305(16) + внешний IPv4(20) = 60,
     # плюс запас под AmneziaWG junk/padding (S3/S4) — 80.
@@ -315,50 +318,89 @@ def optimize_iface(iface: str, profile: str = "balanced",
     return {"ok": bool(applied), "mtu": mtu, "applied": applied, "errors": errors}
 
 
+# MTU TUN-интерфейса usque. Это не рекомендация, а инвариант: usque
+# нарезает буферы под свой `-m` (апстрим поддерживает только 1280), и TUN
+# с другим MTU отдавал бы ему пакеты, которые тот не примет.
+_WARP_TUN_MTU = 1280
+# Ниже — уже не IPv4 (RFC 791); IPv6 внутри требует 1280.
+_MIN_IPV4_MTU = 576
+
+
 def optimize_nested_tunnel(outer_iface: str, outer_kind: str,
                            inner_iface: str, inner_kind: str,
                            profile: str = "balanced") -> dict:
-    """Оптимизация для вложенных туннелей (WARP-in-WARP и подобных):
-    MTU внутреннего = MTU внешнего минус overhead протокола внешнего.
+    """Оптимизация для вложенных туннелей (WARP-in-WARP и подобных).
+
+    MTU внутреннего = MTU внешнего минус overhead протокола ВНУТРЕННЕГО:
+    пакет inner-интерфейса, обёрнутый inner-протоколом, должен пролезть в
+    outer. Раньше вычитался overhead внешнего протокола (для AWG+AWG это
+    одно и то же, для смешанных пар — нет).
+
+    Особый случай — inner MASQUE (warp): его MTU всегда 1280 (_WARP_TUN_MTU).
+    Если outer для H3-датаграмм такого размера мал (outer тоже usque с
+    MTU 1280), inner обязан идти по H2/TCP — об этом поле
+    `inner_stream_required`; MTU при этом остаётся 1280, а MSS clamp
+    применяется. Раньше в этом случае возвращалась ошибка, и inner не
+    получал вообще никаких настроек.
+
     outer_kind/inner_kind — "awg" | "warp" | "singbox" | "mihomo"."""
     outer_result = optimize_iface(outer_iface, profile, apply_global=True,
                                   transport_kind=outer_kind)
     outer_mtu = outer_result.get("mtu") or MTU_PROFILES.get(profile, 1420)
 
-    overhead = TUNNEL_OVERHEAD_BYTES.get(outer_kind, _DEFAULT_OVERHEAD)
+    overhead = TUNNEL_OVERHEAD_BYTES.get(inner_kind, _DEFAULT_OVERHEAD)
     inner_mtu = outer_mtu - overhead
+    stream_required = False
+    note = ""
 
-    if inner_mtu < 1280:
-        # IP proxying must retain IPv6's 1280-byte minimum. A smaller value
-        # is not a valid nested-tunnel recommendation; report it instead of
-        # silently forcing 576 and breaking IPv6.
+    if inner_kind == "warp":
+        stream_required = inner_mtu < _WARP_TUN_MTU
+        inner_mtu = _WARP_TUN_MTU
+        if stream_required:
+            note = ("outer MTU %d мал для H3-датаграмм inner MASQUE —"
+                    " inner должен идти по H2/TCP" % outer_mtu)
+            log.info("tunnel_optimizer: %s — %s" % (inner_iface, note),
+                     source="optimizer")
+    elif inner_mtu < _MIN_IPV4_MTU:
         log.warning(
             "tunnel_optimizer: расчётный MTU внутреннего интерфейса "
             "%s слишком мал (%d) — outer_mtu=%d, overhead(%s)=%d. "
             "Проверьте профиль или overhead вручную."
-            % (inner_iface, inner_mtu, outer_mtu, outer_kind, overhead),
+            % (inner_iface, inner_mtu, outer_mtu, inner_kind, overhead),
             source="optimizer")
         return {
             "ok": False,
-            "error": "outer MTU %d недостаточен для %s-in-%s (нужно >=1280)"
-                     % (outer_mtu, inner_kind, outer_kind),
+            "error": "outer MTU %d недостаточен для %s-in-%s (нужно >=%d)"
+                     % (outer_mtu, inner_kind, outer_kind,
+                        _MIN_IPV4_MTU + overhead),
             "outer": {"iface": outer_iface, "mtu": outer_mtu,
                       "applied": outer_result.get("applied", [])},
             "inner": {"iface": inner_iface, "mtu": None, "applied": []},
             "overhead_used": overhead,
         }
+    elif inner_mtu < 1280:
+        # Для AWG/прокси внутри MASQUE (outer 1280) это обычное дело:
+        # IPv4 работает, IPv6 внутри inner — нет. Это честнее, чем
+        # оставить inner с MTU больше outer и терять крупные пакеты.
+        note = ("MTU %d < 1280: IPv6 внутри %s работать не будет"
+                % (inner_mtu, inner_iface))
+        log.warning("tunnel_optimizer: %s" % note, source="optimizer")
 
     inner_result = optimize_iface(inner_iface, profile, mtu_override=inner_mtu,
                                   apply_global=False, transport_kind=inner_kind)
 
-    return {
+    out = {
         "ok": bool(outer_result.get("ok") and inner_result.get("ok")),
         "outer": {"iface": outer_iface, "mtu": outer_mtu,
                   "applied": outer_result.get("applied", [])},
         "inner": {"iface": inner_iface, "mtu": inner_mtu,
                   "applied": inner_result.get("applied", [])},
         "overhead_used": overhead,
+        "inner_stream_required": stream_required,
     }
+    if note:
+        out["note"] = note
+    return out
 
 
 # ─────────────────────────── MTU ───────────────────────────

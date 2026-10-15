@@ -24,6 +24,21 @@ from core.log_buffer import log
 # (слэши, «..») нельзя.
 _re_tag = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
+_re_hostname = re.compile(
+    r"^(?=.{1,253}$)[A-Za-z0-9]"
+    r"(?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)+$")
+
+
+def _valid_probe_host(host: str) -> bool:
+    """IPv4-адрес или доменное имя (проба watchdog'а — только AF_INET)."""
+    import ipaddress
+    try:
+        return ipaddress.ip_address(host).version == 4
+    except ValueError:
+        pass
+    return bool(_re_hostname.match(host))
+
 
 def _version_from_tag(tag: str) -> str:
     """usque-bin-v4.2.1 → 4.2.1 (тэг нашей сборки кодирует версию usque)."""
@@ -269,7 +284,6 @@ def register(app):
 
     @app.route("/api/usque/settings", method="POST")
     def usque_settings_set():
-        import re as _re
         from core.config_manager import get_config_manager
         try:
             body = request.json or {}
@@ -277,9 +291,14 @@ def register(app):
             body = {}
         cfg = get_config_manager()
 
+        # Сначала проверяем ВСЁ, потом пишем. Раньше cfg.set шёл по ходу
+        # разбора: на ошибке в probe_port запрос отвечал ok:false, а
+        # enabled/autostart в памяти уже были изменены и уезжали на диск
+        # со следующим чужим cfg.save().
+        updates = []  # [(path_tuple, value)]
         for key in ("enabled", "autostart", "http2_enable"):
             if key in body:
-                cfg.set("usque", key, bool(body[key]))
+                updates.append(((key,), bool(body[key])))
 
         if "transport_profile" in body:
             prof = str(body.get("transport_profile") or "").strip()
@@ -287,37 +306,40 @@ def register(app):
                 return {"ok": False,
                         "error": "transport_profile: допустимы %s"
                                  % ", ".join(_TRANSPORT_PROFILES)}
-            cfg.set("usque", "transport_profile", prof)
+            updates.append((("transport_profile",), prof))
 
         if "default_sni" in body:
             sni = str(body.get("default_sni") or "").strip()
             # Пустая строка = «не маскировать». Иначе — доменное имя:
             # оно уходит в usque как `-s <sni>`, мусор там бесполезен.
-            if sni and not _re.match(
-                    r"^(?=.{1,253}$)[A-Za-z0-9]"
-                    r"(?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
-                    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)+$",
-                    sni):
+            if sni and not _re_hostname.match(sni):
                 return {"ok": False,
                         "error": "SNI должен быть доменным именем"
                                  " (например ozon.ru) или пустым"}
-            cfg.set("usque", "default_sni", sni)
+            updates.append((("default_sni",), sni))
 
         wd = body.get("watchdog")
         if isinstance(wd, dict):
             if "enabled" in wd:
-                cfg.set("usque", "watchdog", "enabled", bool(wd["enabled"]))
+                updates.append((("watchdog", "enabled"), bool(wd["enabled"])))
             if "interval_sec" in wd:
                 try:
                     iv = int(wd["interval_sec"])
                 except (TypeError, ValueError):
                     return {"ok": False,
                             "error": "interval_sec должен быть числом"}
-                cfg.set("usque", "watchdog", "interval_sec",
-                        max(10, min(iv, 3600)))
+                updates.append((("watchdog", "interval_sec"),
+                                max(10, min(iv, 3600))))
             if "probe_host" in wd:
-                cfg.set("usque", "watchdog", "probe_host",
-                        str(wd["probe_host"] or "").strip() or "1.1.1.1")
+                host = str(wd["probe_host"] or "").strip() or "1.1.1.1"
+                # Хост уходит в connect() и обратно в value="…" на странице
+                # настроек. Без проверки туда можно было положить
+                # `x"><img onerror=…>` — и он выполнялся бы в админке.
+                if not _valid_probe_host(host):
+                    return {"ok": False,
+                            "error": "probe_host должен быть IPv4-адресом"
+                                     " или доменным именем"}
+                updates.append((("watchdog", "probe_host"), host))
             if "probe_port" in wd:
                 try:
                     port = int(wd["probe_port"])
@@ -327,8 +349,10 @@ def register(app):
                 if not 1 <= port <= 65535:
                     return {"ok": False,
                             "error": "probe_port вне диапазона 1..65535"}
-                cfg.set("usque", "watchdog", "probe_port", port)
+                updates.append((("watchdog", "probe_port"), port))
 
+        for path, value in updates:
+            cfg.set("usque", *path, value)
         cfg.save()
 
         # Watchdog сам решит, запускаться ему или останавливаться:

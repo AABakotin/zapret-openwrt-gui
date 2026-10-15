@@ -43,6 +43,8 @@ def register_routes(app):
     from api.backup import register as reg_backup
     from api.healthcheck import register as reg_healthcheck
     from api.usque import register as reg_usque
+    from api.vpngen import register as reg_vpngen
+    from api.setup_wizard import register as reg_setup_wizard
     from api.tgproxy import register as reg_tgproxy
     from api.block_detector import register as reg_block_detector
     from api.opera_proxy import register as reg_opera_proxy
@@ -87,6 +89,8 @@ def register_routes(app):
     reg_backup(app)
     reg_healthcheck(app)
     reg_usque(app)
+    reg_vpngen(app)
+    reg_setup_wizard(app)
     reg_tgproxy(app)
     reg_block_detector(app)
     reg_opera_proxy(app)

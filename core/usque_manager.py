@@ -1,16 +1,16 @@
 # core/usque_manager.py
 """
-Менеджер WARP/MASQUE (usque-keenetic).
+Менеджер WARP/MASQUE (usque).
 
-Управление Cloudflare WARP через usque (MASQUE-протокол).
-Usque тянется как бинарник из side-effect-tm/usque-keenetic —
-по аналогии с sing-box из SagerNet/sing-box.
+Управление Cloudflare WARP через usque (MASQUE-протокол). Бинарник
+собираем сами (.github/workflows/build-usque-binaries.yml, релизы
+usque-bin-v*), запасной источник — .ipk side-effect-tm/usque-keenetic.
 
 Лайфцикл:
   1. Регистрация сессии: usque register --accept-tos --config <path>
-    2. Запуск туннеля: usque nativetun --config <session> --interface-name <iface> --no-iproute2
-       (по желанию --http2 для H2/TCP и --keepalive-period 10s)
-  3. TUN-интерфейс создаётся через ndmc (Keenetic CLI) или ip (Linux)
+  2. Запуск туннеля: usque nativetun --config <session> --interface-name <iface> --no-iproute2
+     (по желанию --http2 для H2/TCP, --keepalive-period 10s, -m <mtu>)
+  3. TUN создаёт сам usque; адреса, MTU и link up — мы (_configure_iface)
 """
 
 import os
@@ -65,6 +65,10 @@ _MAX_DEBUG_LINES = 500
 # --no-iproute2 MTU выставляем мы, и расхождение с тем, из чего usque
 # нарезает пакеты внутри туннеля, дало бы фрагментацию.
 _DEFAULT_MTU = 1280
+# Расширения файлов сессий usque. Имя профиля = имя файла без расширения,
+# поэтому `warp.conf` и `warp.json` одновременно — это два профиля с одним
+# именем, из которых по имени достижим только первый.
+_CONFIG_EXTS = (".conf", ".toml", ".json")
 
 
 def _run(args, timeout=10):
@@ -130,6 +134,10 @@ class UsqueManager:
         self._stderr = {}  # iface -> deque[str]
         self._stderr_threads = {}
         self._pid_dir = "/opt/var/run"
+        # iface -> сколько раз его останавливали. По этому счётчику watchdog
+        # отличает «я сам остановил и не смог поднять» от «туннель остановил
+        # пользователь» (API, CLI, MCP, teardown — все идут через stop()).
+        self._stop_seq = {}
 
     # ─────── detect ───────
 
@@ -211,8 +219,13 @@ class UsqueManager:
             out = (r.stdout or "").lower()
             if "aarch64" in out or "arm64" in out:
                 return "aarch64"
-            if "mipsel" in out or "mips" in out:
-                return "mipsel" if "little" in out or "mipsel" in out else "mips"
+            if "mips" in out:
+                # `file` пишет порядок байт как «LSB»/«MSB», а не словами
+                # «little/big endian». Раньше искали «little» — и любой
+                # mipsel-бинарник определялся как mips.
+                little = ("mipsel" in out or "lsb" in out
+                          or "little" in out)
+                return "mipsel" if little else "mips"
             if "x86-64" in out or "x86_64" in out:
                 return "x86_64"
             if "arm" in out:
@@ -269,6 +282,19 @@ class UsqueManager:
         if not binary:
             return {"ok": False, "error": "usque не установлен"}
 
+        # Существующий конфиг usque не перезаписывает молча: `register`
+        # спрашивает «overwrite? (y/n)» в stdin, и `--accept-tos` этот
+        # вопрос НЕ снимает (cmd/register.go апстрима). Из-под init.d это
+        # давало «Failed to read response: EOF», из терминала — зависание
+        # на весь таймаут. Перезаписывать рабочую сессию нам и не нужно.
+        name = os.path.splitext(os.path.basename(config_path))[0]
+        taken = self._profile_file(name, os.path.dirname(config_path))
+        if taken:
+            return {"ok": False,
+                    "error": "Профиль '%s' уже существует (%s). Выберите"
+                             " другое имя или удалите старый профиль."
+                             % (name, os.path.basename(taken))}
+
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         cmd = [binary, "register", "--accept-tos", "--config", config_path]
         if device_name:
@@ -281,12 +307,23 @@ class UsqueManager:
             env, forwarder, err = self._register_env(transport)
             if err:
                 return {"ok": False, "error": err}
+            # stdin=DEVNULL: любой интерактивный вопрос usque должен
+            # завершаться сразу, а не ждать ввода от процесса GUI.
             r = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=60, env=env)
+                cmd, capture_output=True, text=True, timeout=60, env=env,
+                stdin=subprocess.DEVNULL)
             if r.returncode != 0:
                 return {"ok": False,
                         "error": self._register_error(r, transport,
                                                       forwarder)}
+            # usque создаёт конфиг через os.Create — то есть 0666 & umask,
+            # обычно 0644. А в файле приватный ключ устройства и
+            # access_token: читать его может только владелец.
+            try:
+                os.chmod(config_path, 0o600)
+            except OSError as e:
+                log.warning("usque: chmod 600 %s: %s" % (config_path, e),
+                            source="usque")
             return {"ok": True, "config_path": config_path,
                     "transport": transport or "direct"}
         except subprocess.TimeoutExpired:
@@ -423,7 +460,9 @@ class UsqueManager:
         real_dir = os.path.realpath(config_dir)
         if not os.path.realpath(path).startswith(real_dir + os.sep):
             return {"ok": False, "error": "path traversal denied"}
-        if os.path.exists(path):
+        if self._profile_file(name, config_dir):
+            # Проверяем все расширения: `warp.conf` от регистрации и
+            # `warp.json` от импорта — один и тот же профиль «warp».
             return {"ok": False, "error": "Конфиг '%s' уже существует" % name}
 
         try:
@@ -448,7 +487,7 @@ class UsqueManager:
             # .json — родной формат usque (по умолчанию config.json).
             # Раньше он не показывался, поэтому готовый usque-конфиг,
             # принесённый со стороны, GUI просто не видел.
-            if fn.endswith((".conf", ".toml", ".json")):
+            if fn.endswith(_CONFIG_EXTS):
                 path = os.path.join(config_dir, fn)
                 name = fn.rsplit(".", 1)[0]
                 iface = self._detect_iface_for_config(path)
@@ -464,6 +503,15 @@ class UsqueManager:
     def _config_dir(self) -> str:
         from core.platform_dirs import config_dir as platform_config_dir
         return os.path.join(platform_config_dir(), "usque")
+
+    def _profile_file(self, name: str, config_dir: str = None) -> str:
+        """Путь существующего файла профиля `name` с любым расширением ('' нет)."""
+        config_dir = config_dir or self._config_dir()
+        for ext in _CONFIG_EXTS:
+            path = os.path.join(config_dir, name + ext)
+            if os.path.exists(path):
+                return path
+        return ""
 
     def _detect_iface_for_config(self, config_path: str) -> str:
         """Определить имя интерфейса для конфига (best-effort).
@@ -661,7 +709,8 @@ class UsqueManager:
 
     def start(self, iface: str, config_path: str, *, sni: str = "",
               http2: bool = False, transport_profile: str = "performance",
-              low_latency: bool = True, apply_optimizer: bool = True) -> dict:
+              low_latency: bool = True, apply_optimizer: bool = True,
+              mtu: int = _DEFAULT_MTU) -> dict:
         """Запустить WARP туннель.
 
         Возврат ok=true означает «процесс жив, интерфейс создан и настроен»,
@@ -682,6 +731,12 @@ class UsqueManager:
             low_latency: включить безопасный keepalive usque. TCP_NODELAY
                          не является параметром usque CLI, а глобальные
                          buffer sysctl здесь намеренно не меняются.
+            mtu: MTU туннеля. Уходит и в usque (`-m`), и на интерфейс —
+                 только вместе: usque нарезает буферы под свой `-m`, и
+                 TUN с бОльшим MTU отдавал бы ему пакеты, которые тот не
+                 примет. Апстрим поддерживает только 1280 (на другое
+                 значение печатает предупреждение), поэтому менять его
+                 стоит лишь для внешнего туннеля WARP-in-WARP.
         """
         if not _VALID_IFACE_RE.match(iface):
             return {"ok": False, "error": "Неверное имя интерфейса: %s" % iface}
@@ -696,12 +751,33 @@ class UsqueManager:
             return {"ok": False, "error": "Неизвестный transport_profile: %s" % transport_profile}
         if http2:
             transport_profile = "restricted"
+        try:
+            mtu = int(mtu or _DEFAULT_MTU)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "Неверный MTU: %r" % (mtu,)}
+        if not 1280 <= mtu <= 1500:
+            # Ниже 1280 ломается IPv6 внутри CONNECT-IP, выше 1500 — путь.
+            return {"ok": False, "error": "MTU %d вне 1280..1500" % mtu}
 
         # MR-13: Берем lock вокруг всего start() чтобы избежать race condition
         # когда два конкурентных запроса проходят проверку is_running и спавнят процессы
         with self._lock:
             if self._is_running(iface):
                 return {"ok": False, "error": "Туннель %s уже запущен" % iface}
+            # Имя занято чужим устройством (AWG-туннель под тем же
+            # `opkgtun0`, штатный S51usque, оставшийся --persist TUN).
+            # Ждать «появления» интерфейса тогда бессмысленно: он есть с
+            # самого начала, проверка проходила за 0,1 с — раньше, чем
+            # usque успевал упасть с EBUSY, — и _configure_iface вешал наш
+            # адрес и MTU 1280 на чужой интерфейс, а наружу уходило ok.
+            if self._iface_busy(iface):
+                return {"ok": False,
+                        "error": "Интерфейс %s уже существует, но usque на"
+                                 " нём не запущен: имя занято другим туннелем"
+                                 " (AWG, штатный S51usque) или осталось от"
+                                 " прежнего запуска. Освободите имя или"
+                                 " удалите интерфейс: ip link del %s"
+                                 % (iface, iface)}
 
             # Строим команду. H3/QUIC — default usque; --http2 только для
             # restricted-профиля, чтобы случайно не запускать H2 внутри H2.
@@ -717,6 +793,8 @@ class UsqueManager:
                 # usque 4.x exposes --keepalive-period; there is no
                 # --tcp-nodelay or --keepalive CLI flag.
                 cmd.extend(["--keepalive-period", "10s"])
+            if mtu != _DEFAULT_MTU:
+                cmd.extend(["-m", str(mtu)])
 
             pid_path = self._pid_path(iface)
             os.makedirs(os.path.dirname(pid_path), exist_ok=True)
@@ -762,11 +840,7 @@ class UsqueManager:
                 # so do one final poll before reporting success.
                 if proc.poll() is not None or not iface_up:
                     rc = proc.poll()
-                    try:
-                        proc.terminate()
-                        proc.wait(timeout=1)
-                    except Exception:
-                        pass
+                    self._terminate(proc)
                     try:
                         reader.join(timeout=0.25)
                     except Exception:
@@ -783,6 +857,7 @@ class UsqueManager:
                             transport_profile="restricted",
                             low_latency=low_latency,
                             apply_optimizer=apply_optimizer,
+                            mtu=mtu,
                         )
                         fallback["fallback_from"] = "performance"
                         if diagnostic and not fallback.get("diagnostic"):
@@ -799,13 +874,9 @@ class UsqueManager:
                 # (см. _configure_iface). Делать это надо ДО того, как
                 # туннель объявлен запущенным, иначе наружу уйдёт ok=true
                 # на заведомо неработающий интерфейс.
-                configured = self._configure_iface(iface, config_path)
+                configured = self._configure_iface(iface, config_path, mtu=mtu)
                 if not configured.get("ok"):
-                    try:
-                        proc.terminate()
-                        proc.wait(timeout=1)
-                    except Exception:
-                        pass
+                    self._terminate(proc)
                     try:
                         reader.join(timeout=0.25)
                     except Exception:
@@ -847,6 +918,7 @@ class UsqueManager:
                 # соединения проверяет проба watchdog'а, а не старт.
                 return {"ok": True, "pid": proc.pid, "iface": iface,
                         "transport_profile": transport_profile,
+                        "mtu": mtu,
                         "ipv4": configured.get("ipv4", ""),
                         "ipv6": configured.get("ipv6", ""),
                         "connected": None}
@@ -871,6 +943,7 @@ class UsqueManager:
         with self._lock:
             proc = self._processes.pop(iface, None)
             config_path = self._config_by_iface.pop(iface, None)
+            self._stop_seq[iface] = self._stop_seq.get(iface, 0) + 1
 
         if proc and proc.poll() is None:
             try:
@@ -898,7 +971,7 @@ class UsqueManager:
                         pass
                 except Exception:
                     pass
-        elif pid and self._pid_is_usque(pid):
+        elif pid and self._pid_is_usque(pid, iface):
             # Fallback: kill по PID. Только если PID действительно наш —
             # иначе после перезагрузки (pid-файл в /opt переживает ребут)
             # killpg снёс бы группу постороннего процесса от root.
@@ -978,8 +1051,37 @@ class UsqueManager:
             "diagnostic": self._diagnostic(iface),
         }
 
+    def stop_seq(self, iface: str) -> int:
+        """Сколько раз туннель останавливали (для watchdog'а)."""
+        with self._lock:
+            return self._stop_seq.get(iface, 0)
+
     def _iface_exists(self, iface: str) -> bool:
         return os.path.exists("/sys/class/net/%s" % iface)
+
+    def _iface_busy(self, iface: str) -> bool:
+        """Интерфейс с этим именем существует ДО нашего запуска."""
+        return os.path.exists("/sys/class/net/%s" % iface)
+
+    @staticmethod
+    def _terminate(proc) -> None:
+        """Погасить usque, который не дожил до «запущен»: TERM, потом KILL.
+
+        Голого terminate()+wait(1) мало: не уложившийся в секунду процесс
+        оставался жить вместе со своим TUN, и следующий старт (например,
+        повтор auto на H2) упирался в занятое имя.
+        """
+        try:
+            proc.terminate()
+            proc.wait(timeout=1)
+            return
+        except Exception:
+            pass
+        try:
+            proc.kill()
+            proc.wait(timeout=1)
+        except Exception:
+            pass
 
     # ─────── настройка TUN-интерфейса ───────
 
@@ -1016,6 +1118,13 @@ class UsqueManager:
         MTU → адрес /32 → адрес /128 → link up.
         """
         v4, v6 = self._tunnel_addresses(config_path)
+        if not v4 and not v6:
+            # Без адреса интерфейс «поднят», но трафик через него не пойдёт
+            # никогда — это не запущенный туннель, а ошибка конфига.
+            return {"ok": False,
+                    "error": "в конфиге %s нет ни ipv4, ни ipv6 — адрес"
+                             " туннеля неизвестен; перерегистрируйте"
+                             " профиль" % os.path.basename(config_path)}
 
         if mtu:
             _run(["ip", "link", "set", "dev", iface, "mtu", str(mtu)])
@@ -1061,7 +1170,7 @@ class UsqueManager:
                 # процессом: туннель считался бы поднятым (старт
                 # отклонялся бы как «уже запущен»), а stop() убивал бы
                 # целую группу постороннего процесса.
-                return self._pid_is_usque(pid)
+                return self._pid_is_usque(pid, iface)
             except ProcessLookupError:
                 pass
             except PermissionError:
@@ -1093,14 +1202,35 @@ class UsqueManager:
                 out.append(path)
         return [p for p in out if os.path.isfile(p)]
 
-    def _pid_is_usque(self, pid: int) -> bool:
-        """Принадлежит ли PID процессу usque. /proc недоступен → доверяем."""
+    def _pid_is_usque(self, pid: int, iface: str = None) -> bool:
+        """Наш ли это `usque nativetun` (для iface — именно на этом интерфейсе).
+
+        Подстроки «usque» в cmdline мало: её содержат `amneziawg-go usque0`
+        (AWG-конфиг `awg0-usque0.conf`) и `zapret-gui usque status`. После
+        перезагрузки pid-файл указывает на случайный процесс, а порядок
+        загрузки роутера повторяет PID'ы, — и stop() слал бы killpg чужой
+        группе. Поэтому сверяем сам бинарник, подкоманду и интерфейс.
+
+        /proc недоступен (не Linux, тест) → доверяем, как и раньше.
+        Пустой cmdline — зомби или поток ядра, это не наш живой процесс.
+        """
         try:
             with open("/proc/%d/cmdline" % pid, "rb") as f:
-                cmd = f.read().replace(b"\0", b" ").decode("utf-8", "replace")
+                raw = f.read()
         except (IOError, OSError, ValueError):
             return True
-        return "usque" in cmd.lower() if cmd.strip() else True
+        argv = [a.decode("utf-8", "replace")
+                for a in raw.split(b"\0") if a]
+        if not argv:
+            return False
+        if os.path.basename(argv[0]) != "usque" or "nativetun" not in argv:
+            return False
+        if not iface:
+            return True
+        for i, arg in enumerate(argv[:-1]):
+            if arg in ("--interface-name", "-n") and argv[i + 1] == iface:
+                return True
+        return ("--interface-name=%s" % iface) in argv
 
     def _check_iface_up(self, iface: str) -> bool:
         """Поднят ли link на интерфейсе (диагностика в status()).

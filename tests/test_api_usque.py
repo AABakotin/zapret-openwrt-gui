@@ -120,6 +120,34 @@ class TestUsqueSettings(_IsolatedConfig):
             self.client.post_json("/api/usque/settings",
                                   {"watchdog": {"enabled": False}})
 
+    def test_probe_host_rejects_markup(self):
+        """probe_host возвращается в value="…" страницы настроек."""
+        with mock.patch("core.usque_watchdog.get_usque_watchdog"):
+            bad = self.client.post_json(
+                "/api/usque/settings",
+                {"watchdog": {"probe_host": 'x"><img src=x onerror=alert(1)>'}})
+        self.assertFalse(bad["ok"])
+        self.assertIn("probe_host", bad["error"])
+        for host in ("1.1.1.1", "one.one.one.one"):
+            with mock.patch("core.usque_watchdog.get_usque_watchdog"):
+                ok = self.client.post_json(
+                    "/api/usque/settings", {"watchdog": {"probe_host": host}})
+            self.assertTrue(ok["ok"], ok)
+            self.assertEqual(ok["settings"]["watchdog"]["probe_host"], host)
+
+    def test_invalid_field_does_not_apply_others(self):
+        """Ошибка в одном поле не должна частично применять остальные."""
+        before = self._get()["autostart"]
+        with mock.patch("core.usque_watchdog.get_usque_watchdog"):
+            bad = self.client.post_json(
+                "/api/usque/settings",
+                {"autostart": not before,
+                 "watchdog": {"probe_port": "не число"}})
+        self.assertFalse(bad["ok"])
+        self.assertIs(self._get()["autostart"], before)
+        self.assertIs(bool(cm_mod._config_manager.get(
+            "usque", "autostart", default=False)), before)
+
     def test_settings_change_reconfigures_watchdog(self):
         # Без reconfigure() новый режим применился бы только после
         # перезапуска GUI.

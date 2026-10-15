@@ -76,6 +76,8 @@ const MihomoPage = (() => {
 
             <div id="mh-editor"></div>
 
+            <details class="advanced-block" id="mh-advanced" style="margin-bottom:16px;">
+                <summary>Ручная настройка маршрутизации — для опытных <span class="text-muted">(домены и списки, устройства, весь трафик)</span></summary>
             <div class="card" id="mh-routing-domain" style="margin-bottom:16px;">
                 <div class="card-title">
                     Маршрутизация — домены / списки${typeof Help !== 'undefined' ? Help.button('mihomo-routing') : ''}
@@ -94,6 +96,8 @@ const MihomoPage = (() => {
                 </div>
             </div>
 
+            </details>
+
             <div class="card" id="mh-watchdog" style="margin-bottom:16px;">
                 <div class="card-title">
                     Проверка соединения (watchdog)${typeof Help !== 'undefined' ? Help.button('mihomo-watchdog') : ''}
@@ -105,6 +109,7 @@ const MihomoPage = (() => {
 
             <div id="mh-instances"></div>
         `;
+        if (typeof Wizard !== 'undefined') Wizard.mountBanner(container, 'mihomo');
         refresh();
         startPolling();
     }

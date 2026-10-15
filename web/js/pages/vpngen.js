@@ -96,6 +96,10 @@ const VpnGenPage = (() => {
                     state.targets = [];
                     state.needGenerate = true;
                     state.settings.sni = null;
+                    // Источник ключей и DNS зависят от сервиса: после Proton
+                    // WARP не должен молча брать ключи у сервиса-генератора.
+                    state.settings.source = 'native';
+                    state.settings.dns = '';
                 }
                 w.rerender();
             });
@@ -149,6 +153,8 @@ const VpnGenPage = (() => {
     async function loadServers(state, w, refresh) {
         const box = document.getElementById('vg-servers');
         if (box) box.innerHTML = '<div class="text-muted">Загружаю список серверов…</div>';
+        if (state.serversLoading) return;
+        state.serversLoading = true;
         try {
             const r = await API.post('/api/vpngen/proton/servers',
                 { transport: state.settings.transport, refresh: !!refresh },
@@ -158,7 +164,9 @@ const VpnGenPage = (() => {
         } catch (e) {
             state.servers = { error: String(e.message || e) };
         }
-        w.rerender();
+        state.serversLoading = false;
+        // Перерисовываем, только если пользователь всё ещё на шаге сервера.
+        if (wizard && wizard.index === 2) w.rerender();
     }
 
     function renderServer(body, state, w) {
@@ -276,6 +284,11 @@ const VpnGenPage = (() => {
                 <div class="form-group">
                     <label class="form-label">DNS</label>
                     <select class="form-input" data-s="dns">${options(dnsList, s.dns)}</select>
+                </div>
+                <div class="form-group" data-show="dns=custom">
+                    <label class="form-label">Свои DNS</label>
+                    <input class="form-input" data-s="dns_custom" value="${esc(s.dns_custom || '')}"
+                           placeholder="9.9.9.9, 149.112.112.112">
                 </div>
                 <div class="form-group">
                     <label class="form-label" style="display:flex;gap:8px;align-items:center;">
@@ -405,7 +418,7 @@ const VpnGenPage = (() => {
         const svc = service(state);
         const s = state.settings;
         const o = {
-            dns: s.dns, ipv6: !!s.ipv6, allowed: s.allowed,
+            dns: s.dns, dns_custom: s.dns_custom || '', ipv6: !!s.ipv6, allowed: s.allowed,
             allowed_custom: s.allowed_custom, keepalive: s.keepalive,
         };
         if (s.mtu) o.mtu = s.mtu;
@@ -547,6 +560,7 @@ const VpnGenPage = (() => {
             document.body.appendChild(a);
             a.click();
             a.remove();
+            setTimeout(() => URL.revokeObjectURL(a.href), 1000);
         };
         return card;
     }
@@ -575,7 +589,12 @@ const VpnGenPage = (() => {
         if (params.get('service') && SERVICES.some(s => s.id === params.get('service'))) {
             state.service = params.get('service');
         }
-        if (params.get('target')) state.targets = [params.get('target')];
+        // Программа из ссылки — только совместимая с сервисом (MASQUE не
+        // ставится в AmneziaWG и т.п.), иначе выберется по умолчанию.
+        if (params.get('target')
+            && compatible(state).some(t => t.id === params.get('target'))) {
+            state.targets = [params.get('target')];
+        }
 
         wizard = Wizard.create(root, {
             state,

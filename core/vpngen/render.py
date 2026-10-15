@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from core.vpngen import keys
 
@@ -255,7 +256,9 @@ def mihomo_yaml(profile: dict, opts: dict) -> str:
 
     proxies = mihomo_proxies(profile, opts)
     names = [p["name"] for p in proxies]
-    group = {"name": opts.get("label") or "VPN", "proxies": names}
+    # Запятая в имени группы ломает правило «MATCH,<группа>».
+    label = re.sub(r"\s+", " ", str(opts.get("label") or "").replace(",", " "))
+    group = {"name": label.strip() or "VPN", "proxies": names}
     if len(names) > 1:
         # MASQUE: H3, а если UDP режут — сам переключится на H2.
         group.update(type="fallback",

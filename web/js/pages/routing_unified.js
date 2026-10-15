@@ -70,10 +70,14 @@ const RoutingUnifiedPage = (() => {
             ? `Отфильтрованный вид раздела
                <a href="#routing" style="text-decoration:underline;">Маршрутизация</a>
                (Через: AWG). Это тот же единый движок — правила здесь и там одни.`
-            : `Что пускать и через что: сайты, списки, IP-подсети или целые
-               устройства → через туннель, обход DPI (nfqws2) или напрямую.
-               Можно задать резервный путь на случай сбоя.`;
+            : `Что пускать и через что: сайты, сервисы, списки или целые
+               устройства → через туннель, обход DPI или напрямую.`;
 
+        // Страница сгруппирована по смыслу: главное действие («Маршрут по
+        // шагам») → предупреждения, требующие действия → свёрнутые
+        // «Настройки» со сводкой → список маршрутов. Редкие операции
+        // (переприменить, экспорт/импорт, низкоуровневое) — в меню «Ещё»,
+        // а инструменты для опытных — только в режиме эксперта.
         container.innerHTML = `
             <div class="page-header page-header-bar ru-header">
                 <div>
@@ -84,31 +88,44 @@ const RoutingUnifiedPage = (() => {
                     <button class="btn btn-primary btn-sm" data-action="routeWizard"
                             title="Пошаговый мастер: что пускать → через что → готово">Маршрут по шагам</button>
                     <button class="btn btn-ghost btn-sm" data-action="newRoute"
-                            title="Полная форма маршрута — все возможности">+ Маршрут вручную</button>
-                    <label class="text-muted" style="font-size:12px; display:flex; gap:6px; align-items:center;"
-                           title="Фоновая проверка доступности маршрутов с включённым мониторингом">
-                        <input type="checkbox" id="ru-monitor" data-action="toggleMonitor">
-                        Проверять доступность
-                    </label>${typeof Help !== 'undefined' ? Help.button('monitoring') : ''}
+                            title="Полная форма маршрута — все возможности">+ Вручную</button>
                     <button class="btn btn-ghost btn-sm" data-action="runDoctor"
-                            title="Проверить по шагам цепочку каждого маршрута: интерфейс,
-                                   правила ядра, наборы адресов, сам туннель — и показать,
-                                   где она рвётся. Текст отчёта можно скопировать в issue.">
+                            title="Не открывается сайт? Проверить по шагам цепочку каждого
+                                   маршрута: интерфейс, правила ядра, наборы адресов, сам
+                                   туннель — и показать, где она рвётся.">
                         Диагностика
                     </button>
-                    <button class="btn btn-ghost btn-sm" data-action="applyAll">Применить все</button>
-                    <button class="btn btn-ghost btn-sm" data-action="reapplyAll"
-                            title="Переприменить все маршруты заново и снять из ядра
-                                   правила/наборы, за которыми уже не стоит ни одного
-                                   маршрута. Пригодится, когда туннелю поменяли
-                                   AllowedIPs или он переподнялся, а маршрутизация
-                                   осталась в старом состоянии.">
-                        Переприменить и сбросить лишнее
-                    </button>
-                    <button class="btn btn-ghost btn-sm" data-action="exportRoutes"
-                            title="Скачать маршруты файлом (выбранные или все)">Экспорт</button>
-                    <button class="btn btn-ghost btn-sm" data-action="importRoutes"
-                            title="Загрузить маршруты из файла экспорта">Импорт</button>
+                    <details class="ru-more">
+                        <summary class="btn btn-ghost btn-sm" title="Остальные действия">Ещё ▾</summary>
+                        <div class="ru-more-menu">
+                            <button data-action="applyAll"
+                                    title="Применить все маршруты заново">Применить все</button>
+                            <button data-action="reapplyAll"
+                                    title="Переприменить все маршруты заново и снять из ядра
+                                           правила/наборы, за которыми уже не стоит ни одного
+                                           маршрута. Пригодится, когда туннелю поменяли
+                                           AllowedIPs или он переподнялся, а маршрутизация
+                                           осталась в старом состоянии.">Переприменить и сбросить лишнее</button>
+                            <hr>
+                            <button data-action="exportRoutes"
+                                    title="Скачать маршруты файлом (выбранные или все)">Экспорт в файл</button>
+                            <button data-action="importRoutes"
+                                    title="Загрузить маршруты из файла экспорта">Импорт из файла</button>
+                            <div class="expert-only">
+                                <hr>
+                                <button data-action="reapplyLowLevel"
+                                        title="Снять и заново применить все низкоуровневые правила (ip rule/ipset), включая производные единого слоя">
+                                    Переприменить низкоуровневые правила</button>
+                                <button data-action="previewSweep"
+                                        title="Показать, что снял бы «сброс лишнего», ничего не меняя">
+                                    Что лишнего в ядре?</button>
+                                <hr>
+                                <a href="#strategies">Стратегии nfqws2</a>
+                                <a href="#scan">Подбор стратегий</a>
+                                <a href="#lists">Списки маршрутизации</a>
+                            </div>
+                        </div>
+                    </details>
                     <input type="file" id="ru-import-file" accept=".json,application/json"
                            style="display:none;" data-action="importFileChosen">
                 </div>
@@ -116,17 +133,17 @@ const RoutingUnifiedPage = (() => {
             <div id="ru-banners"></div>
             <div id="ru-doctor"></div>
             <div id="ru-import"></div>
-            <div id="ru-overlaps"></div>
             <div id="ru-wizard"></div>
             <div id="ru-editor"></div>
-            <div class="card" style="margin-bottom:12px; padding:10px 14px;">
-                <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap;">
-                    <label class="text-muted" style="font-size:12px; display:flex; gap:6px; align-items:center;">
+            <div id="ru-settings"></div>
+            <div id="ru-overlaps"></div>
+            <div class="card ru-toolbar" id="ru-toolbar" style="display:none;">
+                <div class="ru-toolbar-row">
+                    <label class="text-muted ru-toolbar-via">
                         Через:
-                        <select id="ru-via" class="form-control" style="max-width:240px;"
-                                data-action="setVia"></select>
+                        <select id="ru-via" class="form-control" data-action="setVia"></select>
                     </label>
-                    <div class="list-ui-search" style="flex:0 0 220px; min-width:160px;">
+                    <div class="list-ui-search ru-toolbar-search">
                         <svg class="list-ui-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
                             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
                         </svg>
@@ -140,20 +157,6 @@ const RoutingUnifiedPage = (() => {
             </div>
             <div id="ru-body">
                 <div class="page-loading"><div class="spinner"></div><span>Загрузка...</span></div>
-            </div>
-            <div class="text-muted expert-only" style="margin-top:14px; font-size:12px; display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
-                <span>Классические инструменты (расширенный режим):
-                    <a href="#strategies" style="text-decoration:underline;">Стратегии</a> ·
-                    <a href="#scan" style="text-decoration:underline;">Подбор стратегий</a> ·
-                    <a href="#lists" style="text-decoration:underline;">Списки</a></span>
-                <button class="btn btn-ghost btn-sm" data-action="reapplyLowLevel"
-                        title="Снять и заново применить все низкоуровневые правила (ip rule/ipset), включая производные единого слоя">
-                    Переприменить низкоуровневые правила
-                </button>
-                <button class="btn btn-ghost btn-sm" data-action="previewSweep"
-                        title="Показать, что снял бы «сброс лишнего», ничего не меняя">
-                    Что лишнего в ядре?
-                </button>
             </div>
         `;
         _bindEvents(container);
@@ -262,9 +265,11 @@ const RoutingUnifiedPage = (() => {
             const s = await API.get('/api/unified/status');
             statusMap = {};
             (s.routes || []).forEach(x => statusMap[x.id] = x);
+            const wasRunning = monitorRunning;
             monitorRunning = !!s.monitor_running;
-            const cb = document.getElementById('ru-monitor');
-            if (cb) cb.checked = monitorRunning;
+            // Перерисовываем «Настройки» только при смене состояния: иначе
+            // опрос раз в 7 с закрывал бы открытые в них списки.
+            if (wasRunning !== monitorRunning) renderSettings();
             renderBody();
         } catch (_) {}
     }
@@ -386,14 +391,79 @@ const RoutingUnifiedPage = (() => {
 
     // ─────── баннеры (миграция + окружение) ───────
 
+    // Сверху — только то, что требует действия (перенос старых правил,
+    // неготовая доменная маршрутизация при доменных маршрутах). Всё
+    // остальное — в свёрнутых «Настройках» со сводкой в заголовке.
     function renderBanners() {
         const box = document.getElementById('ru-banners');
         if (!box) return;
-        const ks = killSwitchHtml();
-        box.innerHTML = legacyBannerHtml() + pcModeHtml() + infraHtml()
-            + (ks ? `<div style="font-size:12px; margin-bottom:12px;
-                                 display:flex; gap:10px; align-items:center;
-                                 flex-wrap:wrap;">${ks}</div>` : '');
+        const infra = infraParts();
+        box.innerHTML = legacyBannerHtml() + infra.alert;
+        renderSettings(infra);
+    }
+
+    function _settingsOpen() {
+        try { return localStorage.getItem('ru-settings-open') === '1'; }
+        catch (_) { return false; }
+    }
+
+    function renderSettings(infra) {
+        const box = document.getElementById('ru-settings');
+        if (!box) return;
+        infra = infra || infraParts();
+        const chip = (cls, label, value, title) =>
+            `<span class="ru-chip ru-chip-${cls}" title="${escAttr(title || '')}">
+                ${esc(label)}: <strong>${esc(value)}</strong></span>`;
+        const ksOn = !!killSwitch;
+        const chips = [
+            chip(infra.chip.cls, 'Сайты по доменам', infra.chip.text,
+                 'Как роутер узнаёт IP сайтов из маршрутов'),
+            chip(monitorRunning ? 'ok' : 'off', 'Проверка', monitorRunning ? 'вкл' : 'выкл',
+                 'Фоновая проверка доступности маршрутов'),
+            killSwitch === null ? '' :
+                chip(ksOn ? 'ok' : 'off', 'Kill-switch', ksOn ? 'вкл' : 'выкл',
+                     'Что делать с трафиком, пока туннель перезапускается'),
+            netEnv && netEnv.profile === 'pc'
+                ? `<span class="ru-chip ru-chip-off">🖥 Локальный режим</span>` : '',
+        ].join('');
+
+        box.innerHTML = `<details class="card ru-settings" ${_settingsOpen() ? 'open' : ''}>
+            <summary>
+                <span class="ru-settings-title">Настройки</span>
+                <span class="ru-chips">${chips}</span>
+            </summary>
+            <div class="ru-settings-grid">
+                <section class="ru-set">
+                    <h4>Сайты по доменам</h4>
+                    <p class="text-muted">${infra.text}</p>
+                    <div class="ru-set-controls">${infra.controls}</div>
+                </section>
+                <section class="ru-set">
+                    <h4>Проверка доступности
+                        ${typeof Help !== 'undefined' ? Help.button('monitoring') : ''}</h4>
+                    <p class="text-muted">Роутер в фоне открывает сайты маршрутов
+                        с включённой проверкой и показывает, работают ли они.
+                        Нужна для автопереключения на запасной путь.</p>
+                    <label class="ru-set-toggle">
+                        <input type="checkbox" id="ru-monitor" data-action="toggleMonitor"
+                               ${monitorRunning ? 'checked' : ''}>
+                        Проверять доступность
+                    </label>
+                </section>
+                ${killSwitch === null ? '' : `<section class="ru-set">
+                    <h4>Kill-switch</h4>
+                    <p class="text-muted">${ksOn
+                        ? 'Включён: пока туннель лежит, трафик маршрутов не уходит в обход туннеля, а дропается.'
+                        : 'Выключен: пока туннель перезапускается, трафик маршрутов на несколько секунд уходит через провайдера.'}</p>
+                    <div class="ru-set-controls">${killSwitchHtml()}</div>
+                </section>`}
+                ${pcModeHtml() ? `<div class="ru-set-wide">${pcModeHtml()}</div>` : ''}
+            </div>
+        </details>`;
+        const d = box.querySelector('details');
+        if (d) d.addEventListener('toggle', () => {
+            try { localStorage.setItem('ru-settings-open', d.open ? '1' : '0'); } catch (_) {}
+        });
     }
 
     // Локальный режим (задача №5): ПК/VPS без LAN-ролей — правила
@@ -459,10 +529,10 @@ const RoutingUnifiedPage = (() => {
         const on = !!st.running;
         const stats = st.stats || {};
         const statsTxt = on
-            ? ` · запросов: ${stats.queries || 0} (TCP: ${stats.tcp || 0}), совпало: ${stats.matched || 0}, IP добавлено: ${stats.ips_added || 0}, AAAA вырезано: ${stats.aaaa_dropped || 0}`
+            ? `<span class="expert-only"> · запросов: ${stats.queries || 0} (TCP: ${stats.tcp || 0}), совпало: ${stats.matched || 0}, IP добавлено: ${stats.ips_added || 0}, AAAA вырезано: ${stats.aaaa_dropped || 0}</span>`
             : '';
         const aaaa = st.drop_aaaa || 'routed';
-        const aaaaSel = `<select class="form-control" style="max-width:260px; display:inline-block;"
+        const aaaaSel = `<select class="form-control ${on ? '' : 'expert-only'}" style="max-width:260px; display:inline-block;"
                     data-action="setDropAaaa"
                     title="Туннели WARP/AWG часто без IPv6: получив IPv6-адрес домена из маршрута, клиент пойдёт по IPv6 мимо туннеля. Вырезание AAAA оставляет ему только IPv4 — и трафик идёт в туннель.">
                 <option value="routed" ${aaaa === 'routed' ? 'selected' : ''}>IPv6 доменов маршрутов: вырезать</option>
@@ -504,13 +574,7 @@ const RoutingUnifiedPage = (() => {
     function killSwitchHtml() {
         if (killSwitch === null) return '';
         const on = !!killSwitch;
-        return `<span class="text-muted">Kill-switch:
-                <strong>${on ? 'включён' : 'выключен'}</strong>
-                <span style="font-size:11px;">${on
-                    ? '— пока туннель лежит, трафик маршрутов дропается'
-                    : '— пока туннель перезапускается, трафик уходит через провайдера'}</span>
-            </span>
-            <button class="btn ${on ? 'btn-ghost' : 'btn-primary'} btn-sm"
+        return `<button class="btn ${on ? 'btn-ghost' : 'btn-primary'} btn-sm"
                     onclick="RoutingUnifiedPage.toggleKillSwitch(${on ? 'false' : 'true'})"
                     title="Держать в таблице маршрутизации blackhole-маршрут. Пока туннель поднят, он проигрывает настоящему по метрике и ни на что не влияет; как только туннель упал — трафик маршрутов дропается вместо того, чтобы уйти мимо туннеля через провайдера.">
                 ${on ? 'Выключить kill-switch' : 'Включить kill-switch'}
@@ -521,12 +585,13 @@ const RoutingUnifiedPage = (() => {
     // dnsmasq+ipset/nftset. Компактная строка всегда; развёрнутое
     // предупреждение — когда доменные маршруты есть, а окружение не
     // готово (или открыт редактор — пользователь собирается создавать).
-    function infraHtml() {
+    function infraParts() {
         const dn = (dnsmasqInfo && dnsmasqInfo.dnsmasq) || {};
         const backends = (dnsmasqInfo && dnsmasqInfo.backends) || {};
         const preferred = (dnsmasqInfo && dnsmasqInfo.preferred_backend) || '';
         const ndmsActive = !!(ndmsInfo && ndmsInfo.available);
         const dnReady = !!dn.available && !!dn.running && !!preferred;
+        const intOn = !!(dnsIntInfo && dnsIntInfo.status && dnsIntInfo.status.running);
         const domainReady = ndmsActive || dnReady;
         const setupApplied = !!(dnsmasqInfo && dnsmasqInfo.auto_setup_applied);
         const platformName = (environment && environment.platform && environment.platform.name) || '';
@@ -543,7 +608,7 @@ const RoutingUnifiedPage = (() => {
             const tun = ['awg', 'singbox', 'mihomo', 'warp'].includes(_kindOf(r.method));
             return tun && ((d.domains || []).length || (d.list_ids || []).length);
         });
-        const needWarn = !domainReady && (hasDomainRoutes || !!editing);
+        const needWarn = !domainReady && !intOn && (hasDomainRoutes || !!editing);
 
         const needsSetup = !dnReady &&
             (!!dn.available || !!backends.ipset || !!backends.nftset);
@@ -564,29 +629,15 @@ const RoutingUnifiedPage = (() => {
                </button>`
             : '';
 
-        if (ndmsActive) {
-            // NDMS dns-proxy работает только для НАТИВНЫХ интерфейсов
-            // Keenetic; доменные маршруты на наши userspace-туннели
-            // (AWG/WARP/sing-box) обслуживает DNS-перехват — показываем
-            // его тумблер и здесь.
-            return `<div style="font-size:12px; margin-bottom:12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                <span style="color:#39c45e;">●</span>
-                <span class="text-muted">
-                    Маршрутизация по доменам: <strong>Keenetic-native (NDMS
-                    ${esc(ndmsInfo.version || '?')})</strong> — встроенный
-                    <code>dns-proxy route</code> (для нативных интерфейсов).
-                </span>
-                ${dnsIntHtml()} ${platformLine}
-            </div>`;
-        }
         // OpenWrt: dnsmasq работает в ujail и видит только явно
         // прокинутые пути. Если наш файл подключён в dnsmasq.conf, но не
         // прокинут — dnsmasq не переживёт ближайший рестарт (а с ним
         // лягут DHCP и DNS роутера). Предупреждаем заранее.
-        const jailBroken = !!dn.jailed && !!dn.include_present
+        const jailBroken = !ndmsActive && !!dn.jailed && !!dn.include_present
             && !dn.jail_mount_ok;
-        const jailWarn = jailBroken
-            ? `<div class="alert alert-warning" style="margin-bottom:12px;">
+        let alert = '';
+        if (jailBroken) {
+            alert = `<div class="alert alert-warning" style="margin-bottom:12px;">
                    <div class="alert-title">dnsmasq не сможет прочитать файл правил</div>
                    <p style="font-size:12px; margin:6px 0 10px;">
                      На OpenWrt dnsmasq запускается в изолированном окружении
@@ -601,45 +652,51 @@ const RoutingUnifiedPage = (() => {
                      <code>/etc/config/dhcp</code>.
                    </p>
                    ${setupButton}
-               </div>`
-            : '';
+               </div>`;
+        } else if (needWarn) {
+            alert = `<div class="alert alert-warning" style="margin-bottom:12px;">
+                <div class="alert-title">Маршрутизация по доменам через туннель требует dnsmasq или DNS-перехвата</div>
+                ${dnsmasqExplanation(platformName)}
+                <p style="font-size:12px; margin:6px 0 10px;">
+                  Статус на этом устройстве: dnsmasq=<strong>${dn.available ? 'установлен' : 'не найден'}</strong>,
+                  запущен=<strong>${dn.running ? 'да' : 'нет'}</strong>,
+                  ipset=<strong>${backends.ipset ? 'есть' : 'нет'}</strong>,
+                  nft=<strong>${backends.nftset ? 'есть' : 'нет'}</strong>.
+                </p>
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                    ${dnsIntHtml()} ${setupButton} ${platformLine}
+                </div>
+            </div>`;
+        }
 
-        if (dnReady) {
-            return `${jailWarn}<div style="font-size:12px; margin-bottom:12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                <span style="color:#39c45e;">●</span>
-                <span class="text-muted">
-                    Маршрутизация по доменам: dnsmasq
-                    <strong>${esc(dn.version || '?')}</strong> (запущен),
-                    бэкенд <strong>${esc(preferred)}</strong>
-                    ${setupApplied ? ' — настроен через GUI' : ''}
-                </span>
-                ${jailBroken ? '' : setupButton} ${revertButton} ${platformLine}
-            </div>`;
+        // Сводка для шапки «Настроек» и подробности для её раздела.
+        let chip, text, controls;
+        if (ndmsActive) {
+            // NDMS dns-proxy работает только для НАТИВНЫХ интерфейсов
+            // Keenetic; доменные маршруты на наши userspace-туннели
+            // (AWG/WARP/sing-box) обслуживает DNS-перехват.
+            chip = { cls: 'ok', text: 'Keenetic' };
+            text = `Keenetic-native (NDMS ${esc(ndmsInfo.version || '?')}) —
+                    встроенный <code>dns-proxy route</code> для нативных
+                    интерфейсов; для туннелей AWG/WARP/sing-box/mihomo —
+                    DNS-перехват.`;
+            controls = dnsIntHtml();
+        } else if (dnReady) {
+            chip = { cls: 'ok', text: 'dnsmasq' };
+            text = `dnsmasq <strong>${esc(dn.version || '?')}</strong> (запущен),
+                    бэкенд <strong>${esc(preferred)}</strong>${setupApplied ? ' — настроен через GUI' : ''}.`;
+            controls = (jailBroken ? '' : setupButton) + ' ' + revertButton;
+        } else {
+            chip = intOn ? { cls: 'ok', text: 'DNS-перехват' }
+                 : { cls: hasDomainRoutes ? 'warn' : 'off', text: 'не настроено' };
+            text = intOn
+                ? 'Работает DNS-перехват: IP доменов попадают в маршрутизацию в момент запроса устройства.'
+                : `Пока не настроено. Нужно только для маршрутов по доменам
+                   через туннель — подсети, устройства, обход DPI и
+                   «напрямую» работают и без этого.`;
+            controls = dnsIntHtml() + ' ' + setupButton;
         }
-        if (!needWarn) {
-            return `<div style="font-size:12px; margin-bottom:12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                <span class="text-muted">○ Маршрутизация по доменам через
-                    туннель пока не настроена (понадобится dnsmasq или
-                    DNS-перехват) — CIDR/устройства/DSCP/nfqws2 работают
-                    и без него.</span>
-                ${dnsIntHtml()} ${setupButton} ${platformLine}
-            </div>`;
-        }
-        const statusLine = `
-            <p style="font-size:12px; margin:6px 0 10px;">
-              Статус на этом устройстве: dnsmasq=<strong>${dn.available ? 'установлен' : 'не найден'}</strong>,
-              запущен=<strong>${dn.running ? 'да' : 'нет'}</strong>,
-              ipset=<strong>${backends.ipset ? 'есть' : 'нет'}</strong>,
-              nft=<strong>${backends.nftset ? 'есть' : 'нет'}</strong>.
-            </p>`;
-        return `<div class="alert alert-warning" style="margin-bottom:12px;">
-            <div class="alert-title">Маршрутизация по доменам через туннель требует dnsmasq или DNS-перехвата</div>
-            ${dnsmasqExplanation(platformName)}
-            ${statusLine}
-            <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                ${dnsIntHtml()} ${setupButton} ${platformLine}
-            </div>
-        </div>`;
+        return { alert, chip, text, controls: controls + ' ' + platformLine };
     }
 
     // Платформо-зависимое пояснение, зачем dnsmasq и почему он может
@@ -675,14 +732,37 @@ const RoutingUnifiedPage = (() => {
 
     // ─────── таблица ───────
 
+    // Меню «Ещё» открывается вправо от кнопки; если кнопка у правого края
+    // (средняя ширина), — влево, чтобы не было горизонтальной прокрутки.
+    function _placeMenu(d) {
+        const m = d && d.open && d.querySelector('.ru-more-menu');
+        if (!m) return;
+        m.style.left = ''; m.style.right = '';
+        if (m.getBoundingClientRect().right > window.innerWidth - 8) {
+            m.style.left = 'auto'; m.style.right = '0';
+        }
+    }
+
+    function _expert() {
+        return typeof Expert !== 'undefined' && Expert.enabled();
+    }
+
     function renderBody() {
         const box = document.getElementById('ru-body');
         if (!box) return;
+        const bar = document.getElementById('ru-toolbar');
+        if (bar) bar.style.display = routes.length ? '' : 'none';
         if (!routes.length) {
-            box.innerHTML = `<div class="card"><div class="text-muted">
-                Маршрутов пока нет. Нажмите «Маршрут по шагам» (проще всего),
-                «+ Маршрут вручную» или подключите список на странице
-                <a href="#lists">«Списки маршрутизации»</a>.</div></div>`;
+            box.innerHTML = `<div class="card ru-empty">
+                <div class="ru-empty-title">Маршрутов пока нет</div>
+                <p class="text-muted">Маршрут говорит роутеру, какой трафик
+                    куда отправлять: например, «YouTube и Telegram — через VPN,
+                    остальное — как обычно».</p>
+                <button class="btn btn-primary" data-action="routeWizard">Создать маршрут по шагам</button>
+                <p class="text-muted" style="font-size:12px; margin-top:10px;">
+                    Ещё можно заполнить форму вручную («+ Вручную») или подключить
+                    список на странице <a href="#lists">«Списки маршрутизации»</a>.</p>
+            </div>`;
             _setCount(0, 0);
             return;
         }
@@ -694,20 +774,26 @@ const RoutingUnifiedPage = (() => {
             </div></div>`;
             return;
         }
+        // Галочки и массовые действия — для опытных; колонка «Проверка» —
+        // только когда хоть один маршрут проверяется (иначе в ней везде
+        // «не проверяется»).
+        const sel = _expert();
+        if (!sel && selected.size) selected.clear();
+        const check = routes.some(r => r.monitor_enabled);
         const allSel = visible.every(r => selected.has(r.id));
         // table-layout: fixed (общий .table) без colgroup делил ширину
-        // поровну на шесть колонок — и кнопки «Применить/Изменить/✕» не
-        // влезали в свою шестую часть, вылезая за край карточки.
-        box.innerHTML = `<div class="card"><table class="table ru-table">
-            <colgroup><col class="ru-col-sel"><col><col class="ru-col-what">
-                <col class="ru-col-via"><col class="ru-col-check"><col class="ru-col-act"></colgroup>
+        // поровну на все колонки — и кнопки не влезали в свою часть,
+        // вылезая за край карточки.
+        box.innerHTML = `<div class="card"><table class="table ru-table ${sel ? 'ru-has-sel' : ''}">
+            <colgroup>${sel ? '<col class="ru-col-sel">' : ''}<col><col class="ru-col-what">
+                <col class="ru-col-via">${check ? '<col class="ru-col-check">' : ''}<col class="ru-col-act"></colgroup>
             <thead><tr>
-                <th><input type="checkbox" data-action="selectAll"
-                    title="Выбрать все видимые" ${allSel ? 'checked' : ''}></th>
+                ${sel ? `<th><input type="checkbox" data-action="selectAll"
+                    title="Выбрать все видимые" ${allSel ? 'checked' : ''}></th>` : ''}
                 <th>Маршрут</th><th>Что</th><th>Через</th>
-                <th>Проверка</th><th></th>
+                ${check ? '<th>Проверка</th>' : ''}<th></th>
             </tr></thead>
-            <tbody>${visible.map(rowHtml).join('')}</tbody>
+            <tbody>${visible.map(r => rowHtml(r, sel, check)).join('')}</tbody>
         </table></div>`;
         renderBulkBar();
     }
@@ -786,10 +872,11 @@ const RoutingUnifiedPage = (() => {
         if (!box) return;
         if (!overlaps.length) { box.innerHTML = ''; return; }
         const items = overlaps.slice(0, 20).map(o => `<li>${esc(overlapText(o))}</li>`).join('');
-        box.innerHTML = `<details class="card" style="margin-bottom:12px; padding:10px 14px; font-size:12px;">
-            <summary>⚠ Пересечения маршрутов: ${overlaps.length} — один и тот же
-                трафик попадает в несколько маршрутов, и какой победит, решает
-                порядок правил в ядре, а не вы.</summary>
+        box.innerHTML = `<details class="note-box warn ru-overlaps">
+            <summary>⚠ Маршруты пересекаются: ${overlaps.length}</summary>
+            <p class="text-muted" style="margin:6px 0 0;">Один и тот же трафик
+                попадает в несколько маршрутов, и какой победит, решает порядок
+                правил в ядре. Лучше оставить каждый сайт в одном маршруте.</p>
             <ul style="margin:8px 0 0 18px;">${items}</ul>
             ${overlaps.length > 20 ? `<div class="text-muted">…и ещё ${overlaps.length - 20}</div>` : ''}
         </details>`;
@@ -951,7 +1038,7 @@ const RoutingUnifiedPage = (() => {
                 </div>`;
     }
 
-    function rowHtml(r) {
+    function rowHtml(r, sel, showCheck) {
         const st = statusMap[r.id] || {};
         const active = st.active_method || r.method;
         const mon = st.monitor || {};
@@ -980,8 +1067,8 @@ const RoutingUnifiedPage = (() => {
             ? `<span class="badge badge-warning ru-badge" title="${escAttr(ov.map(overlapText).join('\n'))}">пересекается (${ov.length})</span>`
             : '';
         return `<tr>
-            <td><input type="checkbox" data-action="selectRow" data-id="${esc(r.id)}"
-                       ${selected.has(r.id) ? 'checked' : ''}></td>
+            ${sel ? `<td class="ru-td-sel"><input type="checkbox" data-action="selectRow" data-id="${esc(r.id)}"
+                       ${selected.has(r.id) ? 'checked' : ''}></td>` : ''}
             <td>${enabledDot} <strong>${esc(r.name)}</strong> ${ovBadge}
                 ${r.failover_enabled ? '<span class="badge badge-info ru-badge" title="При сбое переключится на резервный метод">авто-переключение</span>' : ''}</td>
             <td style="font-size:12px;" data-label="Что">${esc(trafficSummary(r))}
@@ -989,10 +1076,10 @@ const RoutingUnifiedPage = (() => {
             <td style="font-size:12px;" data-label="Через" title="${escAttr(active)}">
                 ${esc(methodLabel(active))}${active !== r.method ? ` <span class="text-muted">(основной: ${esc(methodLabel(r.method))})</span>` : ''}
                 ${(r.fallbacks||[]).length ? `<br><span class="text-muted" style="font-size:11px;">резерв: ${esc((r.fallbacks||[]).map(methodLabel).join(', '))}</span>` : ''}</td>
-            <td style="font-size:12px;" data-label="Проверка">${check}</td>
+            ${showCheck ? `<td style="font-size:12px;" data-label="Проверка">${check}</td>` : ''}
             <td><div class="ru-actions">
                 ${scanBtn}
-                <button class="btn btn-ghost btn-sm" data-action="apply" data-id="${esc(r.id)}"
+                <button class="btn btn-ghost btn-sm expert-only" data-action="apply" data-id="${esc(r.id)}"
                         title="Применить этот маршрут заново">Применить</button>
                 <button class="btn btn-ghost btn-sm" data-action="edit" data-id="${esc(r.id)}">Изменить</button>
                 <button class="btn btn-ghost btn-sm" data-action="del" data-id="${esc(r.id)}" title="Удалить маршрут">✕</button>
@@ -1275,7 +1362,7 @@ const RoutingUnifiedPage = (() => {
                     st.created = { ok: false, error: String(e.message || e) };
                 }
                 if (st.created.ok) {
-                    steps[3].hideNext = true;
+                    steps[3].hideNext = steps[3].hideBack = true;
                     await refresh();
                 }
                 w.rerender();
@@ -1468,9 +1555,17 @@ const RoutingUnifiedPage = (() => {
     function wzCreate(body, st) {
         const r = st.created;
         if (r && r.ok) {
-            const skipped = ((r.applied || {}).skipped_selectors || []);
-            body.innerHTML = `<div class="note-box ok">Маршрут «${esc(r.route.name)}» создан и
-                    применён. Он появился в таблице ниже — там его можно поправить.</div>
+            const ap = r.applied || {};
+            const skipped = ap.skipped_selectors || [];
+            // save_route отвечает ok, даже если применить не вышло (туннель
+            // не поднят, ядро отказало) — маршрут сохранён, но не работает.
+            const head = ap.ok === false
+                ? `<div class="note-box warn">Маршрут «${esc(r.route.name)}» сохранён,
+                    но пока не применён: ${esc(ap.error || (ap.errors || []).join('; ') || 'ошибка применения')}.
+                    Запустите туннель и нажмите «Диагностика».</div>`
+                : `<div class="note-box ok">Маршрут «${esc(r.route.name)}» создан и
+                    применён. Он появился в таблице ниже — там его можно поправить.</div>`;
+            body.innerHTML = `${head}
                 ${skipped.map(x => `<div class="note-box warn">${esc(x)}</div>`).join('')}
                 <button class="btn btn-ghost" data-action="routeWizard">Ещё один маршрут</button>`;
             return;
@@ -1503,6 +1598,7 @@ const RoutingUnifiedPage = (() => {
         try {
             const r = await API.get('/api/unified/routes/' + encodeURIComponent(id));
             if (!r || !r.ok) { Toast.error('не найден'); return; }
+            closeWizard();
             editorDirty = false;
             editing = r.route;
             editing.devices = editing.devices || [];
@@ -2199,6 +2295,21 @@ const RoutingUnifiedPage = (() => {
         // каждом переходе, а этот слушатель — нет).
         if (!_keyBound) {
             _keyBound = true;
+            // Режим эксперта меняет колонки таблицы — перерисовать.
+            document.addEventListener('expert-changed', () => {
+                if (document.getElementById('ru-body')) renderBody();
+            });
+            // Меню «Ещё» закрывается кликом мимо него и после выбора пункта.
+            document.addEventListener('click', (e) => {
+                const sum = e.target.closest('.ru-more > summary');
+                if (sum) requestAnimationFrame(() => _placeMenu(sum.parentElement));
+                document.querySelectorAll('details.ru-more[open]').forEach(d => {
+                    const inMenu = d.contains(e.target);
+                    if (!inMenu || e.target.closest('.ru-more-menu [data-action], .ru-more-menu a')) {
+                        d.open = false;
+                    }
+                });
+            });
             document.addEventListener('keydown', (e) => {
                 if (!editing || !(e.ctrlKey || e.metaKey)
                     || (e.key || '').toLowerCase() !== 's') return;

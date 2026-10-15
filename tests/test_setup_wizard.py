@@ -63,6 +63,31 @@ class TestDevices(unittest.TestCase):
             devs = sw._devices({}, "all")
         self.assertEqual([d["ip"] for d in devs], ["192.168.1.50"])
 
+    def test_router_itself_rejected_as_device(self):
+        with mock.patch.object(sw, "_own_addresses",
+                               return_value={"192.168.1.1"}):
+            for ip in ("192.168.1.1", "127.0.0.1", "0.0.0.0", "224.0.0.1"):
+                with self.subTest(ip=ip):
+                    with self.assertRaises(sw.WizardError):
+                        sw._devices({"devices": [ip]}, "devices")
+
+    def test_wan_neighbours_excluded(self):
+        found = [{"ip": "192.168.0.1", "mac": "m", "iface": "eth0"},
+                 {"ip": "192.168.1.50", "mac": "b", "iface": "br0"}]
+        with mock.patch("core.devices_discovery.list_devices",
+                        return_value=found), \
+             mock.patch.object(sw, "_own_addresses", return_value=set()), \
+             mock.patch.object(sw, "_wan_ifaces", return_value={"eth0"}):
+            self.assertEqual([d["ip"] for d in sw.devices()],
+                             ["192.168.1.50"])
+
+    def test_unknown_list_rejected(self):
+        with mock.patch.object(sw, "_known_list_ids", return_value={"a"}):
+            self.assertEqual(sw._destination({"list_ids": ["a"]})["list_ids"],
+                             ["a"])
+            with self.assertRaises(sw.WizardError):
+                sw._destination({"list_ids": ["gone"]})
+
     def test_all_without_devices_fails(self):
         with mock.patch.object(sw, "devices", return_value=[]):
             with self.assertRaises(sw.WizardError):
@@ -106,6 +131,22 @@ class TestTunConfigs(unittest.TestCase):
         cfg = sw.mihomo_tun_config(proxies * 2, "mhtun0", hijack_dns=True)
         self.assertEqual(cfg["tun"]["dns-hijack"], ["any:53"])
         self.assertEqual(cfg["proxy-groups"][0]["type"], "url-test")
+
+    def test_mihomo_unique_names_and_lan_direct(self):
+        proxies = [{"name": "A", "type": "ss"}, {"name": "A", "type": "ss"}]
+        cfg = sw.mihomo_tun_config(proxies, "mhtun0", hijack_dns=True)
+        self.assertEqual([p["name"] for p in cfg["proxies"]], ["A", "A (2)"])
+        self.assertEqual(cfg["proxy-groups"][0]["proxies"], ["A", "A (2)"])
+        self.assertIn("IP-CIDR,192.168.0.0/16,DIRECT,no-resolve", cfg["rules"])
+        self.assertEqual(cfg["rules"][-1], "MATCH,VPN")
+        self.assertEqual(proxies[1]["name"], "A")      # вход не тронут
+
+    def test_mihomo_clash_yaml_subscription(self):
+        text = ("proxies:\n"
+                "  - {name: one, type: ss, server: a.example, port: 443,"
+                " cipher: aes-128-gcm, password: x}\n")
+        out = sw._mihomo_proxies_from_links(text, "direct")
+        self.assertEqual(out[0]["name"], "one")
 
     def test_pick_tun(self):
         self.assertEqual(sw.pick_tun("sbtun", {"sbtun0", "sbtun1"}), "sbtun2")
@@ -196,6 +237,48 @@ class TestApply(unittest.TestCase):
         res = sw.apply(plan)
         self.assertFalse(res["ok"])
         self.assertIn("MASQUE", res["error"])
+
+
+class TestApplyGuards(unittest.TestCase):
+
+    _apply = TestApply._apply
+
+    def test_route_saved_but_not_applied_is_failure(self):
+        res, _g, _u, _sr = self._apply(_plan(), route={
+            "ok": True, "route": {"id": "r1"},
+            "applied": {"ok": False, "error": "ipset отказал"}})
+        self.assertFalse(res["ok"])
+        self.assertIn("ipset отказал", res["error"])
+        self.assertFalse(res["steps"][-1]["ok"])
+
+    def test_concurrent_apply_rejected(self):
+        self.assertTrue(sw._apply_lock.acquire(blocking=False))
+        try:
+            res = sw.apply(_plan())
+        finally:
+            sw._apply_lock.release()
+        self.assertFalse(res["ok"])
+        self.assertIn("уже выполняется", res["error"])
+
+    def test_usque_existing_running_is_not_started_again(self):
+        plan = _plan(engine="usque", source={"kind": "existing",
+                                             "name": "warp"})
+        with mock.patch.object(sw, "_configs", return_value=["warp"]), \
+             mock.patch.object(sw, "_usque_running_iface",
+                               return_value="usque1"), \
+             mock.patch("core.tunnels_control.up") as up, \
+             mock.patch("core.unified.manager.save_route",
+                        return_value={"ok": True, "route": {"id": "r"}}) as sr:
+            res = sw.apply(plan)
+        self.assertTrue(res["ok"], res)
+        up.assert_not_called()
+        self.assertEqual(sr.call_args.args[0]["method"], "warp:usque1")
+
+    def test_all_devices_without_devices_reports_error(self):
+        with mock.patch.object(sw, "devices", return_value=[]):
+            res = sw.apply(_plan(route={"mode": "all"}))
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["steps"], [])
 
 
 class TestApi(unittest.TestCase):

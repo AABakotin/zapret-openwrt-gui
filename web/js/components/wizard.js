@@ -77,8 +77,11 @@ const Wizard = (() => {
         function paintNav() {
             const vis = visible();
             const last = vis[vis.length - 1] === index;
-            btnBack.style.visibility = vis[0] === index ? 'hidden' : '';
             const step = steps[index];
+            // hideBack — шаг-итог после успешного применения: вернуться и
+            // «поправить» уже нечего, результат на месте.
+            btnBack.style.visibility = (vis[0] === index || (step && step.hideBack))
+                ? 'hidden' : '';
             btnNext.textContent = last ? (opts.finishLabel || 'Готово')
                                        : ((step && step.nextLabel) || 'Далее →');
             btnNext.style.display = step && step.hideNext ? 'none' : '';
@@ -87,6 +90,7 @@ const Wizard = (() => {
         }
 
         function go(i) {
+            const prev = index;
             index = Math.max(0, Math.min(i, steps.length - 1));
             if (steps[index].skip && steps[index].skip(state)) {
                 const vis = visible();
@@ -97,7 +101,9 @@ const Wizard = (() => {
             body.innerHTML = '';
             steps[index].render(body, state, api);
             paintNav();
-            if (container.scrollIntoView && opts.scroll !== false) {
+            // Прокрутка — только при смене шага: rerender() (подгрузились
+            // серверы, прогресс установки) не должен дёргать страницу.
+            if (index !== prev && container.scrollIntoView && opts.scroll !== false) {
                 container.scrollIntoView({ block: 'start', behavior: 'smooth' });
             }
         }
@@ -137,7 +143,7 @@ const Wizard = (() => {
         btnBack.addEventListener('click', back);
         head.addEventListener('click', (e) => {
             const li = e.target.closest('[data-wz-step]');
-            if (!li || busy) return;
+            if (!li || busy || (steps[index] && steps[index].hideBack)) return;
             const i = Number(li.dataset.wzStep);
             // Назад — всегда можно, вперёд — только по «Далее» (с проверкой).
             if (i < index) go(i);

@@ -260,7 +260,7 @@ def masque_service(transport: str) -> dict:
     return {
         "provider": "warp", "protocol": "masque", "source": "service",
         "service": used,
-        "private_key": data["privKey"],
+        "private_key": keys.pem_body(data["privKey"]),
         "endpoint_pub_key": pem,
         "endpoint_v4": presets.MASQUE_ENDPOINT_V4, "endpoint_v6": "",
         # Сервис не отдаёт учётку устройства. Туннелю usque она не нужна

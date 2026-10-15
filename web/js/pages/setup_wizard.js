@@ -17,6 +17,9 @@ const SetupWizardPage = (() => {
     let opts = null;
     let wizard = null;
     let pollTimer = null;
+    // Поколение страницы: ответ опроса, пришедший после ухода со страницы
+    // (или после смены программы), не должен запускать новый опрос.
+    let pollGen = 0;
 
     const ENGINE_INFO = {
         awg: { title: 'AmneziaWG', badge: 'рекомендуем',
@@ -100,6 +103,10 @@ const SetupWizardPage = (() => {
             if (state.engine !== b.dataset.engine) {
                 state.engine = b.dataset.engine;
                 state.source = '';
+                state.install = null;
+                pollGen++;
+                clearTimeout(pollTimer);
+                pollTimer = null;
             }
             w.rerender();
         });
@@ -152,21 +159,36 @@ const SetupWizardPage = (() => {
         if (st.running && !pollTimer) poll(state, w);
     }
 
-    function poll(state, w) {
+    function poll(state, w, failures) {
         clearTimeout(pollTimer);
+        const gen = pollGen;
+        failures = failures || 0;
         pollTimer = setTimeout(async () => {
             pollTimer = null;
             try {
                 const r = await API.get('/api/setup-wizard/install/status?engine='
                                         + encodeURIComponent(state.engine));
+                if (gen !== pollGen) return;
                 state.install = r;
                 if (r.installed) {
                     engine(state).installed = true;
                     Toast.success('Установлено');
+                } else if (!r.running && r.result === true) {
+                    // Установщик отчитался «ок», а программа не находится —
+                    // показываем это, а не молча оставляем кнопку.
+                    state.install = { result: false,
+                        message: r.message || 'установка завершилась, но программа не найдена' };
                 }
                 if (wizard && wizard.index === 1) w.rerender();
                 if (r.running) poll(state, w);
-            } catch (_) { poll(state, w); }
+            } catch (e) {
+                if (gen !== pollGen) return;
+                // Сервер не отвечает — несколько попыток, затем честная ошибка.
+                if (failures < 5) { poll(state, w, failures + 1); return; }
+                state.install = { result: false,
+                    message: 'нет ответа от роутера: ' + String(e.message || e) };
+                if (wizard && wizard.index === 1) w.rerender();
+            }
         }, 2000);
     }
 
@@ -252,6 +274,10 @@ const SetupWizardPage = (() => {
         const data = state.proton;
         if (!data) {
             box.innerHTML = '<div class="text-muted">Загружаю список серверов Proton…</div>';
+            // Один запрос за раз: клики Proton → WARP → Proton во время
+            // загрузки не плодят параллельные запросы.
+            if (state.protonLoading) return;
+            state.protonLoading = true;
             try {
                 const r = await API.post('/api/vpngen/proton/servers',
                     { transport: state.transport }, { timeout: 120000 });
@@ -259,7 +285,10 @@ const SetupWizardPage = (() => {
             } catch (e) {
                 state.proton = { error: String(e.message || e) };
             }
-            if (wizard && wizard.index === 2) w.rerender();
+            state.protonLoading = false;
+            // Пользователь мог уже уйти на «Ссылку» и печатать — не
+            // перерисовываем (поле потеряло бы фокус).
+            if (wizard && wizard.index === 2 && state.source === 'proton') w.rerender();
             return;
         }
         if (data.error) {
@@ -375,11 +404,15 @@ const SetupWizardPage = (() => {
         const r = state.route;
         if (!state.devices) {
             box.innerHTML = '<div class="text-muted">Ищу устройства в сети…</div>';
+            if (state.devicesLoading) return;
+            state.devicesLoading = true;
             try {
                 const d = await API.get('/api/setup-wizard/devices');
                 state.devices = d.devices || [];
             } catch (_) { state.devices = []; }
-            if (wizard && wizard.index === 3) w.rerender();
+            state.devicesLoading = false;
+            if (wizard && wizard.index === 3
+                && ['devices', 'all'].includes(state.route.mode)) w.rerender();
             return;
         }
         if (r.mode === 'all') {
@@ -476,7 +509,7 @@ const SetupWizardPage = (() => {
             <p class="wizard-q">Всё готово к запуску</p>
             <div class="note-box">
                 <div><b>Программа:</b> ${esc((ENGINE_INFO[e.id] || {}).title || e.label)}</div>
-                <div><b>Сервер:</b> ${esc(SOURCES[state.source].title)}${state.country ? ' — ' + esc(state.country) : ''}</div>
+                <div><b>Сервер:</b> ${esc(SOURCES[state.source].title)}${state.source === 'proton' && state.country ? ' — ' + esc(state.country) : ''}</div>
                 <div><b>Через VPN:</b> ${esc(what)}</div>
             </div>
             <label style="display:flex;gap:8px;align-items:center;margin:10px 0;">
@@ -539,6 +572,7 @@ const SetupWizardPage = (() => {
     async function render(container) {
         clearTimeout(pollTimer);
         pollTimer = null;
+        pollGen++;
         container.innerHTML = `
             <div class="page-header">
                 <h1 class="page-title">Мастер настройки</h1>
@@ -585,7 +619,7 @@ const SetupWizardPage = (() => {
                 w.rerender();
                 await launch(s, w);
                 s.launching = false;
-                steps[4].hideNext = !!(s.done && s.done.ok);
+                steps[4].hideNext = steps[4].hideBack = !!(s.done && s.done.ok);
                 w.rerender();
             },
         });
@@ -595,6 +629,7 @@ const SetupWizardPage = (() => {
     function destroy() {
         clearTimeout(pollTimer);
         pollTimer = null;
+        pollGen++;
         wizard = null;
     }
 

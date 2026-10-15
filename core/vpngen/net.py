@@ -17,6 +17,7 @@ Cloudflare (`api.cloudflareclient.com`) и сервисы-генераторы �
 
 from __future__ import annotations
 
+import http.client
 import json
 import socket
 import ssl
@@ -47,7 +48,10 @@ class GenError(RuntimeError):
 
 def _is_network_error(exc: BaseException) -> bool:
     if isinstance(exc, (socket.timeout, TimeoutError, ssl.SSLError,
-                        ConnectionError, socket.gaierror)):
+                        ConnectionError, socket.gaierror,
+                        http.client.HTTPException)):
+        # HTTPException: оборванный ответ (IncompleteRead, BadStatusLine)
+        # от прокси/обхода — тоже сеть, а не отказ API.
         return True
     if isinstance(exc, urllib.error.URLError) and not isinstance(
             exc, urllib.error.HTTPError):
@@ -78,13 +82,15 @@ def _opener(transport: str):
     try:
         opener = build_opener(transport)
     except RuntimeError as e:
-        raise GenError(str(e))
+        # Обход пропал (туннель лёг, пока шли прежние попытки) — для
+        # «Авто» это как сетевая ошибка: пробуем следующий способ.
+        raise GenError(str(e), network=True)
     return opener or urllib.request.build_opener()
 
 
 def request_json(method: str, url: str, *, body=None, headers=None,
                  transport: str = "direct", timeout: int = TIMEOUT,
-                 retries: int = RETRIES):
+                 retries: int = None):
     """Отправить запрос и вернуть разобранный JSON.
 
     HTTP-ошибки превращаются в ``GenError(status=…)`` с телом ответа
@@ -99,6 +105,10 @@ def request_json(method: str, url: str, *, body=None, headers=None,
         data = json.dumps(body).encode("utf-8")
         hdrs.setdefault("Content-Type", "application/json; charset=UTF-8")
     opener = _opener(transport)
+    if retries is None:
+        # Повтор после таймаута безопасен только для чтения: повторный
+        # POST /reg оставил бы в Cloudflare лишнее устройство.
+        retries = RETRIES if method in ("GET", "HEAD") else 1
 
     last = None
     for attempt in range(1, max(1, retries) + 1):

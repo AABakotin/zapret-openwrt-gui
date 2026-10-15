@@ -5498,6 +5498,8 @@ body.expert-mode .expert-note { display: none !important; }
 .ru-table .ru-col-via { width: 20%; }
 .ru-table .ru-col-check { width: 13%; }
 .ru-table .ru-col-act { width: 236px; }
+/* Без режима эксперта в строке нет «Применить» — колонка уже. */
+.ru-table:not(.ru-has-sel) .ru-col-act { width: 180px; }
 /* Шапка «Маршрутизации»: заголовок, под ним — одна ровная строка
    действий, главная «+ Маршрут» первой (раньше она одна уезжала на
    вторую строку, а остальные кнопки рассыпались по ширине). */
@@ -5506,6 +5508,70 @@ body.expert-mode .expert-note { display: none !important; }
 .ru-header .page-actions { justify-content: flex-start; gap: 6px 8px; }
 .ru-header .page-actions .btn { white-space: nowrap; }
 #ru-banners .btn, #ru-banners select { white-space: nowrap; }
+/* Меню «Ещё»: редкие действия не занимают шапку. */
+.ru-more { position: relative; }
+.ru-more > summary { list-style: none; cursor: pointer; }
+.ru-more > summary::-webkit-details-marker { display: none; }
+.ru-more-menu {
+    position: absolute; z-index: 30; top: calc(100% + 4px); left: 0;
+    min-width: 260px; max-width: calc(100vw - 32px);
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); box-shadow: var(--shadow-lg);
+    padding: 4px; display: flex; flex-direction: column;
+}
+.ru-more-menu > div { display: flex; flex-direction: column; }
+.ru-more-menu button, .ru-more-menu a {
+    background: none; border: 0; text-align: left; cursor: pointer;
+    padding: 7px 10px; border-radius: var(--radius-sm); font: inherit;
+    font-size: 13px; color: var(--text-primary); text-decoration: none;
+}
+.ru-more-menu button:hover, .ru-more-menu a:hover { background: var(--bg-card-hover); }
+.ru-more-menu hr { border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
+/* «Настройки» маршрутизации: свёрнуты, в заголовке — сводка. */
+.ru-settings { padding: 10px 14px; margin-bottom: 12px; }
+.ru-settings > summary {
+    cursor: pointer; display: flex; gap: 8px 12px; align-items: center;
+    flex-wrap: wrap; list-style: none;
+}
+.ru-settings > summary::-webkit-details-marker { display: none; }
+.ru-settings > summary::before { content: "▸"; color: var(--text-muted); }
+.ru-settings[open] > summary::before { content: "▾"; }
+.ru-settings-title { font-weight: 600; }
+.ru-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.ru-chip {
+    font-size: 12px; padding: 2px 8px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--text-secondary);
+    white-space: nowrap;
+}
+.ru-chip-ok strong { color: var(--success); }
+.ru-chip-warn { border-color: var(--warning); }
+.ru-chip-warn strong { color: var(--warning); }
+.ru-chip-off strong { color: var(--text-muted); }
+.ru-settings-grid {
+    display: grid; gap: 12px; margin-top: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+.ru-set {
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 10px 12px; font-size: 13px; min-width: 0;
+}
+.ru-set h4 { margin: 0 0 6px; font-size: 14px; display: flex; gap: 6px; align-items: center; }
+.ru-set p { margin: 0 0 8px; font-size: 12px; line-height: 1.45; }
+.ru-set-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 12px; }
+.ru-set-controls select { max-width: 100% !important; }
+.ru-set-wide { grid-column: 1 / -1; }
+.ru-set-wide > div { margin-bottom: 0 !important; }
+.ru-set-toggle { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+.ru-overlaps { margin: 0 0 12px; font-size: 12px; }
+.ru-overlaps > summary { cursor: pointer; font-weight: 600; }
+.ru-toolbar { margin-bottom: 12px; padding: 10px 14px; }
+.ru-toolbar-row { display: flex; gap: 10px 14px; align-items: center; flex-wrap: wrap; }
+.ru-toolbar-via { font-size: 12px; display: flex; gap: 6px; align-items: center; }
+.ru-toolbar-via select { max-width: 240px; }
+.ru-toolbar-search { flex: 0 1 240px; min-width: 160px; }
+.ru-empty { text-align: center; padding: 28px 16px; }
+.ru-empty-title { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+.ru-empty p { max-width: 520px; margin: 0 auto 14px; }
 /* Слова в ячейках не рвём посередине («проверяетс/я»). */
 .ru-table td { word-break: normal; overflow-wrap: break-word; }
 @media (max-width: 1100px) {
@@ -5514,10 +5580,11 @@ body.expert-mode .expert-note { display: none !important; }
        заголовки рвались до «Маршр/ут», «Чт/о». */
     .ru-table colgroup, .ru-table thead { display: none; }
     .ru-table, .ru-table tbody, .ru-table tr, .ru-table td { display: block; width: 100%; }
-    .ru-table tr { position: relative; padding: 10px 0 10px 30px; border-bottom: 1px solid var(--border); }
+    .ru-table tr { position: relative; padding: 10px 0; border-bottom: 1px solid var(--border); }
+    .ru-table.ru-has-sel tr { padding-left: 30px; }
     .ru-table tr:last-child { border-bottom: none; }
     .ru-table td { padding: 2px 0; border: none; }
-    .ru-table td:first-child { position: absolute; left: 0; top: 10px; width: auto; }
+    .ru-table td.ru-td-sel { position: absolute; left: 0; top: 10px; width: auto; }
     .ru-table td[data-label]::before {
         content: attr(data-label) ": "; color: var(--text-muted); font-size: 11px;
     }

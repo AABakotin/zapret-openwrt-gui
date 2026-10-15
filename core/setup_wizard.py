@@ -43,6 +43,7 @@ import json
 import os
 import re
 import threading
+import urllib.error
 
 from core.log_buffer import log
 
@@ -139,13 +140,32 @@ def devices() -> list:
     except Exception:                                # noqa: BLE001
         return []
     own = _own_addresses()
+    wan = _wan_ifaces()
     out = []
     for d in items:
         ip = str(d.get("ip") or "").strip()
         if not ip or ip in own:
             continue
+        # Соседи со стороны провайдера (шлюз, модем) — не устройства LAN:
+        # «все устройства» не должны завернуть в VPN и их.
+        if d.get("iface") and d.get("iface") in wan:
+            continue
         out.append({"ip": ip, "mac": d.get("mac") or "",
                     "hostname": d.get("hostname") or d.get("name") or ""})
+    return out
+
+
+def _wan_ifaces() -> set:
+    """Интерфейсы маршрутов по умолчанию (сторона провайдера)."""
+    out = set()
+    try:
+        import subprocess
+        for fam in ("-4", "-6"):
+            r = subprocess.run(["ip", fam, "route", "show", "default"],
+                               capture_output=True, text=True, timeout=5)
+            out.update(re.findall(r"\bdev\s+(\S+)", r.stdout or ""))
+    except Exception:                                # noqa: BLE001
+        pass
     return out
 
 
@@ -234,19 +254,35 @@ def install_status(engine: str) -> dict:
 # ─────────────────────────── прокси из источника ─────────────────────
 
 def _fetch_subscription(url: str, transport: str) -> str:
+    """Скачать подписку; «авто» — напрямую, при сетевой ошибке через обход."""
     from core.download_transport import urlopen_via
+    from core.vpngen.net import GenError, run_with_transport
+
+    def fetch(t):
+        try:
+            with urlopen_via(url, transport=t, timeout=30) as resp:
+                return resp.read(2 * 1024 * 1024).decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            # Сервер ответил — другой транспорт не поможет.
+            raise GenError("HTTP %s" % e.code)
+        except Exception as e:                       # noqa: BLE001
+            raise GenError(str(e), network=True)
     try:
-        with urlopen_via(url, transport=transport if transport != "auto"
-                         else "", timeout=30) as resp:
-            return resp.read(2 * 1024 * 1024).decode("utf-8", "replace")
-    except Exception as e:                           # noqa: BLE001
+        text, _used, _tried = run_with_transport(transport or "auto", fetch)
+    except GenError as e:
         raise WizardError("подписка не скачалась: %s" % e)
+    return text
 
 
-def _uris(text: str, transport: str) -> list:
+def _source_text(text: str, transport: str) -> str:
+    """Текст ссылок/подписки; URL подписки скачивается."""
     text = (text or "").strip()
     if re.match(r"^https?://\S+$", text):
         text = _fetch_subscription(text, transport)
+    return text
+
+
+def _uris(text: str) -> list:
     from core.subscription_importer import extract_items
     return [it["value"] for it in extract_items(text)
             if it.get("type") == "uri" and it.get("value")]
@@ -255,7 +291,7 @@ def _uris(text: str, transport: str) -> list:
 def _singbox_proxies_from_links(text: str, transport: str) -> list:
     from core.singbox_subscription import uri_to_outbound
     out = []
-    for uri in _uris(text, transport):
+    for uri in _uris(_source_text(text, transport)):
         r = uri_to_outbound(uri)
         if r.get("ok") and r.get("outbound"):
             out.append(dict(r["outbound"]))
@@ -266,9 +302,17 @@ def _singbox_proxies_from_links(text: str, transport: str) -> list:
 
 
 def _mihomo_proxies_from_links(text: str, transport: str) -> list:
-    from core.clash_yaml import uri_to_clash_proxy
+    from core.clash_yaml import parse_yaml, uri_to_clash_proxy
+    text = _source_text(text, transport)
     out = []
-    for uri in _uris(text, transport):
+    # Подписка для mihomo обычно — clash-YAML с `proxies:`, а не ссылки.
+    if re.search(r"^proxies\s*:", text, re.M):
+        from core import mihomo_proxies as mp
+        try:
+            out = [dict(p) for p in mp.list_proxies(parse_yaml(text) or {})]
+        except Exception:                            # noqa: BLE001
+            out = []
+    for uri in ([] if out else _uris(text)):
         r = uri_to_clash_proxy(uri)
         if r.get("ok") and r.get("proxy"):
             out.append(dict(r["proxy"]))
@@ -432,6 +476,17 @@ def mihomo_tun_config(proxies: list, tun: str, *, hijack_dns: bool,
     tun_cfg = mc.make_tun(device=tun, stack=stack, mtu=1400,
                           auto_route=False)
     tun_cfg["dns-hijack"] = ["any:53"] if hijack_dns else []
+    # mihomo отвергает конфиг с повторяющимися именами прокси, а в
+    # подписках они повторяются часто — нумеруем дубли.
+    proxies = [dict(p) for p in proxies]
+    seen = set()
+    for p in proxies:
+        base = str(p.get("name") or "proxy")
+        name, n = base, 2
+        while name in seen:
+            name, n = "%s (%d)" % (base, n), n + 1
+        seen.add(name)
+        p["name"] = name
     names = [p["name"] for p in proxies]
     if len(names) > 1 and group_type == "select":
         group_type = "url-test"
@@ -445,7 +500,11 @@ def mihomo_tun_config(proxies: list, tun: str, *, hijack_dns: bool,
         "tun": tun_cfg,
         "proxies": proxies,
         "proxy-groups": [group],
-        "rules": ["MATCH,VPN"],
+        # Локальная сеть — мимо VPN: в режимах «устройства»/«все» в TUN
+        # уходит весь трафик устройства, включая NAS и принтер.
+        "rules": ["IP-CIDR,%s,DIRECT,no-resolve" % net for net in
+                  ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+                   "169.254.0.0/16")] + ["MATCH,VPN"],
     }
     if hijack_dns:
         cfg["dns"] = {
@@ -501,8 +560,22 @@ def _destination(route: dict) -> dict:
         elif d:
             raise WizardError("«%s» — не похоже на адрес сайта" % d)
     list_ids = [str(x) for x in route.get("list_ids") or [] if x]
+    known = _known_list_ids()
+    unknown = [x for x in list_ids if known is not None and x not in known]
+    if unknown:
+        raise WizardError("списка «%s» нет — обновите страницу" % unknown[0])
     return {"geosite": sorted(set(geosite)), "geoip": sorted(set(geoip)),
             "domains": domains, "list_ids": list_ids, "cidrs": []}
+
+
+def _known_list_ids():
+    """id именованных списков или None, если список не прочитать."""
+    try:
+        from core import named_lists
+        return {str(l.get("id")) for l in named_lists.list_all()
+                if l.get("id")}
+    except Exception:                                # noqa: BLE001
+        return None
 
 
 def _devices(route: dict, mode: str) -> list:
@@ -517,9 +590,15 @@ def _devices(route: dict, mode: str) -> list:
     for item in route.get("devices") or []:
         ip = str(item.get("ip") if isinstance(item, dict) else item).strip()
         try:
-            ipaddress.ip_address(ip)
+            addr = ipaddress.ip_address(ip)
         except ValueError:
             raise WizardError("«%s» — не IP-адрес устройства" % ip)
+        if addr.is_loopback or addr.is_unspecified or addr.is_multicast:
+            raise WizardError("«%s» — не адрес устройства в сети" % ip)
+        # Адрес самого роутера: его ответы ушли бы в туннель, и
+        # веб-интерфейс перестал бы открываться из домашней сети.
+        if ip in _own_addresses():
+            raise WizardError("«%s» — это адрес самого роутера" % ip)
         out.append({"ip": ip,
                     "hostname": (item.get("hostname") or "")
                     if isinstance(item, dict) else ""})
@@ -546,17 +625,35 @@ def validate_plan(plan: dict) -> dict:
         dest = _destination(route)
         if not any(dest.values()):
             raise WizardError("выберите хотя бы один сервис или сайт")
-    elif mode == "devices":
-        _devices(route, mode)
+    devices_list = []
+    if mode in ("devices", "all"):
+        devices_list = _devices(route, mode)
     return {"engine": engine, "source": source, "kind": kind,
-            "route": route, "mode": mode,
+            "route": route, "mode": mode, "devices": devices_list,
             "transport": str(plan.get("transport") or "auto"),
             "autostart": bool(plan.get("autostart", True)),
             "name": str(plan.get("name") or "").strip()}
 
 
+_apply_lock = threading.Lock()
+
+
 def apply(plan: dict) -> dict:
-    """Сохранить конфиг → поднять → автозапуск → маршрут. См. docstring."""
+    """Сохранить конфиг → поднять → автозапуск → маршрут. См. docstring.
+
+    Один запуск за раз: двойное нажатие иначе зарегистрировало бы два
+    устройства WARP и выбрало бы одно и то же имя TUN дважды.
+    """
+    if not _apply_lock.acquire(blocking=False):
+        return {"ok": False, "steps": [],
+                "error": "мастер уже выполняется — дождитесь результата"}
+    try:
+        return _apply(plan)
+    finally:
+        _apply_lock.release()
+
+
+def _apply(plan: dict) -> dict:
     steps = []
     warnings = []
     try:
@@ -578,8 +675,10 @@ def apply(plan: dict) -> dict:
 
     # 2) запуск
     from core import tunnels_control
+    running = _usque_running_iface(name) if engine == "usque" else ""
     try:
-        res = tunnels_control.up(engine, name)
+        res = ({"ok": True, "iface": running} if running
+               else tunnels_control.up(engine, name))
     except Exception as e:                           # noqa: BLE001
         res = {"ok": False, "error": str(e)}
     if not res.get("ok"):
@@ -609,16 +708,23 @@ def apply(plan: dict) -> dict:
         if mode == "sites":
             route_doc["destination"] = _destination(p["route"])
         else:
-            route_doc["devices"] = _devices(p["route"], mode)
+            route_doc["devices"] = p["devices"]
         from core.unified import manager
         r = manager.save_route(route_doc, apply=True, validate=True)
+        applied = r.get("applied") or {}
+        # save_route отвечает ok и тогда, когда маршрут сохранён, но в
+        # ядре не применился (ipset/ip rule) — это тоже провал шага.
+        if r.get("ok") and applied.get("ok") is False:
+            r = {"ok": False, "error": "маршрут сохранён, но не применён: %s"
+                 % (applied.get("error") or "; ".join(
+                     map(str, applied.get("errors") or [])) or "ошибка")}
         if not r.get("ok"):
             step("route", False, r.get("error") or "маршрут не создан")
             return {"ok": False, "error": r.get("error"), "steps": steps,
                     "name": name, "engine": engine, "iface": iface,
                     "method": method}
         route_id = (r.get("route") or {}).get("id", "")
-        skipped = ((r.get("applied") or {}).get("skipped_selectors") or [])
+        skipped = applied.get("skipped_selectors") or []
         warnings += [str(s) for s in skipped]
         step("route", True, "маршрут «%s» → %s" % (route_doc["name"], method))
     log.info("мастер: %s/%s запущен, маршрут %s" % (engine, name,
@@ -733,18 +839,30 @@ def _prepare_config(p: dict, warnings: list) -> tuple:
     return name, tun
 
 
+def _usque_running_iface(name: str) -> str:
+    """Интерфейс уже запущенного профиля usque (или '')."""
+    try:
+        from core.usque_manager import get_usque_manager
+        for c in get_usque_manager().list_configs():
+            if c.get("name") == name and c.get("active"):
+                return str(c.get("iface") or "")
+    except Exception:                                # noqa: BLE001
+        pass
+    return ""
+
+
 def _autostart(engine: str, name: str) -> tuple:
     try:
         if engine == "singbox":
             from core.singbox_autostart import set_autostart, regenerate
             r = set_autostart(name, True)
             if r.get("ok"):
-                regenerate()
+                r = regenerate() or {"ok": True}
         elif engine == "mihomo":
             from core.mihomo_autostart import set_autostart, regenerate
             r = set_autostart(name, True)
             if r.get("ok"):
-                regenerate()
+                r = regenerate() or {"ok": True}
         elif engine == "awg":
             from core.awg_autostart_manager import get_awg_autostart_manager
             r = get_awg_autostart_manager().set_enabled(name, True)

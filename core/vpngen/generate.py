@@ -25,6 +25,7 @@ from __future__ import annotations
 import ipaddress
 import re
 import socket
+import threading
 
 from core.log_buffer import log
 from core.vpngen import presets, render
@@ -195,7 +196,9 @@ def normalize_options(provider: str, protocol: str, raw: dict) -> dict:
 
 # ─────────────────────────────── имена ───────────────────────────────
 
-def _existing_names(target: str) -> set:
+def _existing_names(target: str, strict: bool = False) -> set:
+    """Имена конфигов движка. ``strict`` — ошибка чтения не глотается:
+    перед сохранением «пустой список» значил бы перезапись чужого."""
     try:
         if target == "awg":
             from core.awg_manager import get_awg_manager
@@ -211,6 +214,8 @@ def _existing_names(target: str) -> set:
             from core.mihomo_manager import get_mihomo_manager
             return {c.get("name") for c in get_mihomo_manager().list_configs()}
     except Exception as e:                           # noqa: BLE001
+        if strict:
+            raise GenError("список конфигов %s не получен: %s" % (target, e))
         log.warning("vpngen: список конфигов %s не получен: %s"
                     % (target, e), source="vpngen")
     return set()
@@ -290,8 +295,29 @@ def pick_listen_port(start: int, taken=None) -> int:
 
 # ───────────────────────────── сохранение ────────────────────────────
 
+_save_lock = threading.Lock()
+
+
 def save_output(target: str, name: str, text: str) -> dict:
-    """Сохранить текст конфига движком ``target`` (без перезаписи)."""
+    """Сохранить текст конфига движком ``target`` (без перезаписи).
+
+    Проверка «имя занято» и запись — под одним замком: менеджеры sing-box
+    и mihomo пишут через os.replace и сами чужой файл не берегут.
+    """
+    with _save_lock:
+        try:
+            return _save_output(target, name, text)
+        except GenError as e:
+            return {"ok": False, "error": str(e)}
+        except Exception as e:                       # noqa: BLE001
+            # OSError (флеш только для чтения, нет места) и прочее — ответом,
+            # а не исключением: иначе генерация бросила бы уже сохранённое.
+            log.error("vpngen: %s «%s» не сохранён: %s" % (target, name, e),
+                      source="vpngen")
+            return {"ok": False, "error": "не сохранено: %s" % e}
+
+
+def _save_output(target: str, name: str, text: str) -> dict:
     if target not in TARGETS:
         return {"ok": False, "error": "неизвестный движок %s" % target}
     if not valid_name(target, name):
@@ -300,7 +326,7 @@ def save_output(target: str, name: str, text: str) -> dict:
                          " «-_.», до %d символов)"
                          % (name, TARGETS[target]["label"],
                             _MAX_NAME[target])}
-    if name in _existing_names(target):
+    if name in _existing_names(target, strict=True):
         return {"ok": False, "error": "конфиг «%s» уже есть" % name}
     try:
         if target == "awg":

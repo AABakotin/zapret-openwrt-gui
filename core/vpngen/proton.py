@@ -55,7 +55,10 @@ def _call(path: str, body: dict, transport: str) -> dict:
                         transport=transport, retries=1)
     if not isinstance(data, dict):
         raise GenError("сервис Proton вернул не объект")
-    if data.get("ok") is False:
+    # Как у клиента proton-generation: успех — только явный ok. Ответ без
+    # ok (например, {"error": …}) — отказ, иначе получился бы конфиг для
+    # ключа, который Proton не авторизовал.
+    if data.get("ok") is not True:
         msg = str(data.get("error") or "неизвестная ошибка")
         low = msg.lower()
         if "token" in low or "session" in low:
@@ -71,13 +74,20 @@ def reset() -> None:
         _state.update(session=None, expires=0.0, servers=[])
 
 
+def _load(value) -> int:
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _normalize(srv: dict) -> dict:
     return {
         "id": str(srv.get("id") or ""),
         "name": str(srv.get("name") or "").replace("-FREE#", " #"),
         "country": str(srv.get("exitCountry") or srv.get("country") or ""),
         "city": str(srv.get("city") or ""),
-        "load": int(srv.get("load") or 0),
+        "load": _load(srv.get("load")),
         "entry_ip": str(srv.get("entryIp") or srv.get("entry_ip") or ""),
         "public_key": str(srv.get("publicKey") or srv.get("public_key")
                           or ""),

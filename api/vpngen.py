@@ -61,6 +61,9 @@ def register(app):
                     t, refresh=bool(body.get("refresh"))))
         except GenError as e:
             return {"ok": False, "error": str(e)}
+        except Exception as e:                       # noqa: BLE001
+            log.error("vpngen: серверы Proton: %s" % e, source="vpngen")
+            return {"ok": False, "error": "внутренняя ошибка: %s" % e}
         countries = sorted({s["country"] for s in data["servers"]
                             if s["country"]})
         return {"ok": True, "servers": data["servers"],

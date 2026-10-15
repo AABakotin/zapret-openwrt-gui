@@ -369,6 +369,60 @@ class TestNames(unittest.TestCase):
         self.assertIn("уже есть", res["error"])
 
 
+    def test_save_output_fails_closed(self):
+        # Список не прочитан — не сохраняем (иначе перезапись чужого).
+        with mock.patch("core.mihomo_manager.get_mihomo_manager",
+                        side_effect=OSError("нет доступа")):
+            res = gen.save_output("mihomo", "warp", "proxies: []\n")
+        self.assertFalse(res["ok"])
+        self.assertIn("не получен", res["error"])
+
+    def test_save_output_reports_os_error(self):
+        mgr = mock.Mock()
+        mgr.save_config.side_effect = OSError("Read-only file system")
+        with mock.patch.object(gen, "_existing_names", return_value=set()), \
+             mock.patch("core.awg_manager.get_awg_manager", return_value=mgr):
+            res = gen.save_output("awg", "warp", "[Interface]\n")
+        self.assertFalse(res["ok"])
+        self.assertIn("Read-only", res["error"])
+
+
+class TestRobustness(unittest.TestCase):
+
+    def test_proton_requires_explicit_ok(self):
+        with mock.patch.object(proton, "request_json",
+                               return_value={"error": "bad key"}):
+            with self.assertRaises(net.GenError):
+                proton._call("/api/proton/certificate", {}, "direct")
+
+    def test_proton_load_tolerant(self):
+        self.assertEqual(proton._normalize({"load": "12.5"})["load"], 12)
+        self.assertEqual(proton._normalize({"load": "N/A"})["load"], 0)
+
+    def test_mihomo_label_with_comma(self):
+        opts = gen.normalize_options("warp", "wireguard", {})
+        opts["label"] = "My, VPN"
+        text = render.mihomo_yaml(_wg_profile(), opts)
+        # Имя прокси с запятой допустимо; в правило попадает группа.
+        self.assertIn("- MATCH,My VPN\n", text)
+
+    def test_missing_bypass_is_network_error(self):
+        with mock.patch("core.download_transport.build_opener",
+                        side_effect=RuntimeError("интерфейс не найден")):
+            with self.assertRaises(net.GenError) as cm:
+                net._opener("awg:gone")
+        self.assertTrue(cm.exception.network)
+
+    def test_post_not_retried(self):
+        opener = mock.Mock()
+        opener.open.side_effect = TimeoutError("timed out")
+        with mock.patch.object(net, "_opener", return_value=opener), \
+             mock.patch.object(net.time, "sleep"):
+            with self.assertRaises(net.GenError):
+                net.request_json("POST", "https://x.example/reg", body={})
+        self.assertEqual(opener.open.call_count, 1)
+
+
 class TestMcpTool(unittest.TestCase):
 
     def test_generate_masks_keys_and_records_undo(self):

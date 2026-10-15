@@ -58,6 +58,9 @@ const VpnGenPage = (() => {
                 device_name: '', sni: null, port: 51820, save: true,
                 awg3: {},
             },
+            // Proton: 'service' — сервис proton-generation, 'import' —
+            // свой WireGuard-конфиг из аккаунта Proton.
+            protonMode: 'service', protonConfig: '',
             result: null, needGenerate: true,
         };
     }
@@ -159,8 +162,14 @@ const VpnGenPage = (() => {
             const r = await API.post('/api/vpngen/proton/servers',
                 { transport: state.settings.transport, refresh: !!refresh },
                 { timeout: 120000 });
-            if (!r.ok) throw new Error(r.error || 'ошибка');
-            state.servers = r;
+            if (!r.ok) {
+                state.servers = { error: r.error || 'ошибка', blocked: !!r.blocked };
+                // Сервис закрыт владельцем для программ — повторы и обходы
+                // бесполезны, сразу предлагаем свой конфиг.
+                if (r.blocked) state.protonMode = 'import';
+            } else {
+                state.servers = r;
+            }
         } catch (e) {
             state.servers = { error: String(e.message || e) };
         }
@@ -169,14 +178,101 @@ const VpnGenPage = (() => {
         if (wizard && wizard.index === 2) w.rerender();
     }
 
+    const PROTON_HELP = `
+        <ol class="wizard-sub" style="margin:6px 0 10px 18px; padding:0;">
+            <li>Войдите в аккаунт Proton на <b>account.protonvpn.com</b> (бесплатный
+                тариф подходит) → «Загрузки» → «Конфигурации WireGuard».</li>
+            <li>Выберите платформу «Router» или «Linux», бесплатный сервер и нажмите
+                «Создать» — скачается файл <code>.conf</code>.</li>
+            <li>Перетащите файл на поле ниже, выберите его кнопкой или вставьте текст —
+                проверка запустится сама.</li>
+        </ol>
+        <div class="gen-actions">
+            <a class="btn btn-primary btn-sm" href="https://account.protonvpn.com/downloads"
+               target="_blank" rel="noopener noreferrer">Открыть аккаунт Proton ↗</a>
+            <a class="btn btn-ghost btn-sm" href="https://proton-generation.github.io/"
+               target="_blank" rel="noopener noreferrer">proton-generation ↗</a>
+        </div>
+        <div class="form-hint">Подойдёт и конфиг со страницы proton-generation.github.io,
+            открытой в браузере. Мы сохраним ключ из конфига и соберём из него
+            AmneziaWG с маскировкой, sing-box и mihomo.</div>`;
+
     function renderServer(body, state, w) {
         const data = state.servers;
+        const imp = state.protonMode === 'import';
         body.innerHTML = `
-            <p class="wizard-q">В какой стране нужен сервер?</p>
-            <p class="wizard-sub">Чем меньше нагрузка, тем быстрее. Можно
-               не выбирать — возьмём наименее загруженный.</p>
-            <div id="vg-servers"></div>`;
+            <p class="wizard-q">Откуда взять сервер Proton?</p>
+            <div class="choice-grid">
+                <button class="choice-card ${imp ? '' : 'active'}" data-pmode="service">
+                    <div class="choice-title">Выбрать в списке</div>
+                    <div class="choice-desc">Список бесплатных серверов от сервиса
+                        proton-generation. Ничего скачивать не нужно.</div>
+                </button>
+                <button class="choice-card ${imp ? 'active' : ''}" data-pmode="import">
+                    <div class="choice-title">Мой конфиг Proton</div>
+                    <div class="choice-desc">Файл WireGuard из аккаунта Proton. Работает,
+                        даже если сервис недоступен.</div>
+                </button>
+            </div>
+            <div id="vg-servers" style="margin-top:12px;"></div>`;
+        body.querySelectorAll('[data-pmode]').forEach(b => b.onclick = () => {
+            if (state.protonMode !== b.dataset.pmode) {
+                state.protonMode = b.dataset.pmode;
+                state.needGenerate = true;
+            }
+            w.rerender();
+        });
         const box = body.querySelector('#vg-servers');
+        if (imp) return renderProtonImport(box, state, data);
+        if (!data) {
+            box.innerHTML = '<div class="text-muted">Загружаю список серверов…</div>';
+            loadServers(state, w, false);
+            return;
+        }
+        renderServerList(box, state, w, data);
+    }
+
+    function renderProtonImport(box, state, data) {
+        box.innerHTML = `
+            ${data && data.blocked ? `<div class="note-box warn">Сервис proton-generation
+                закрыт для программ (его владелец пускает только браузер), поэтому
+                список серверов не получить ни напрямую, ни через VPN. Используйте
+                свой конфиг Proton — это надёжнее.</div>` : ''}
+            ${PROTON_HELP}
+            <textarea class="form-input" id="vg-pconf" rows="9" spellcheck="false"
+                style="width:100%; font-family:var(--font-mono); font-size:12px;"
+                placeholder="[Interface]&#10;PrivateKey = …&#10;Address = 10.2.0.2/32&#10;&#10;[Peer]&#10;PublicKey = …&#10;Endpoint = …:51820">${esc(state.protonConfig)}</textarea>
+            <div class="gen-actions">
+                <label class="btn btn-ghost btn-sm" style="cursor:pointer;">Выбрать файл .conf
+                    <input type="file" id="vg-pfile" accept=".conf,.txt,text/plain" style="display:none;">
+                </label>
+                <button class="btn btn-ghost btn-sm" id="vg-pcheck">Проверить конфиг</button>
+            </div>
+            <div id="vg-pcheck-out"></div>`;
+        const ta = box.querySelector('#vg-pconf');
+        const pcheck = box.querySelector('#vg-pcheck');
+        const pout = box.querySelector('#vg-pcheck-out');
+        ta.oninput = () => { state.protonConfig = ta.value; state.needGenerate = true; };
+        // Вставили или перетащили файл — проверяем сразу, без лишней кнопки.
+        Wizard.configInput(ta, t => {
+            if (t.trim()) checkConfig('proton-import', t, pcheck, pout);
+            else pout.innerHTML = '';
+        });
+        box.querySelector('#vg-pfile').onchange = (e) => {
+            const f = e.target.files && e.target.files[0];
+            if (!f) return;
+            f.text().then(t => {
+                ta.value = t;
+                ta.dispatchEvent(new Event('input'));
+            });
+        };
+        pcheck.onclick = () => checkConfig('proton-import', state.protonConfig, pcheck, pout);
+        if ((state.protonConfig || '').trim()) {
+            checkConfig('proton-import', state.protonConfig, pcheck, pout);
+        }
+    }
+
+    function renderServerList(box, state, w, data) {
         if (!data) {
             box.innerHTML = '<div class="text-muted">Загружаю список серверов…</div>';
             loadServers(state, w, false);
@@ -185,6 +281,8 @@ const VpnGenPage = (() => {
         if (data.error) {
             box.innerHTML = `
                 <div class="note-box err">Не удалось получить серверы: ${esc(data.error)}</div>
+                <div class="note-box">Не выходит? Выберите выше «Мой конфиг Proton» —
+                    он работает без этого сервиса.</div>
                 <div class="form-group" style="max-width:420px;">
                     <label class="form-label">Если сервис заблокирован — идти через</label>
                     <select class="form-input" id="vg-srv-transport">${options(opts.transports, state.settings.transport)}</select>
@@ -254,7 +352,11 @@ const VpnGenPage = (() => {
         const wg = svc.protocol === 'wireguard';
         if (!s.dns) s.dns = svc.provider === 'proton' ? 'provider' : 'cloudflare';
         if (s.sni === null) s.sni = opts.default_sni || '';
-        if (svc.provider === 'proton') s.source = 'service';
+        if (svc.provider === 'proton') {
+            s.source = state.protonMode === 'import' ? 'import' : 'service';
+        }
+        // Свой конфиг Proton: сеть не нужна, порт — из конфига.
+        const imp = svc.provider === 'proton' && state.protonMode === 'import';
         const dnsList = (opts.dns || []).filter(d =>
             d.id !== 'provider' || svc.provider === 'proton');
 
@@ -263,12 +365,12 @@ const VpnGenPage = (() => {
             <p class="wizard-sub">Подходящие значения уже выбраны — можно сразу
                жать «Сгенерировать».</p>
             <div class="settings-grid">
-                <div class="form-group">
+                ${imp ? '' : `<div class="form-group">
                     <label class="form-label">Как дойти до ${svc.provider === 'proton' ? 'сервиса Proton' : 'Cloudflare'}</label>
                     <select class="form-input" data-s="transport">${options(opts.transports, s.transport)}</select>
                     <div class="form-hint">«Авто»: сначала напрямую, а если провайдер
                         режет — через уже работающий AWG/sing-box/mihomo.</div>
-                </div>
+                </div>`}
                 ${wg ? `
                 <div class="form-group">
                     <label class="form-label">Маскировка трафика</label>
@@ -314,7 +416,7 @@ const VpnGenPage = (() => {
                         <label class="form-label">WARP+ ключ (необязательно)</label>
                         <input class="form-input" data-s="license" value="${esc(s.license)}"
                                placeholder="xxxxxxxx-xxxxxxxx-xxxxxxxx">
-                    </div>` : `
+                    </div>` : imp ? '' : `
                     <div class="form-group">
                         <label class="form-label">Порт сервера</label>
                         <select class="form-input" data-s="port">
@@ -437,7 +539,8 @@ const VpnGenPage = (() => {
             targets: state.targets, save: !!s.save, options: o,
             license: s.license, device_name: s.device_name,
             server_id: state.serverId, country: state.country,
-            port: s.port,
+            port: s.source === 'import' ? '' : s.port,
+            config: s.source === 'import' ? state.protonConfig : undefined,
         };
     }
 
@@ -481,7 +584,7 @@ const VpnGenPage = (() => {
         body.innerHTML = `
             <div class="note-box ok">Готово${r.transport && r.transport !== 'direct'
                 ? ' (через ' + esc(r.transport) + ')' : ''}.
-                ${srv ? 'Сервер: ' + esc(srv.name) + ', ' + esc(srv.city) + '.' : ''}
+                ${srv && srv.name ? 'Сервер: ' + esc([srv.name, srv.city].filter(Boolean).join(', ')) + '.' : ''}
                 ${acc.warp_plus ? ' Аккаунт WARP+.' : ''}</div>
             ${(r.warnings || []).map(x => `<div class="note-box warn">${esc(x)}</div>`).join('')}
             <div id="vg-results"></div>
@@ -503,6 +606,39 @@ const VpnGenPage = (() => {
     const ENGINE_PAGE = { awg: 'awg-configs', usque: 'usque',
                           singbox: 'singbox-configs', mihomo: 'mihomo' };
 
+    // Проверка синтаксиса без сохранения: /api/vpngen/check.
+    async function checkConfig(target, text, btn, out) {
+        if (btn) btn.disabled = true;
+        // Автопроверка идёт на каждую правку: ответ на устаревший текст,
+        // пришедший позже свежего, не должен его перезаписать.
+        const seq = out._seq = (out._seq || 0) + 1;
+        out.innerHTML = '<div class="text-muted" style="font-size:12px;">Проверяю…</div>';
+        try {
+            const r = await API.post('/api/vpngen/check', { target, text },
+                                     { timeout: 30000 });
+            if (out._seq !== seq) return;
+            out.innerHTML = checkResultHtml(r);
+        } catch (e) {
+            if (out._seq !== seq) return;
+            out.innerHTML = `<div class="note-box err">Проверка не выполнена: ${esc(e.message || e)}</div>`;
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    function checkResultHtml(r) {
+        const by = (r.checked_by || []).join(' + ');
+        const head = r.ok
+            ? `✅ Синтаксис в порядке${r.summary ? ': ' + esc(r.summary) : ''}`
+            : '❌ Ошибки в конфиге:';
+        return `<div class="note-box ${r.ok ? 'ok' : 'err'}">${head}
+            ${r.ok ? '' : `<ul style="margin:4px 0 0 18px; padding:0;">${(r.errors || [])
+                .map(x => `<li>${esc(x)}</li>`).join('')}</ul>`}
+            ${by ? `<div class="form-hint" style="margin-top:4px;">Проверено: ${esc(by)}</div>` : ''}
+            ${(r.warnings || []).map(x => `<div class="form-hint">⚠ ${esc(x)}</div>`).join('')}
+        </div>`;
+    }
+
     function resultCard(item) {
         const card = document.createElement('div');
         card.className = 'card gen-result';
@@ -515,6 +651,8 @@ const VpnGenPage = (() => {
                 <input class="form-input" data-r="name" value="${esc(item.name)}"
                        style="max-width:240px;" ${item.saved ? 'disabled' : ''}>
                 ${item.saved ? '' : '<button class="btn btn-primary btn-sm" data-r="save">Сохранить</button>'}
+                <button class="btn btn-ghost btn-sm" data-r="check"
+                        title="Проверить синтаксис: встроенный разбор, а если программа установлена — она сама">Проверить</button>
                 <button class="btn btn-ghost btn-sm" data-r="copy">Скопировать</button>
                 <button class="btn btn-ghost btn-sm" data-r="download">Скачать</button>
                 <a class="btn btn-ghost btn-sm" data-r="open" href="#${ENGINE_PAGE[item.target]}"
@@ -523,6 +661,7 @@ const VpnGenPage = (() => {
                    href="#setup-wizard?engine=${item.target}&config=${encodeURIComponent(item.name)}"
                    style="${item.saved ? '' : 'display:none;'}">Настроить маршрутизацию →</a>` : ''}
             </div>
+            <div data-r="check-out"></div>
             ${item.listen_port ? `<div class="form-hint">Локальный прокси:
                 127.0.0.1:${item.listen_port} (HTTP и SOCKS5).</div>` : ''}
             <details><summary style="cursor:pointer;">Показать конфиг</summary>
@@ -546,6 +685,9 @@ const VpnGenPage = (() => {
                 saveBtn.disabled = false;
             }
         };
+        const checkBtn = card.querySelector('[data-r="check"]');
+        checkBtn.onclick = () => checkConfig(item.target, item.text, checkBtn,
+                                             card.querySelector('[data-r="check-out"]'));
         card.querySelector('[data-r="copy"]').onclick = async () => {
             try {
                 await Clipboard.copy(item.text);
@@ -604,8 +746,11 @@ const VpnGenPage = (() => {
                   validate: s => s.targets.length ? '' : 'Отметьте хотя бы одну программу' },
                 { id: 'server', title: 'Сервер', render: renderServer,
                   skip: s => service(s).provider !== 'proton',
-                  validate: s => (s.servers && s.servers.servers && s.servers.servers.length)
-                      ? '' : 'Список серверов ещё не получен' },
+                  validate: s => s.protonMode === 'import'
+                      ? (/\[Peer\]/i.test(s.protonConfig || '') && /PrivateKey/i.test(s.protonConfig || '')
+                          ? '' : 'Вставьте WireGuard-конфиг Proton целиком: [Interface] и [Peer]')
+                      : ((s.servers && s.servers.servers && s.servers.servers.length)
+                          ? '' : 'Список серверов ещё не получен — или выберите «Мой конфиг Proton»') },
                 { id: 'settings', title: 'Настройки', render: renderSettings,
                   nextLabel: 'Сгенерировать' },
                 { id: 'result', title: 'Готово', render: renderResult,

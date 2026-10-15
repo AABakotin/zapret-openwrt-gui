@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import re
 import socket
 import ssl
 import time
@@ -40,10 +41,13 @@ class GenError(RuntimeError):
     """
 
     def __init__(self, message: str, *, network: bool = False,
-                 status: int = 0):
+                 status: int = 0, blocked: bool = False):
         super().__init__(message)
         self.network = network
         self.status = status
+        # blocked — сервис закрыт владельцем для программ (Cloudflare
+        # 1010/1020): UI предлагает импорт готового конфига.
+        self.blocked = blocked
 
 
 def _is_network_error(exc: BaseException) -> bool:
@@ -73,6 +77,16 @@ def _network_text(host: str, exc: BaseException) -> str:
         return ("%s не отвечает (таймаут). Попробуйте «Через обход» или"
                 " «Авто»." % host)
     return "%s недоступен: %s" % (host, text)
+
+
+_CF_DENIED = re.compile(r'"error_code"\s*:\s*(10(?:0[5-9]|1[0-2]|20))\b'
+                        r'|error code:?\s*(10(?:0[5-9]|1[0-2]|20))\b', re.I)
+
+
+def _cf_access_denied(text: str) -> str:
+    """Код Cloudflare «доступ закрыт» (1005–1012, 1020) или ''."""
+    m = _CF_DENIED.search(text or "")
+    return (m.group(1) or m.group(2)) if m else ""
 
 
 def _opener(transport: str):
@@ -124,6 +138,17 @@ def request_json(method: str, url: str, *, body=None, headers=None,
                 text = e.read().decode("utf-8", "replace")[:400]
             except Exception:
                 text = ""
+            blocked = _cf_access_denied(text)
+            if blocked:
+                # Cloudflare 1010/1020/1006…: владелец сервиса закрыл его
+                # для программ (пускает только браузер со своей страницы).
+                # Это не блокировка провайдера — обход не поможет, поэтому
+                # ошибка не «сетевая» и «Авто» дальше не перебирает.
+                raise GenError("%s не принимает запросы от программ"
+                               " (Cloudflare %s: доступ закрыт владельцем"
+                               " сервиса, обход и VPN тут не помогут)"
+                               % (host, blocked), status=e.code,
+                               blocked=True)
             if e.code == 429 or "1015" in text:
                 raise GenError("%s: слишком много запросов (HTTP %d) —"
                                " подождите несколько минут" % (host, e.code),

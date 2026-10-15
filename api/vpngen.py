@@ -9,6 +9,8 @@ API генератора конфигов на инфраструктуре WARP
   POST /api/vpngen/generate         — сгенерировать (и при save — сохранить)
   POST /api/vpngen/save             — сохранить показанный ранее конфиг
                                       {target, name, text}
+  POST /api/vpngen/check            — проверить синтаксис {target, text};
+                                      target — движок или proton-import
 
 Ответ ``generate`` содержит тексты конфигов с приватными ключами: их
 показывает страница генератора, и это ровно то, что пользователь
@@ -60,7 +62,9 @@ def register(app):
                 spec, lambda t: proton.servers(
                     t, refresh=bool(body.get("refresh"))))
         except GenError as e:
-            return {"ok": False, "error": str(e)}
+            # blocked — сервис закрыт для программ: UI предложит импорт.
+            return {"ok": False, "error": str(e),
+                    "blocked": bool(getattr(e, "blocked", False))}
         except Exception as e:                       # noqa: BLE001
             log.error("vpngen: серверы Proton: %s" % e, source="vpngen")
             return {"ok": False, "error": "внутренняя ошибка: %s" % e}
@@ -82,12 +86,24 @@ def register(app):
         try:
             res = gen.generate(body)
         except GenError as e:
-            return {"ok": False, "error": str(e)}
+            return {"ok": False, "error": str(e),
+                    "blocked": bool(getattr(e, "blocked", False))}
         except Exception as e:                       # noqa: BLE001
             log.error("vpngen: генерация упала: %s" % e, source="vpngen")
             return {"ok": False, "error": "внутренняя ошибка: %s" % e}
         res.pop("secrets", None)
         return res
+
+    @app.route("/api/vpngen/check", method="POST")
+    def vpngen_check():
+        """Проверить синтаксис конфига (ничего не сохраняет)."""
+        from core.vpngen import generate as gen
+        body = _body()
+        text = str(body.get("text") or "")
+        if len(text) > 256 * 1024:
+            return {"ok": False, "errors": ["конфиг слишком большой"],
+                    "checked_by": []}
+        return gen.check_output(str(body.get("target") or ""), text)
 
     @app.route("/api/vpngen/save", method="POST")
     def vpngen_save():

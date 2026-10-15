@@ -242,14 +242,27 @@ const SetupWizardPage = (() => {
                 <div class="gen-actions">
                     <input type="file" id="sw-file" accept=".conf,.json,.txt" style="display:none;">
                     <button class="btn btn-ghost btn-sm" id="sw-file-btn">Загрузить файл</button>
-                </div>`;
+                    <button class="btn btn-ghost btn-sm" id="sw-check">Проверить синтаксис</button>
+                </div>
+                <div id="sw-check-out"></div>`;
             box.querySelector('#sw-paste').oninput = (ev) => { state.paste = ev.target.value; };
+            const chk = box.querySelector('#sw-check');
+            const cout = box.querySelector('#sw-check-out');
+            chk.onclick = () => checkConfig(state.engine, state.paste, chk, cout);
+            Wizard.configInput(box.querySelector('#sw-paste'), t => {
+                if (t.trim()) checkConfig(state.engine, t, chk, cout);
+                else cout.innerHTML = '';
+            });
             const file = box.querySelector('#sw-file');
             box.querySelector('#sw-file-btn').onclick = () => file.click();
             file.onchange = () => {
                 const f = file.files && file.files[0];
                 if (!f) return;
-                f.text().then(t => { state.paste = t; w.rerender(); });
+                f.text().then(t => {
+                    const ta = box.querySelector('#sw-paste');
+                    ta.value = t;
+                    ta.dispatchEvent(new Event('input'));   // state + автопроверка
+                });
             };
         } else if (src === 'existing') {
             const configs = engine(state).configs || [];
@@ -270,8 +283,85 @@ const SetupWizardPage = (() => {
         }
     }
 
+    // Проверка синтаксиса без сохранения (общий /api/vpngen/check).
+    async function checkConfig(target, text, btn, out) {
+        btn.disabled = true;
+        // Автопроверка идёт на каждую правку: ответ на устаревший текст,
+        // пришедший позже свежего, не должен его перезаписать.
+        const seq = out._seq = (out._seq || 0) + 1;
+        out.innerHTML = '<div class="text-muted" style="font-size:12px;">Проверяю…</div>';
+        try {
+            const r = await API.post('/api/vpngen/check', { target, text: text || '' },
+                                     { timeout: 30000 });
+            if (out._seq !== seq) return;
+            const by = (r.checked_by || []).join(' + ');
+            out.innerHTML = `<div class="note-box ${r.ok ? 'ok' : 'err'}">
+                ${r.ok ? '✅ Синтаксис в порядке' + (r.summary ? ': ' + esc(r.summary) : '')
+                       : '❌ ' + (r.errors || []).map(esc).join('<br>❌ ')}
+                ${by ? `<div class="form-hint">Проверено: ${esc(by)}</div>` : ''}
+                ${(r.warnings || []).map(x => `<div class="form-hint">⚠ ${esc(x)}</div>`).join('')}
+            </div>`;
+        } catch (e) {
+            if (out._seq !== seq) return;
+            out.innerHTML = `<div class="note-box err">Проверка не выполнена: ${esc(e.message || e)}</div>`;
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    // Свой WireGuard-конфиг Proton — когда сервис proton-generation закрыт
+    // для программ (Cloudflare 1010) или просто недоступен.
+    function renderProtonImport(box, state, w, blocked) {
+        box.innerHTML = `
+            ${blocked ? `<div class="note-box warn">Сервис proton-generation закрыт для
+                программ (его владелец пускает только браузер) — ни напрямую, ни через
+                VPN список серверов не получить. Возьмите свой конфиг Proton.</div>` : ''}
+            <p class="wizard-sub" style="margin:0 0 6px;">Аккаунт Proton на
+                <b>account.protonvpn.com</b> (бесплатный тариф подходит) → «Загрузки» →
+                «Конфигурации WireGuard» → платформа «Router», бесплатный сервер →
+                «Создать». Перетащите скачанный <code>.conf</code> на поле или вставьте
+                текст — проверка запустится сама.</p>
+            <div class="gen-actions">
+                <a class="btn btn-primary btn-sm" href="https://account.protonvpn.com/downloads"
+                   target="_blank" rel="noopener noreferrer">Открыть аккаунт Proton ↗</a>
+                <a class="btn btn-ghost btn-sm" href="https://proton-generation.github.io/"
+                   target="_blank" rel="noopener noreferrer">proton-generation ↗</a>
+            </div>
+            <textarea class="form-input" id="sw-pconf" rows="8" spellcheck="false"
+                style="width:100%; font-family:var(--font-mono); font-size:12px;"
+                placeholder="[Interface]&#10;PrivateKey = …&#10;&#10;[Peer]&#10;PublicKey = …&#10;Endpoint = …:51820">${esc(state.protonConfig || '')}</textarea>
+            <div class="gen-actions">
+                <label class="btn btn-ghost btn-sm" style="cursor:pointer;">Выбрать файл .conf
+                    <input type="file" id="sw-pfile" accept=".conf,.txt,text/plain" style="display:none;"></label>
+                <button class="btn btn-ghost btn-sm" id="sw-pcheck">Проверить конфиг</button>
+                ${blocked ? '' : '<button class="btn btn-ghost btn-sm" id="sw-plist">← Список серверов</button>'}
+            </div>
+            <div id="sw-pcheck-out"></div>`;
+        const ta = box.querySelector('#sw-pconf');
+        const pchk = box.querySelector('#sw-pcheck');
+        const pout = box.querySelector('#sw-pcheck-out');
+        pchk.onclick = () => checkConfig('proton-import', state.protonConfig, pchk, pout);
+        Wizard.configInput(ta, t => {
+            if (t.trim()) checkConfig('proton-import', t, pchk, pout);
+            else pout.innerHTML = '';
+        });
+        if ((state.protonConfig || '').trim()) {
+            checkConfig('proton-import', state.protonConfig, pchk, pout);
+        }
+        ta.oninput = () => { state.protonConfig = ta.value; };
+        box.querySelector('#sw-pfile').onchange = (e) => {
+            const f = e.target.files && e.target.files[0];
+            if (f) f.text().then(t => { ta.value = t; ta.dispatchEvent(new Event('input')); });
+        };
+        const back = box.querySelector('#sw-plist');
+        if (back) back.onclick = () => { state.protonImport = false; w.rerender(); };
+    }
+
     async function renderProton(box, state, w) {
         const data = state.proton;
+        if (state.protonImport) {
+            return renderProtonImport(box, state, w, !!(data && data.blocked));
+        }
         if (!data) {
             box.innerHTML = '<div class="text-muted">Загружаю список серверов Proton…</div>';
             // Один запрос за раз: клики Proton → WARP → Proton во время
@@ -281,7 +371,9 @@ const SetupWizardPage = (() => {
             try {
                 const r = await API.post('/api/vpngen/proton/servers',
                     { transport: state.transport }, { timeout: 120000 });
-                state.proton = r.ok ? r : { error: r.error || 'ошибка' };
+                state.proton = r.ok ? r : { error: r.error || 'ошибка', blocked: !!r.blocked };
+                // Сервис закрыт владельцем — повторять бесполезно.
+                if (r.blocked) state.protonImport = true;
             } catch (e) {
                 state.proton = { error: String(e.message || e) };
             }
@@ -298,9 +390,11 @@ const SetupWizardPage = (() => {
                     <label class="form-label">Попробовать через</label>
                     <select class="form-input" id="sw-px-tr">${transportOptions(state.transport, true)}</select>
                 </div>
-                <button class="btn btn-ghost btn-sm" id="sw-px-retry">Повторить</button>`;
+                <button class="btn btn-ghost btn-sm" id="sw-px-retry">Повторить</button>
+                <button class="btn btn-primary btn-sm" id="sw-px-import">Использовать свой конфиг Proton</button>`;
             box.querySelector('#sw-px-tr').onchange = (ev) => { state.transport = ev.target.value; };
             box.querySelector('#sw-px-retry').onclick = () => { state.proton = null; w.rerender(); };
+            box.querySelector('#sw-px-import').onclick = () => { state.protonImport = true; w.rerender(); };
             return;
         }
         const countries = data.countries || [];
@@ -309,7 +403,9 @@ const SetupWizardPage = (() => {
             <select class="form-input" id="sw-country" style="max-width:320px;">
                 <option value="">Любая (наименее загруженная)</option>
                 ${countries.map(c => `<option value="${esc(c)}" ${state.country === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}
-            </select>`;
+            </select>
+            <div class="form-hint"><a href="javascript:void(0)" id="sw-px-own">У меня есть свой конфиг Proton</a></div>`;
+        box.querySelector('#sw-px-own').onclick = () => { state.protonImport = true; w.rerender(); };
         box.querySelector('#sw-country').onchange = (ev) => { state.country = ev.target.value; };
     }
 
@@ -318,7 +414,14 @@ const SetupWizardPage = (() => {
         if (!s) return 'Выберите, откуда взять сервер';
         if (s === 'link' && !(state.link || '').trim()) return 'Вставьте ссылку или подписку';
         if (s === 'paste' && !(state.paste || '').trim()) return 'Вставьте текст конфига';
-        if (s === 'proton' && !(state.proton && state.proton.servers)) return 'Серверы Proton ещё не загружены';
+        if (s === 'proton' && state.protonImport) {
+            const t = state.protonConfig || '';
+            if (!/\[Peer\]/i.test(t) || !/PrivateKey/i.test(t)) {
+                return 'Вставьте WireGuard-конфиг Proton целиком: [Interface] и [Peer]';
+            }
+        } else if (s === 'proton' && !(state.proton && state.proton.servers)) {
+            return 'Серверы Proton ещё не загружены — или выберите «Свой конфиг Proton»';
+        }
         if (s === 'existing' && !state.existing) return 'Выберите конфиг';
         return '';
     }
@@ -470,7 +573,12 @@ const SetupWizardPage = (() => {
             const gen = { provider: state.source === 'proton' ? 'proton' : 'warp',
                           protocol: state.source === 'warp-masque' ? 'masque' : 'wireguard',
                           options: {} };
-            if (state.source === 'proton') gen.country = state.country || '';
+            if (state.source === 'proton' && state.protonImport) {
+                gen.source = 'import';
+                gen.config = state.protonConfig || '';
+            } else if (state.source === 'proton') {
+                gen.country = state.country || '';
+            }
             if (state.source === 'warp') gen.options = { mask: 'quic', junk: 'light' };
             src.generate = gen;
         } else if (state.source === 'link') {
@@ -509,7 +617,8 @@ const SetupWizardPage = (() => {
             <p class="wizard-q">Всё готово к запуску</p>
             <div class="note-box">
                 <div><b>Программа:</b> ${esc((ENGINE_INFO[e.id] || {}).title || e.label)}</div>
-                <div><b>Сервер:</b> ${esc(SOURCES[state.source].title)}${state.source === 'proton' && state.country ? ' — ' + esc(state.country) : ''}</div>
+                <div><b>Сервер:</b> ${esc(SOURCES[state.source].title)}${state.source === 'proton' && state.protonImport ? ' — свой конфиг'
+                    : state.source === 'proton' && state.country ? ' — ' + esc(state.country) : ''}</div>
                 <div><b>Через VPN:</b> ${esc(what)}</div>
             </div>
             <label style="display:flex;gap:8px;align-items:center;margin:10px 0;">

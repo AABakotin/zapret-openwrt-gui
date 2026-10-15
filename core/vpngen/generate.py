@@ -48,7 +48,7 @@ PROVIDERS = {
              "sources": ("native", "service")},
     "proton": {"label": "Proton VPN (бесплатные серверы)",
                "protocols": ("wireguard",),
-               "sources": ("service",)},
+               "sources": ("service", "import")},
 }
 
 _NAME_RE = {
@@ -359,6 +359,140 @@ def _save_output(target: str, name: str, text: str) -> dict:
     return out
 
 
+# ───────────────────────── проверка синтаксиса ───────────────────────
+
+CHECK_TARGETS = tuple(TARGETS) + ("proton-import",)
+
+
+def check_output(target: str, text: str) -> dict:
+    """Проверить текст конфига, ничего не сохраняя.
+
+    Сначала встроенный разбор (есть всегда), затем — если движок
+    установлен — сам бинарь (`sing-box check`, `mihomo -t`): он строже и
+    знает свою версию. Ответ: ``{ok, errors, checked_by, warnings}``.
+    """
+    text = str(text or "")
+    if target not in CHECK_TARGETS:
+        return {"ok": False, "errors": ["неизвестный движок %s" % target],
+                "checked_by": []}
+    if not text.strip():
+        return {"ok": False, "errors": ["конфиг пустой"], "checked_by": []}
+    checker = {"awg": _check_awg, "usque": _check_usque,
+               "singbox": _check_singbox, "mihomo": _check_mihomo,
+               "proton-import": _check_proton}[target]
+    try:
+        res = checker(text)
+    except Exception as e:                           # noqa: BLE001
+        log.error("vpngen: проверка %s упала: %s" % (target, e),
+                  source="vpngen")
+        res = {"errors": ["проверка не выполнена: %s" % e], "checked_by": []}
+    res.setdefault("warnings", [])
+    res["ok"] = not res.get("errors")
+    return res
+
+
+def _check_awg(text: str) -> dict:
+    from core.awg_config import parse_conf, validate
+    try:
+        cfg = parse_conf(text)
+    except Exception as e:                           # noqa: BLE001
+        return {"errors": ["не разбирается: %s" % e],
+                "checked_by": ["разбор AmneziaWG"]}
+    return {"errors": list(validate(cfg)),
+            "checked_by": ["разбор AmneziaWG"]}
+
+
+def _check_usque(text: str) -> dict:
+    import base64
+    import json
+    from core.usque_manager import UsqueManager
+    by = ["разбор usque config.json"]
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        return {"errors": ["не JSON: %s" % e], "checked_by": by}
+    if not isinstance(data, dict):
+        return {"errors": ["ожидается JSON-объект"], "checked_by": by}
+    errors = ["нет поля %s" % k for k in UsqueManager._USQUE_REQUIRED
+              if not data.get(k)]
+    if data.get("private_key"):
+        try:
+            base64.b64decode(str(data["private_key"]), validate=True)
+        except ValueError:
+            errors.append("private_key — не base64 (нужен DER-ключ P-256)")
+    for key in ("endpoint_v4", "endpoint_v6", "ipv4", "ipv6"):
+        value = str(data.get(key) or "")
+        if value:
+            try:
+                ipaddress.ip_address(value)
+            except ValueError:
+                errors.append("%s — не IP-адрес: %s" % (key, value))
+    if not data.get("endpoint_v4") and not data.get("endpoint_v6"):
+        errors.append("нет адреса сервера (endpoint_v4/endpoint_v6)")
+    if "BEGIN PUBLIC KEY" not in str(data.get("endpoint_pub_key") or ""):
+        errors.append("endpoint_pub_key — нужен PEM публичного ключа")
+    return {"errors": errors, "checked_by": by}
+
+
+def _check_singbox(text: str) -> dict:
+    from core.singbox_config import parse_conf, validate
+    by = ["разбор sing-box"]
+    try:
+        cfg = parse_conf(text)
+    except ValueError as e:
+        return {"errors": ["не разбирается: %s" % e], "checked_by": by}
+    errors = list(validate(cfg))
+    if errors:
+        return {"errors": errors, "checked_by": by}
+    from core.singbox_manager import get_singbox_manager
+    chk = get_singbox_manager().check_text(text)
+    if chk.get("no_binary"):
+        return {"errors": [], "checked_by": by,
+                "warnings": ["sing-box не установлен — проверен только"
+                             " синтаксис, без самого движка"]}
+    by.append("sing-box check")
+    return {"errors": [] if chk.get("ok") else
+            [chk.get("error") or "sing-box отверг конфиг"], "checked_by": by}
+
+
+def _check_mihomo(text: str) -> dict:
+    from core.clash_yaml import parse_yaml
+    by = ["разбор YAML"]
+    try:
+        cfg = parse_yaml(text)
+    except Exception as e:                           # noqa: BLE001
+        return {"errors": ["не разбирается: %s" % e], "checked_by": by}
+    if not isinstance(cfg, dict) or not cfg:
+        return {"errors": ["ожидается YAML-словарь"], "checked_by": by}
+    if not cfg.get("proxies") and not cfg.get("proxy-providers"):
+        return {"errors": ["нет ни одного прокси (proxies)"],
+                "checked_by": by}
+    from core.mihomo_manager import get_mihomo_manager
+    mgr = get_mihomo_manager()
+    if not mgr._binary():
+        return {"errors": [], "checked_by": by,
+                "warnings": ["mihomo не установлен — проверен только"
+                             " синтаксис, без самого движка"]}
+    chk = mgr.validate_via_binary("", text=text)
+    by.append("mihomo -t")
+    return {"errors": [] if chk.get("ok") else
+            [chk.get("reason") or chk.get("error") or "mihomo отверг конфиг"],
+            "checked_by": by}
+
+
+def _check_proton(text: str) -> dict:
+    from core.vpngen import proton
+    try:
+        prof = proton.from_config(text)
+    except GenError as e:
+        return {"errors": [str(e)], "checked_by": ["разбор конфига Proton"]}
+    srv = prof.get("server") or {}
+    return {"errors": [], "checked_by": ["разбор конфига Proton"],
+            "summary": "сервер %s, %s:%d" % (
+                srv.get("name") or "без имени", prof["endpoint_host"],
+                prof["endpoint_port"])}
+
+
 def delete_output(target: str, name: str) -> dict:
     """Удалить созданный генератором конфиг (откат MCP)."""
     try:
@@ -395,6 +529,13 @@ def _profile(provider: str, protocol: str, source: str, transport: str,
              req: dict) -> dict:
     if provider == "proton":
         from core.vpngen import proton
+        if source == "import":
+            # Готовый конфиг Proton: сеть не нужна, порт — из конфига,
+            # если пользователь не выбрал другой явно.
+            return proton.from_config(
+                str(req.get("config") or ""),
+                port=_int(req.get("port"), 0, 0, 65535, "порт Proton")
+                if req.get("port") else 0)
         return proton.generate(transport,
                                server_id=str(req.get("server_id") or ""),
                                country=str(req.get("country") or ""),

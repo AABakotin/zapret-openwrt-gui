@@ -198,6 +198,14 @@ class TestApply(unittest.TestCase):
                          ("warp", "masque"))
         self.assertEqual(sr.call_args.args[0]["method"], "warp:usque3")
 
+    def test_proton_import_passes_config(self):
+        plan = _plan(source={"kind": "generate", "generate": {
+            "provider": "proton", "source": "import", "config": "[Peer]"}})
+        res, g, _u, _sr = self._apply(plan)
+        self.assertTrue(res["ok"], res)
+        req = g.call_args.args[0]
+        self.assertEqual((req["source"], req["config"]), ("import", "[Peer]"))
+
     def test_start_failure_stops(self):
         res, _g, _u, sr = self._apply(
             _plan(), up={"ok": False, "error": "TUN нет"})

@@ -28,6 +28,7 @@ import re
 import shlex
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 
@@ -477,9 +478,12 @@ class SingboxManager:
             return {"ok": False, "error": "sing-box не установлен",
                     "no_binary": True}
         self._ensure_run_dir()
-        tmp = os.path.join(self._platform().run_dir, "_zg-check.json")
+        # Уникальный файл (0600): проверки идут параллельно (кнопка,
+        # автопроверка, MCP, FakeIP), а в тексте бывает приватный ключ.
         try:
-            with open(tmp, "w") as f:
+            fd, tmp = tempfile.mkstemp(prefix="_zg-check-", suffix=".json",
+                                       dir=self._platform().run_dir)
+            with os.fdopen(fd, "w") as f:
                 f.write(text)
         except OSError as e:
             return {"ok": False, "error": "write: %s" % e}

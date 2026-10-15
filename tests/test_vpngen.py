@@ -151,6 +151,227 @@ class TestProton(unittest.TestCase):
         self.assertIsNone(proton._state["session"])
 
 
+def _proton_conf(endpoint="185.107.56.1:51820"):
+    priv, _ = keys.x25519_keypair()
+    return ("[Interface]\n# Key for router\nPrivateKey = %s\n"
+            "Address = 10.2.0.2/32, 2a07:b944::2:2/128\nDNS = 10.2.0.1\n\n"
+            "[Peer]\n# NL-FREE#123\nPublicKey = %s\n"
+            "AllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = %s\n"
+            % (priv, PEER, endpoint)), priv
+
+
+class TestProtonImport(unittest.TestCase):
+    """Свой конфиг Proton — когда сервис закрыт (Cloudflare 1010)."""
+
+    def test_from_config(self):
+        text, priv = _proton_conf()
+        prof = proton.from_config(text)
+        self.assertEqual((prof["private_key"], prof["peer_public_key"]),
+                         (priv, PEER))
+        self.assertEqual((prof["endpoint_host"], prof["endpoint_port"]),
+                         ("185.107.56.1", 51820))
+        self.assertEqual(prof["ipv4"], "10.2.0.2")
+        self.assertEqual(prof["server"]["country"], "NL")
+        self.assertEqual(prof["source"], "import")
+        self.assertEqual(proton.from_config(text, port=443)["endpoint_port"],
+                         443)
+
+    def test_rejects_psk_and_many_peers(self):
+        text, _ = _proton_conf()
+        psk = text.replace("AllowedIPs", "PresharedKey = %s\nAllowedIPs" % PEER)
+        two = text + "\n[Peer]\nPublicKey = %s\nEndpoint = 1.1.1.1:51820\n" % PEER
+        for bad in (psk, two):
+            with self.assertRaises(net.GenError):
+                proton.from_config(bad)
+
+    def test_interface_comment_is_not_server(self):
+        text, _ = _proton_conf()
+        text = text.replace("# Key for router", "# ROUTER").replace(
+            "# NL-FREE#123\n", "")
+        self.assertEqual(proton.from_config(text)["server"]["name"], "")
+
+    def test_ipv6_endpoint(self):
+        text, _ = _proton_conf("[2a07:b944::1]:51820")
+        self.assertEqual(proton.from_config(text)["endpoint_host"],
+                         "2a07:b944::1")
+
+    def test_bad_configs(self):
+        text, _ = _proton_conf()
+        for bad in ("", text.replace("[Peer]", "[Nope]"),
+                    text.replace("PublicKey = ", "PublicKey = zz"),
+                    text.replace("185.107.56.1:51820", "185.107.56.1"),
+                    text.replace("10.2.0.2/32, ", "")):
+            with self.subTest(bad=bad[-60:]):
+                with self.assertRaises(net.GenError):
+                    proton.from_config(bad)
+
+    def test_generate_without_network(self):
+        text, priv = _proton_conf()
+        with mock.patch.object(net, "request_json",
+                               side_effect=AssertionError("сеть")), \
+             mock.patch.object(gen, "_existing_names", return_value=set()):
+            res = gen.generate({"provider": "proton", "source": "import",
+                                "config": text, "targets": ["awg", "mihomo"],
+                                "transport": "direct",
+                                "options": {"mask": "quic"}})
+        self.assertIn("PrivateKey = %s" % priv, res["results"]["awg"]["text"])
+        self.assertIn("I1 = ", res["results"]["awg"]["text"])
+        self.assertIn("185.107.56.1", res["results"]["mihomo"]["text"])
+
+
+class TestCheckOutput(unittest.TestCase):
+    """Кнопка «Проверить»: синтаксис без сохранения."""
+
+    def _gen(self, target, provider="warp", protocol="wireguard"):
+        prof = _wg_profile()
+        opts = gen.normalize_options(provider, protocol, {"mask": "quic"})
+        opts["label"] = "WARP"
+        opts["listen_port"] = 1080
+        return gen.render_target(target, prof, opts)
+
+    def test_generated_configs_pass(self):
+        nobin = mock.Mock()
+        nobin.check_text.return_value = {"ok": False, "no_binary": True}
+        nobin._binary.return_value = ""
+        with mock.patch("core.singbox_manager.get_singbox_manager",
+                        return_value=nobin), \
+             mock.patch("core.mihomo_manager.get_mihomo_manager",
+                        return_value=nobin):
+            for target in ("awg", "singbox", "mihomo"):
+                with self.subTest(target=target):
+                    r = gen.check_output(target, self._gen(target))
+                    self.assertTrue(r["ok"], r)
+                    self.assertTrue(r["checked_by"])
+            # движок не установлен — честное предупреждение
+            r = gen.check_output("singbox", self._gen("singbox"))
+            self.assertIn("не установлен", r["warnings"][0])
+
+    def test_usque_config_passes(self):
+        with mock.patch.object(warp, "request_json", FakeCF()):
+            prof = warp.masque_native("direct", device_name="router")
+        opts = gen.normalize_options("warp", "masque", {})
+        r = gen.check_output("usque", gen.render_target("usque", prof, opts))
+        self.assertTrue(r["ok"], r)
+
+    def test_mihomo_with_geo_rules_not_run(self):
+        mgr = mock.Mock()
+        mgr._binary.return_value = "/opt/bin/mihomo"
+        text = self._gen("mihomo").replace("- MATCH,", "- GEOIP,CN,DIRECT\n- MATCH,")
+        with mock.patch("core.mihomo_manager.get_mihomo_manager",
+                        return_value=mgr):
+            r = gen.check_output("mihomo", text)
+        self.assertTrue(r["ok"], r)
+        mgr.validate_via_binary.assert_not_called()
+        self.assertIn("внешние базы", r["warnings"][0])
+
+    def test_singbox_check_uses_unique_private_tmp(self):
+        # Параллельные проверки не должны писать в один файл, а сам файл
+        # (в нём приватный ключ) — быть читаемым всеми.
+        import os
+        import stat
+        import tempfile
+        from core import singbox_manager as sm
+        seen = []
+
+        def fake_run(args, timeout=15, input_text=None):
+            path = args[-1]
+            seen.append((path, stat.S_IMODE(os.stat(path).st_mode),
+                         open(path).read()))
+            return 0, "", ""
+        with tempfile.TemporaryDirectory() as d:
+            mgr = sm.SingboxManager.__new__(sm.SingboxManager)
+            plat = mock.Mock(run_dir=d)
+            with mock.patch.object(sm.SingboxManager, "_binary",
+                                   return_value="/bin/sing-box"), \
+                 mock.patch.object(sm.SingboxManager, "_platform",
+                                   return_value=plat), \
+                 mock.patch.object(sm, "_run", side_effect=fake_run):
+                self.assertTrue(mgr.check_text("{\"a\":1}")["ok"])
+                self.assertTrue(mgr.check_text("{\"b\":2}")["ok"])
+            self.assertEqual(os.listdir(d), [])            # убраны
+        self.assertNotEqual(seen[0][0], seen[1][0])
+        self.assertEqual([m for _p, m, _t in seen], [0o600, 0o600])
+        self.assertEqual([t for _p, _m, t in seen], ['{"a":1}', '{"b":2}'])
+
+    def test_binary_verdict_wins(self):
+        mgr = mock.Mock()
+        mgr.check_text.return_value = {"ok": False, "error": "unknown field"}
+        with mock.patch("core.singbox_manager.get_singbox_manager",
+                        return_value=mgr):
+            r = gen.check_output("singbox", self._gen("singbox"))
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["errors"], ["unknown field"])
+        self.assertIn("sing-box check", r["checked_by"])
+
+    def test_broken_configs_fail(self):
+        cases = {
+            "awg": "[Interface]\nPrivateKey = нет\n",
+            "usque": "{\"private_key\": \"x\"}",
+            "singbox": "{not json",
+            "mihomo": "mode: rule\n",
+            "proton-import": "[Interface]\n",
+        }
+        for target, text in cases.items():
+            with self.subTest(target=target):
+                r = gen.check_output(target, text)
+                self.assertFalse(r["ok"])
+                self.assertTrue(r["errors"])
+        self.assertFalse(gen.check_output("evil", "x")["ok"])
+        self.assertFalse(gen.check_output("awg", "  ")["ok"])
+
+    def test_proton_import_summary(self):
+        text, _ = _proton_conf()
+        r = gen.check_output("proton-import", text)
+        self.assertTrue(r["ok"], r)
+        self.assertIn("185.107.56.1:51820", r["summary"])
+
+    def test_api_check(self):
+        from tests._wsgi_client import WSGIClient, build_test_app
+        client = WSGIClient(build_test_app())
+        r = client.post_json("/api/vpngen/check",
+                             {"target": "awg", "text": self._gen("awg")})
+        self.assertTrue(r["ok"], r)
+
+
+class TestCloudflareBlocked(unittest.TestCase):
+
+    def _http_error(self, body):
+        import io
+        import urllib.error
+        return urllib.error.HTTPError("https://x", 403, "Forbidden", {},
+                                      io.BytesIO(body.encode()))
+
+    def test_1010_is_blocked_not_network(self):
+        body = ('{"type":"…error-1010/","title":"Error 1010: Access denied",'
+                '"status":403,"error_code":1010,'
+                '"error_name":"browser_signature_banned"}')
+        opener = mock.Mock()
+        opener.open.side_effect = self._http_error(body)
+        with mock.patch.object(net, "_opener", return_value=opener):
+            with self.assertRaises(net.GenError) as cm:
+                net.request_json("POST", "https://www.api-proton.workers.dev/x",
+                                 body={})
+        e = cm.exception
+        self.assertTrue(e.blocked)
+        self.assertFalse(e.network)                 # «Авто» не перебирает
+        self.assertIn("1010", str(e))
+        self.assertNotIn("browser_signature", str(e))
+
+    def test_ip_ban_tries_next_transport(self):
+        # 1009 (страна) — от адреса зависит: «Авто» должно пробовать обход.
+        opener = mock.Mock()
+        opener.open.side_effect = self._http_error('{"error_code":1009}')
+        with mock.patch.object(net, "_opener", return_value=opener):
+            with self.assertRaises(net.GenError) as cm:
+                net.request_json("GET", "https://x.example/a")
+        self.assertTrue(cm.exception.network)
+        self.assertFalse(cm.exception.blocked)
+
+    def test_plain_403_is_not_blocked(self):
+        self.assertEqual(net._cf_access_denied('{"error":"nope"}'), "")
+        self.assertEqual(net._cf_access_denied("error code: 1020"), "1020")
+
+
 class TestTransport(unittest.TestCase):
 
     def test_auto_falls_through_on_network_errors_only(self):
@@ -473,6 +694,14 @@ class TestApi(unittest.TestCase):
             r = self.client.post_json("/api/vpngen/generate",
                                       {"provider": "warp"})
         self.assertNotIn("secrets", r)
+
+    def test_proton_servers_reports_blocked(self):
+        err = net.GenError("закрыто", status=403, blocked=True)
+        with mock.patch("core.vpngen.proton.servers", side_effect=err):
+            r = self.client.post_json("/api/vpngen/proton/servers",
+                                      {"transport": "direct"})
+        self.assertFalse(r["ok"])
+        self.assertTrue(r["blocked"])
 
     def test_save_validates_target(self):
         r = self.client.post_json("/api/vpngen/save",

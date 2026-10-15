@@ -179,5 +179,38 @@ const Wizard = (() => {
         header.insertAdjacentElement('afterend', box);
     }
 
-    return { create, esc, mountBanner };
+    // Поле для готового конфига: файл можно перетащить на него, а после
+    // вставки/перетаскивания текст проверяется сам (onText — с паузой,
+    // чтобы не дёргать проверку на каждый символ).
+    function configInput(textarea, onText) {
+        let timer = null;
+        const fire = () => {
+            clearTimeout(timer);
+            timer = setTimeout(() => onText(textarea.value), 600);
+        };
+        textarea.addEventListener('input', fire);
+        // Перехватываем только файлы: перетаскивание выделенного текста
+        // работает как обычно.
+        const hasFiles = (e) => !!(e.dataTransfer && Array.from(e.dataTransfer.types || [])
+            .includes('Files'));
+        textarea.addEventListener('dragover', (e) => {
+            if (!hasFiles(e)) return;
+            e.preventDefault();
+            textarea.classList.add('drop-target');
+        });
+        textarea.addEventListener('dragleave', () => textarea.classList.remove('drop-target'));
+        textarea.addEventListener('drop', (e) => {
+            if (!hasFiles(e)) return;
+            e.preventDefault();
+            textarea.classList.remove('drop-target');
+            const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+            if (!f) return;
+            f.text().then(t => {
+                textarea.value = t;
+                textarea.dispatchEvent(new Event('input'));
+            });
+        });
+    }
+
+    return { create, esc, mountBanner, configInput };
 })();

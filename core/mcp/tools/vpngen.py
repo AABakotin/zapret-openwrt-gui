@@ -49,6 +49,36 @@ def vpngen_options(args: dict) -> dict:
 
 
 @tool(
+    name="vpngen_check",
+    scope="read",
+    mutating=False,
+    title="Check config syntax",
+    description=("Check config syntax without saving: awg (.conf), usque "
+                 "(config.json), singbox, mihomo or proton-import (Proton "
+                 "WireGuard .conf). Built-in parser, then the engine binary "
+                 "if installed (sing-box check, mihomo -t). No network. / "
+                 "Проверить синтаксис конфига."),
+    schema={
+        "type": "object",
+        "properties": {
+            "target": {"type": "string",
+                       "enum": ["awg", "usque", "singbox", "mihomo",
+                                "proton-import"]},
+            "text": {"type": "string", "maxLength": 262144},
+        },
+        "required": ["target", "text"],
+        "additionalProperties": False,
+    },
+)
+def vpngen_check(args: dict) -> dict:
+    from core.vpngen import generate as gen
+    res = gen.check_output(str(args.get("target") or ""),
+                           str(args.get("text") or ""))
+    res["note"] = NOTE
+    return res
+
+
+@tool(
     name="vpngen_proton_servers",
     scope="tunnels_write",
     mutating=False,
@@ -80,8 +110,13 @@ def vpngen_proton_servers(args: dict) -> dict:
             lambda t: proton.servers(t, refresh=bool(args.get("refresh"))))
     except GenError as e:
         return {"ok": False, "error": str(e),
-                "hint": "сервис недоступен — попробуйте transport через "
-                        "обход (vpngen_options покажет, какие есть)"}
+                "hint": ("сервис закрыт владельцем для программ, обход не "
+                         "поможет — vpngen_generate с source=\"import\" и "
+                         "WireGuard-конфигом, скачанным пользователем в "
+                         "аккаунте Proton"
+                         if getattr(e, "blocked", False) else
+                         "сервис недоступен — попробуйте transport через "
+                         "обход (vpngen_options покажет, какие есть)")}
     country = str(args.get("country") or "").upper()
     items = [s for s in data["servers"]
              if not country or s["country"].upper() == country]
@@ -120,11 +155,20 @@ def vpngen_proton_servers(args: dict) -> dict:
                         "items": {"type": "string",
                                   "enum": ["awg", "usque", "singbox",
                                            "mihomo"]}},
-            "source": {"type": "string", "enum": ["native", "service"],
+            "source": {"type": "string",
+                       "enum": ["native", "service", "import"],
                        "description": "warp: native — own key via "
                                       "Cloudflare API (default); service "
                                       "— third-party generator knows the "
-                                      "key. / Откуда ключи."},
+                                      "key. proton: service (default) or "
+                                      "import — rebuild a WireGuard config "
+                                      "the user downloaded from Proton "
+                                      "(pass it in `config`); use import "
+                                      "when the service answers «Cloudflare "
+                                      "1010». / Откуда ключи."},
+            "config": {"type": "string", "maxLength": 8192,
+                       "description": "proton + source=import: text of the "
+                                      "WireGuard .conf from Proton."},
             "transport": {"type": "string", "maxLength": 80,
                           "default": "auto"},
             "server_id": {"type": "string", "maxLength": 64},
@@ -156,8 +200,13 @@ def vpngen_generate(args: dict) -> dict:
         res = gen.generate(req)
     except GenError as e:
         return {"ok": False, "error": str(e),
-                "hint": "сеть до сервиса закрыта — transport=\"auto\" "
-                        "переберёт обходы; список — vpngen_options"}
+                "hint": ("сервис закрыт владельцем для программ — для "
+                         "Proton попросите пользователя скачать WireGuard-"
+                         "конфиг (аккаунт Proton → Загрузки) и передайте "
+                         "его: source=\"import\", config=…"
+                         if getattr(e, "blocked", False) else
+                         "сеть до сервиса закрыта — transport=\"auto\" "
+                         "переберёт обходы; список — vpngen_options")}
     secrets = res.pop("secrets", [])
     saved = []
     for target, item in (res.get("results") or {}).items():

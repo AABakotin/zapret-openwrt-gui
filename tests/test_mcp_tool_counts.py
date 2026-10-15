@@ -120,8 +120,9 @@ from core.mcp import registry
 # Приёмы d2k: + 1 под `probes` (dpi_classify — дифференциальные вопросы
 # к DPI: целиком → разрез на первом байте → чужое имя на тот же адрес).
 # Состояния не меняет, но выпускает трафик — поэтому `probes`.
-# Генератор конфигов WARP/Proton: + 1 на чтение (vpngen_options — что
-# вообще можно сгенерировать, сети не трогает) и + 2 под
+# Генератор конфигов WARP/Proton: + 2 на чтение (vpngen_options — что
+# вообще можно сгенерировать, vpngen_check — синтаксис конфига; сети не
+# трогают) и + 2 под
 # `tunnels_write`: vpngen_generate (регистрирует устройство и СОХРАНЯЕТ
 # конфиги; откат удаляет их) и vpngen_proton_servers — последний ничего
 # не меняет, но ходит к стороннему сервису, поэтому не в чтении.
@@ -130,7 +131,7 @@ from core.mcp import registry
 # `raw: true`) и запрет на запись секретных полей настроек. Ноль
 # напротив него — это его смысл.
 BY_SCOPE = {
-    "read": 39,
+    "read": 40,
     "control": 8,
     "strategies_write": 12,
     "config_write": 1,
@@ -218,7 +219,7 @@ class TestToolCounts(unittest.TestCase):
         # S4 — перехват и трафик
         "firewall_status", "traffic_recent",
         # генератор конфигов WARP/Proton
-        "vpngen_options",
+        "vpngen_options", "vpngen_check",
         # S5 — туннели, диагностика, обновления
         "diagnostics_run", "dpi_report", "tunnels_status", "updates_check",
         # S6 — что можно менять и что уже менялось

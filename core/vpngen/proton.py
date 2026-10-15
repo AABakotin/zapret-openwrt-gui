@@ -22,6 +22,9 @@ Proton VPN (бесплатные серверы) через сервис-ген�
 
 from __future__ import annotations
 
+import base64
+import ipaddress
+import re
 import threading
 import time
 
@@ -166,3 +169,101 @@ def generate(transport: str, *, server_id: str = "", country: str = "",
                      " WireGuard создан на роутере и сервису не"
                      " передавался." % service_url()],
     }
+
+
+# ───────────────────────── импорт готового конфига ─────────────────────
+
+_SERVER_COMMENT = re.compile(r"^\s*#\s*([A-Z]{2}(?:[-#A-Z0-9 ]*))\s*$", re.M)
+
+
+def from_config(text: str, *, port: int = 0) -> dict:
+    """Профиль из WireGuard-конфига Proton (аккаунт или proton-generation).
+
+    Запасной путь, когда сервис-генератор недоступен: пользователь скачал
+    конфиг сам — в аккаунте Proton (Загрузки → WireGuard, бесплатный
+    тариф тоже) или на странице proton-generation в браузере. Ключ уже
+    авторизован Proton, мы лишь пересобираем конфиг под нужные движки
+    (маскировка AmneziaWG, sing-box, mihomo).
+    """
+    from core.awg_config import parse_conf
+    text = str(text or "").strip()
+    if not text:
+        raise GenError("вставьте WireGuard-конфиг Proton")
+    try:
+        cfg = parse_conf(text)
+    except Exception as e:                           # noqa: BLE001
+        raise GenError("конфиг не читается: %s" % e)
+    iface = cfg.get("interface") or {}
+    peers = cfg.get("peers") or []
+    if not peers:
+        raise GenError("в конфиге нет секции [Peer]")
+    if len(peers) > 1:
+        raise GenError("в конфиге %d секций [Peer] — нужен конфиг одного"
+                       " сервера Proton" % len(peers))
+    peer = peers[0]
+    if str(peer.get("PresharedKey") or "").strip():
+        # Рендеры PresharedKey не переносят — туннель не поднялся бы.
+        raise GenError("конфиг с PresharedKey не поддерживается — скачайте"
+                       " в аккаунте Proton обычный WireGuard-конфиг")
+    priv = str(iface.get("PrivateKey") or "").strip()
+    pub = str(peer.get("PublicKey") or "").strip()
+    for label, value in (("PrivateKey", priv), ("PublicKey", pub)):
+        if not _is_wg_key(value):
+            raise GenError("%s в конфиге не похож на ключ WireGuard" % label)
+    host, cport = _split_endpoint(str(peer.get("Endpoint") or ""))
+    v4 = v6 = ""
+    addrs = iface.get("Address") or []
+    if isinstance(addrs, str):
+        addrs = [a for a in re.split(r"[\s,]+", addrs) if a]
+    for addr in addrs:
+        ip = str(addr).split("/", 1)[0].strip()
+        try:
+            ver = ipaddress.ip_address(ip).version
+        except ValueError:
+            continue
+        if ver == 4 and not v4:
+            v4 = ip
+        elif ver == 6 and not v6:
+            v6 = ip
+    if not v4:
+        raise GenError("в конфиге нет IPv4-адреса (Address)")
+    # Имя сервера — из комментария в секции [Peer] («# NL-FREE#123»);
+    # комментарии [Interface] («# ROUTER») — не сервер.
+    peer_part = re.split(r"(?im)^\s*\[Peer\]\s*$", text, maxsplit=1)
+    m = _SERVER_COMMENT.search(peer_part[1]) if len(peer_part) > 1 else None
+    name = m.group(1).strip() if m else ""
+    return {
+        "provider": "proton", "protocol": "wireguard", "source": "import",
+        "service": "",
+        "private_key": priv,
+        "peer_public_key": pub,
+        "ipv4": v4, "ipv6": v6 or ADDRESS_V6,
+        "endpoint_host": host,
+        "endpoint_port": int(port or cport or 51820),
+        "reserved": [],
+        "server": {"id": "", "name": name.replace("-FREE#", " #"),
+                   "country": name[:2] if name else "", "city": "",
+                   "load": 0, "entry_ip": host, "public_key": pub},
+        "account": {"id": "", "type": "proton-import"},
+        "warnings": [],
+    }
+
+
+def _is_wg_key(value: str) -> bool:
+    try:
+        return len(base64.b64decode(value, validate=True)) == 32
+    except (ValueError, TypeError):
+        return False
+
+
+def _split_endpoint(endpoint: str) -> tuple:
+    endpoint = endpoint.strip()
+    m = re.match(r"^\[([0-9A-Fa-f:.]+)\]:(\d+)$", endpoint) \
+        or re.match(r"^([^\s:]+):(\d+)$", endpoint)
+    if not m:
+        raise GenError("в конфиге нет Endpoint вида адрес:порт")
+    port = int(m.group(2))
+    if not 1 <= port <= 65535:
+        raise GenError("неверный порт в Endpoint")
+    return m.group(1), port
+

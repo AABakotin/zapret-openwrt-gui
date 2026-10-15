@@ -263,6 +263,9 @@ const MihomoPage = (() => {
                         </label>
                         <button class="btn btn-ghost btn-sm"
                                 onclick="MihomoPage.edit('${escapeAttr(c.name)}')">Редактировать</button>
+                        <button class="btn btn-ghost btn-sm"
+                                title="Проверить синтаксис: разбор YAML + mihomo -t, если установлен"
+                                onclick="ConfigCheck.show('mihomo', {name: '${escapeAttr(c.name)}'})">Проверить</button>
                         <button class="btn btn-ghost btn-sm" ${isBusy ? 'disabled' : ''}
                                 onclick="MihomoPage.del('${escapeAttr(c.name)}')">Удалить</button>
                     </div>

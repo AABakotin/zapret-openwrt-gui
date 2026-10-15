@@ -391,6 +391,27 @@ def check_output(target: str, text: str) -> dict:
     return res
 
 
+def load_saved(target: str, name: str) -> str:
+    """Текст сохранённого конфига движка — для «Проверить» в списках."""
+    if target not in TARGETS:
+        raise GenError("неизвестный движок %s" % target)
+    if not valid_name(target, name):
+        raise GenError("имя «%s» не подходит для %s" % (name, target))
+    if target == "usque":
+        from core.usque_manager import get_usque_manager
+        item = next((c for c in get_usque_manager().list_configs()
+                     if c.get("name") == name), None)
+        if item is None:
+            raise GenError("конфига «%s» нет" % name)
+        with open(item["path"], "r", encoding="utf-8") as f:
+            return f.read()
+    from core import tunnels_control
+    try:
+        return tunnels_control.config_get(target, name).get("text") or ""
+    except ValueError as e:
+        raise GenError(str(e))
+
+
 def _check_awg(text: str) -> dict:
     from core.awg_config import parse_conf, validate
     try:
@@ -434,6 +455,24 @@ def _check_usque(text: str) -> dict:
     return {"errors": errors, "checked_by": by}
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+_TMP_PATH = re.compile(r"(?:at )?\S*/_zg-check-[^\s:]+\.json:?\s*")
+
+
+_LOG_ERR = re.compile(r'level=(?:error|fatal)\s+msg="((?:[^"\\]|\\.)*)"')
+
+
+def _engine_error(text: str) -> str:
+    """Ошибка бинаря без цветовых кодов, пути временного файла и
+    служебных строк журнала (mihomo пишет в формате logrus)."""
+    text = _ANSI.sub("", str(text or "")).strip()
+    found = _LOG_ERR.findall(text)
+    if found:
+        text = "; ".join(m.replace('\\"', '"') for m in found)
+    text = re.sub(r"^FATAL\[\d+\]\s*", "", text)
+    return _TMP_PATH.sub("", text).strip()
+
+
 def _check_singbox(text: str) -> dict:
     from core.singbox_config import parse_conf, validate
     by = ["разбор sing-box"]
@@ -441,18 +480,21 @@ def _check_singbox(text: str) -> dict:
         cfg = parse_conf(text)
     except ValueError as e:
         return {"errors": ["не разбирается: %s" % e], "checked_by": by}
-    errors = list(validate(cfg))
-    if errors:
-        return {"errors": errors, "checked_by": by}
+    notes = list(validate(cfg))
     from core.singbox_manager import get_singbox_manager
     chk = get_singbox_manager().check_text(text)
     if chk.get("no_binary"):
-        return {"errors": [], "checked_by": by,
+        return {"errors": notes, "checked_by": by,
                 "warnings": ["sing-box не установлен — проверен только"
                              " синтаксис, без самого движка"]}
+    # Бинарь есть — его вердикт главный: встроенный разбор знает не все
+    # типы и поля (новые версии sing-box), его замечания — подсказки.
     by.append("sing-box check")
-    return {"errors": [] if chk.get("ok") else
-            [chk.get("error") or "sing-box отверг конфиг"], "checked_by": by}
+    if chk.get("ok"):
+        return {"errors": [], "checked_by": by, "warnings": notes}
+    return {"errors": [_engine_error(chk.get("error"))
+                       or "sing-box отверг конфиг"],
+            "checked_by": by, "warnings": notes}
 
 
 _EXTERNAL_DATA = re.compile(
@@ -489,7 +531,8 @@ def _check_mihomo(text: str) -> dict:
     chk = mgr.validate_via_binary("", text=text)
     by.append("mihomo -t")
     return {"errors": [] if chk.get("ok") else
-            [chk.get("reason") or chk.get("error") or "mihomo отверг конфиг"],
+            [_engine_error(chk.get("reason") or chk.get("error"))
+             or "mihomo отверг конфиг"],
             "checked_by": by}
 
 

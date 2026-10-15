@@ -16,6 +16,8 @@ const Confirm = (() => {
      * @param {object} opts - Настройки
      * @param {string} opts.confirmLabel - Текст кнопки подтверждения (по умолчанию "OK")
      * @param {boolean} opts.danger - Красная кнопка подтверждения
+     * @param {boolean} opts.hideCancel - Только одна кнопка (окно-сообщение)
+     * @param {string} opts.maxWidth - Ширина окна (по умолчанию 400px)
      * @returns {Promise<boolean>} true если подтверждено, false если отменено
      */
     function show(title, message, opts = {}) {
@@ -46,14 +48,15 @@ const Confirm = (() => {
             content.style.padding = "24px";
             content.style.borderRadius = "8px";
             content.style.width = "90%";
-            content.style.maxWidth = "400px";
+            content.style.maxWidth = opts.maxWidth || "400px";
             content.style.boxShadow = "0 4px 12px rgba(0,0,0,0.3)";
 
             content.innerHTML = `
                 <div style="font-weight:bold; font-size:1.1rem; margin-bottom:12px; color:var(--text-main, #e1e4ea);">${title}</div>
                 <div style="margin-bottom:20px; font-size:0.95rem; line-height:1.4; color:var(--text-secondary, #a0a6b5);">${message}</div>
                 <div style="display:flex; justify-content:flex-end; gap:8px;">
-                    <button class="btn" id="confirm-modal-cancel">Отмена</button>
+                    <button class="btn" id="confirm-modal-cancel"
+                            style="${opts.hideCancel ? 'display:none;' : ''}">Отмена</button>
                     <button class="btn ${dangerClass}" id="confirm-modal-ok" style="${dangerStyle} cursor:pointer;">${confirmLabel}</button>
                 </div>
             `;

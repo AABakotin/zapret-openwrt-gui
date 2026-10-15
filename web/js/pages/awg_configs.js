@@ -52,6 +52,10 @@ const AwgConfigsPage = (() => {
                             <button class="btn btn-ghost btn-sm" data-action="importClick">
                                 Импорт
                             </button>
+                            <button class="btn btn-ghost btn-sm" data-action="checkCurrent"
+                                    title="Проверить синтаксис текста в редакторе, не сохраняя">
+                                Проверить
+                            </button>
                             <button class="btn btn-ghost btn-sm" data-action="exportCurrent">
                                 Экспорт
                             </button>
@@ -108,6 +112,10 @@ const AwgConfigsPage = (() => {
             if (action === 'startCreate') { startCreate(); return; }
             if (action === 'importClick') { document.getElementById('awg-cfg-file-input')?.click(); return; }
             if (action === 'exportCurrent') { exportCurrent(); return; }
+            if (action === 'checkCurrent') {
+                ConfigCheck.show('awg', { text: editorText, label: currentName || 'новый конфиг' });
+                return;
+            }
             if (action === 'generateKeypair') { generateKeypair(); return; }
             if (action === 'deleteCurrent') { deleteCurrent(); return; }
             if (action === 'save') { save(); return; }

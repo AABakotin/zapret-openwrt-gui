@@ -280,6 +280,8 @@ const UsquePage = (() => {
                     <td><span class="status-dot ${statusCls}"></span> ${statusText}</td>
                     <td><div class="usque-actions">${toggleBtn}
                         <button class="btn btn-sm action-details" data-name="${esc(c.name)}">Подробнее</button>
+                        <button class="btn btn-sm action-check" data-name="${esc(c.name)}"
+                                title="Проверить config.json: поля, ключ, адреса">Проверить</button>
                         <button class="btn btn-sm action-remove" data-name="${esc(c.name)}">Удалить</button>
                     </div></td>
                 </tr>
@@ -330,6 +332,10 @@ const UsquePage = (() => {
                     btn.addEventListener("click", (e) => {
                         start(e.currentTarget.getAttribute("data-name"));
                     });
+                });
+                el.querySelectorAll(".action-check").forEach(btn => {
+                    btn.addEventListener("click", () =>
+                        ConfigCheck.show("usque", { name: btn.dataset.name }));
                 });
                 el.querySelectorAll(".action-remove").forEach(btn => {
                     btn.addEventListener("click", (e) => {

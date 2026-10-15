@@ -293,6 +293,16 @@ class TestCheckOutput(unittest.TestCase):
         self.assertEqual([m for _p, m, _t in seen], [0o600, 0o600])
         self.assertEqual([t for _p, _m, t in seen], ['{"a":1}', '{"b":2}'])
 
+    def test_engine_error_is_readable(self):
+        self.assertEqual(gen._engine_error(
+            'time="t" level=info msg="Start"\n'
+            'time="t" level=error msg="proxy 0: unsupport proxy type: x"'),
+            "proxy 0: unsupport proxy type: x")
+        self.assertEqual(gen._engine_error(
+            "\x1b[31mFATAL\x1b[0m[0000] decode config at "
+            "/var/run/sing-box/_zg-check-ab.json: inbounds[0].x: unknown"),
+            "decode config inbounds[0].x: unknown")
+
     def test_binary_verdict_wins(self):
         mgr = mock.Mock()
         mgr.check_text.return_value = {"ok": False, "error": "unknown field"}
@@ -324,6 +334,36 @@ class TestCheckOutput(unittest.TestCase):
         r = gen.check_output("proton-import", text)
         self.assertTrue(r["ok"], r)
         self.assertIn("185.107.56.1:51820", r["summary"])
+
+    def test_api_check_saved_by_name(self):
+        from tests._wsgi_client import WSGIClient, build_test_app
+        client = WSGIClient(build_test_app())
+        text = self._gen("awg")
+        with mock.patch("core.tunnels_control.config_get",
+                        return_value={"ok": True, "text": text}) as cg:
+            r = client.post_json("/api/vpngen/check",
+                                 {"target": "awg", "name": "warp"})
+        self.assertTrue(r["ok"], r)
+        cg.assert_called_once_with("awg", "warp")
+        # Чужое имя (обход каталога) — отказ до чтения файла.
+        r = client.post_json("/api/vpngen/check",
+                             {"target": "awg", "name": "../../etc/passwd"})
+        self.assertFalse(r["ok"])
+
+    def test_load_saved_usque(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "warp.json")
+            with open(path, "w") as f:
+                f.write('{"a": 1}')
+            mgr = mock.Mock()
+            mgr.list_configs.return_value = [{"name": "warp", "path": path}]
+            with mock.patch("core.usque_manager.get_usque_manager",
+                            return_value=mgr):
+                self.assertEqual(gen.load_saved("usque", "warp"), '{"a": 1}')
+                with self.assertRaises(net.GenError):
+                    gen.load_saved("usque", "nope")
 
     def test_api_check(self):
         from tests._wsgi_client import WSGIClient, build_test_app

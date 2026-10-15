@@ -352,6 +352,11 @@ const AwgDashboardPage = (() => {
                             ${cfg.orphan
                                 ? ''
                                 : `<button class="btn btn-ghost btn-sm"
+                                           title="Проверить синтаксис конфига"
+                                           onclick="ConfigCheck.show('awg', {name: '${escapeAttr(cfg.name)}'})">
+                                       Проверить
+                                   </button>
+                                   <button class="btn btn-ghost btn-sm"
                                            onclick="window.location.hash='awg-configs?edit=${encodeURIComponent(cfg.name)}'">
                                        Редактировать
                                    </button>`

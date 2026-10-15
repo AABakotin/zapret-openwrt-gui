@@ -266,6 +266,15 @@ python3 app.py --host 0.0.0.0 --port 8080
 
 Откройте в браузере **`http://<IP-роутера>:8080`**.
 
+**Самый простой путь — «Мастер настройки»** (меню **VPN и маршрутизация →
+Мастер настройки**). Пять вопросов: какая программа (AmneziaWG, WARP/MASQUE,
+sing-box, mihomo) → установить её → где взять сервер (бесплатный
+Cloudflare WARP или Proton VPN, ссылка/подписка, готовый конфиг) → что
+пускать через VPN (нужные сервисы вроде YouTube и Telegram, выбранные
+устройства или всё) → «Запустить». Мастер сам сохранит конфиг, поднимет
+туннель, включит автозапуск и создаст маршрут — его потом видно и можно
+поправить на странице **Маршрутизация**.
+
 **Сценарий А — «просто открыть YouTube/Discord без VPN» (обход DPI):**
 
 1. **Zapret2** → нажмите «Установить» (скачает бинарь nfqws2 с GitHub).
@@ -587,6 +596,33 @@ mangle PREROUTING и FORWARD, ответное — в FORWARD. Первые N п
   тогда в туннель уходят все её клиенты, а трафик внутри локальной сети и
   трафик самого роутера остаются локальными (иначе роутер уехал бы в
   туннель вместе с ними и пропал из сети).
+
+### Генератор конфигов (WARP и Proton VPN)
+
+Бесплатный VPN-доступ без сторонних сайтов — аналог warp-generation и
+proton-generation, но прямо на роутере, с конфигами сразу под
+**AmneziaWG, WARP/MASQUE (usque), sing-box и mihomo**:
+
+- **Cloudflare WARP по WireGuard/AmneziaWG** — роутер сам регистрирует
+  устройство в Cloudflare (ключ создаётся на роутере), добавляет
+  маскировку AmneziaWG: мусорные пакеты и «сигнатуру» I1 — QUIC-подключение
+  к российскому сайту, DNS-запрос или начало SIP-звонка. Можно взять
+  случайный адрес и порт Cloudflare, DNS, IPv6, WARP+ ключ.
+- **Cloudflare WARP по MASQUE** — для usque и mihomo (у mihomo —
+  автопереключение H3 ↔ H2).
+- **Proton VPN** — бесплатные серверы с выбором страны и нагрузки. Сессию
+  и серверы даёт сервис proton-generation, но ключ WireGuard создаётся на
+  роутере и сервису не передаётся.
+- **Если Cloudflare или сервис заблокирован** — «Как дойти: Авто»: сначала
+  напрямую, при блокировке — через уже работающий AWG/sing-box/mihomo (или
+  выберите обход явно). Для WARP есть и запасной источник — сервис
+  warp-generation (тогда ключ создаёт сервис, об этом сказано в интерфейсе).
+
+Одна генерация = одно устройство WARP/Proton: можно сохранить конфиги под
+несколько программ, но держать запущенным одновременно стоит только один.
+sing-box не умеет маскировку AmneziaWG и MASQUE — для него конфиг
+обычный WireGuard. Генератор доступен и модели через MCP
+(`vpngen_generate`, `vpngen_proton_servers`).
 
 ### WARP/MASQUE (usque)
 
@@ -1863,7 +1899,9 @@ GUI сам по себе — это Python/JS-код; «тяжёлые» бин�
 | **sing-box** | сборка в наших Releases (тег `singbox-bin-*`); upstream-код — [SagerNet/sing-box](https://github.com/SagerNet/sing-box) | sing-box → установка |
 | **mihomo** (Clash.Meta) | [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) (Releases) | mihomo → установка |
 | **amneziawg-go / -tools** | сборка в наших Releases (тег `awg-bin-vX`) | AmneziaWG → Setup |
-| **Cloudflare WARP** | `api.cloudflareclient.com` | AmneziaWG → WARP (нативная генерация) |
+| **Cloudflare WARP** | `api.cloudflareclient.com` | AmneziaWG → WARP, Генератор конфигов, Мастер настройки |
+| **Proton VPN (бесплатные серверы)** | сервис proton-generation (`www.api-proton.workers.dev`, адрес меняется в `vpngen.proton_service`); ключ создаётся на роутере | Генератор конфигов, Мастер настройки |
+| **Сервисы-генераторы WARP** (запасной источник) | `*.warp-api.cfd` (те же, что у warp-generation.github.io) | Генератор конфигов → «Откуда брать ключи: сервис» |
 | **usque** | сборка в наших Releases (тег `usque-bin-v*`, sha256 из `manifest.json` релиза); upstream-код — [Diniboy1123/usque](https://github.com/Diniboy1123/usque). Запасной источник — [side-effect-tm/usque-keenetic](https://github.com/side-effect-tm/usque-keenetic) | WARP/MASQUE → «Установить» |
 | **Cloudflare WARP по MASQUE** | `consumer-masque.cloudflareclient.com` + узлы WARP (443/udp, при `Restricted` — 443/tcp) | WARP/MASQUE — регистрация сессии и сам трафик |
 | **opera-proxy** | сборка в наших Releases (тег `opera-bin-v*`, sha256 из `manifest.json` релиза); upstream-код — [Alexey71/opera-proxy](https://github.com/Alexey71/opera-proxy) | Opera Proxy → «Установить» |

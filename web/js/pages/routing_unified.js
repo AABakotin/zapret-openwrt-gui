@@ -75,12 +75,13 @@ const RoutingUnifiedPage = (() => {
                Можно задать резервный путь на случай сбоя.`;
 
         container.innerHTML = `
-            <div class="page-header page-header-bar">
+            <div class="page-header page-header-bar ru-header">
                 <div>
                     <h1 class="page-title">${title}${typeof Help !== 'undefined' ? Help.button(helpId) : ''}${typeof Help !== 'undefined' ? Help.button('routing-modes', {label: '⇄'}) : ''}</h1>
                     <p class="page-description">${subtitle}</p>
                 </div>
                 <div class="page-actions">
+                    <button class="btn btn-primary btn-sm" data-action="newRoute">+ Маршрут</button>
                     <label class="text-muted" style="font-size:12px; display:flex; gap:6px; align-items:center;"
                            title="Фоновая проверка доступности маршрутов с включённым мониторингом">
                         <input type="checkbox" id="ru-monitor" data-action="toggleMonitor">
@@ -107,7 +108,6 @@ const RoutingUnifiedPage = (() => {
                             title="Загрузить маршруты из файла экспорта">Импорт</button>
                     <input type="file" id="ru-import-file" accept=".json,application/json"
                            style="display:none;" data-action="importFileChosen">
-                    <button class="btn btn-primary btn-sm" data-action="newRoute">+ Маршрут</button>
                 </div>
             </div>
             <div id="ru-banners"></div>
@@ -690,9 +690,14 @@ const RoutingUnifiedPage = (() => {
             return;
         }
         const allSel = visible.every(r => selected.has(r.id));
-        box.innerHTML = `<div class="card"><table class="table">
+        // table-layout: fixed (общий .table) без colgroup делил ширину
+        // поровну на шесть колонок — и кнопки «Применить/Изменить/✕» не
+        // влезали в свою шестую часть, вылезая за край карточки.
+        box.innerHTML = `<div class="card"><table class="table ru-table">
+            <colgroup><col class="ru-col-sel"><col><col class="ru-col-what">
+                <col class="ru-col-via"><col class="ru-col-check"><col class="ru-col-act"></colgroup>
             <thead><tr>
-                <th style="width:24px;"><input type="checkbox" data-action="selectAll"
+                <th><input type="checkbox" data-action="selectAll"
                     title="Выбрать все видимые" ${allSel ? 'checked' : ''}></th>
                 <th>Маршрут</th><th>Что</th><th>Через</th>
                 <th>Проверка</th><th></th>
@@ -974,12 +979,12 @@ const RoutingUnifiedPage = (() => {
                        ${selected.has(r.id) ? 'checked' : ''}></td>
             <td>${enabledDot} <strong>${esc(r.name)}</strong> ${ovBadge}
                 ${r.failover_enabled ? '<span class="badge badge-info ru-badge" title="При сбое переключится на резервный метод">авто-переключение</span>' : ''}</td>
-            <td style="font-size:12px;">${esc(trafficSummary(r))}
+            <td style="font-size:12px;" data-label="Что">${esc(trafficSummary(r))}
                 ${ignoredSelectorsNote(r)}</td>
-            <td style="font-size:12px;" title="${escAttr(active)}">
+            <td style="font-size:12px;" data-label="Через" title="${escAttr(active)}">
                 ${esc(methodLabel(active))}${active !== r.method ? ` <span class="text-muted">(основной: ${esc(methodLabel(r.method))})</span>` : ''}
                 ${(r.fallbacks||[]).length ? `<br><span class="text-muted" style="font-size:11px;">резерв: ${esc((r.fallbacks||[]).map(methodLabel).join(', '))}</span>` : ''}</td>
-            <td style="font-size:12px;">${check}</td>
+            <td style="font-size:12px;" data-label="Проверка">${check}</td>
             <td><div class="ru-actions">
                 ${scanBtn}
                 <button class="btn btn-ghost btn-sm" data-action="apply" data-id="${esc(r.id)}"

@@ -144,6 +144,14 @@ mihomo поддерживает: `ss` (shadowsocks), `ssr`, `snell`, `vmess`, `v
 
 ---
 
+**Генератор конфигов** (`core/vpngen`, скил `vpngen`) пишет для mihomo
+WARP/Proton как `type: wireguard` с `amnezia-wg-option` (jc/jmin/jmax,
+i1..i5; `version: 3` при AWG3-полях) и WARP MASQUE как `type: masque`
+(поля сверены с `adapter/outbound/masque.go` v1.19.32: `private-key` —
+SEC1 base64, `public-key` — **голый** base64 SPKI, не PEM; второй прокси с
+`network: h2` и группа `fallback`). Мастер настройки собирает из прокси
+конфиг с `tun` (`mhtunN`, `auto-route: false`) для единого слоя.
+
 ## 5. Proxy-groups
 
 Типы: `select`, `url-test`, `fallback`, `load-balance`, `relay`. Поля:

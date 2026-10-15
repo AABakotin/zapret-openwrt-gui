@@ -79,6 +79,8 @@ const SingboxDashboardPage = (() => {
 
             <div id="sb-instances"></div>
 
+            <details class="advanced-block" id="sb-advanced" style="margin-top:16px;">
+                <summary>Ручная настройка маршрутизации — для опытных <span class="text-muted">(FakeIP, kernel-стек, TProxy, TUN)</span></summary>
             <div class="card" id="sb-fakeip" style="margin-top:16px;">
                 <div class="card-title">Умный доменный роутинг (FakeIP)</div>
                 <div id="sb-fakeip-body" style="margin-top:8px;">
@@ -107,6 +109,8 @@ const SingboxDashboardPage = (() => {
                 </div>
             </div>
 
+            </details>
+
             <div class="card" id="sb-watchdog" style="margin-top:16px;">
                 <div class="card-title">Проверка соединения (авто-перезапуск)</div>
                 <div id="sb-watchdog-body" style="margin-top:8px;">
@@ -114,6 +118,7 @@ const SingboxDashboardPage = (() => {
                 </div>
             </div>
         `;
+        if (typeof Wizard !== 'undefined') Wizard.mountBanner(container, 'singbox');
         refresh();
         startPolling();
     }

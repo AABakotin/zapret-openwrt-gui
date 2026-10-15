@@ -5489,8 +5489,40 @@ body.expert-mode .expert-note { display: none !important; }
 .ru-ok { color: var(--success); }
 .ru-fail { color: var(--error); }
 .ru-badge { text-transform: none; letter-spacing: 0; margin-left: 4px; }
-.ru-actions { display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap; min-width: 250px; }
-@media (max-width: 768px) { .ru-actions { min-width: 0; justify-content: flex-start; } }
+/* Кнопки строки маршрута помещаются в свою колонку (ширины — colgroup
+   ниже) и переносятся внутри неё, а не вылезают за край карточки. */
+.ru-actions { display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap; }
+.ru-actions .btn { white-space: nowrap; }
+.ru-table .ru-col-sel { width: 34px; }
+.ru-table .ru-col-what { width: 17%; }
+.ru-table .ru-col-via { width: 20%; }
+.ru-table .ru-col-check { width: 13%; }
+.ru-table .ru-col-act { width: 236px; }
+/* Шапка «Маршрутизации»: заголовок, под ним — одна ровная строка
+   действий, главная «+ Маршрут» первой (раньше она одна уезжала на
+   вторую строку, а остальные кнопки рассыпались по ширине). */
+.ru-header { flex-direction: column; align-items: stretch; }
+.ru-header > div:first-child { flex: 0 0 auto; min-width: 0; }
+.ru-header .page-actions { justify-content: flex-start; gap: 6px 8px; }
+.ru-header .page-actions .btn { white-space: nowrap; }
+#ru-banners .btn, #ru-banners select { white-space: nowrap; }
+/* Слова в ячейках не рвём посередине («проверяетс/я»). */
+.ru-table td { word-break: normal; overflow-wrap: break-word; }
+@media (max-width: 1100px) {
+    /* Таблица маршрутов — карточками уже на средней ширине: шесть колонок
+       рядом с сайдбаром сжимались, кнопки вставали столбиком, а на 390px
+       заголовки рвались до «Маршр/ут», «Чт/о». */
+    .ru-table colgroup, .ru-table thead { display: none; }
+    .ru-table, .ru-table tbody, .ru-table tr, .ru-table td { display: block; width: 100%; }
+    .ru-table tr { position: relative; padding: 10px 0 10px 30px; border-bottom: 1px solid var(--border); }
+    .ru-table tr:last-child { border-bottom: none; }
+    .ru-table td { padding: 2px 0; border: none; }
+    .ru-table td:first-child { position: absolute; left: 0; top: 10px; width: auto; }
+    .ru-table td[data-label]::before {
+        content: attr(data-label) ": "; color: var(--text-muted); font-size: 11px;
+    }
+    .ru-actions { justify-content: flex-start; margin-top: 6px; }
+}
 
 /* ===== DNS для отдельных доменов ===== */
 .dr-form {
@@ -5656,3 +5688,11 @@ body.expert-mode .expert-note { display: none !important; }
     .wizard-step span:not(.wizard-num) { display: none; }
     .wizard-step.active span { display: inline; }
 }
+/* Свёрнутые «для опытных» блоки на страницах движков. */
+.advanced-block > summary {
+    cursor: pointer; padding: 12px 16px; border-radius: var(--radius);
+    background: var(--bg-card); border: 1px solid var(--border);
+    color: var(--text-primary); font-weight: 500;
+}
+.advanced-block[open] > summary { margin-bottom: 12px; }
+.advanced-block > .card:first-of-type { margin-top: 0 !important; }

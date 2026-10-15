@@ -90,6 +90,7 @@ const UsquePage = (() => {
                         <button class="btn btn-primary" id="usque-btn-register">Зарегистрировать WARP</button>
                         <button class="btn" id="usque-btn-import">Импортировать конфиг</button>
                         <button class="btn" id="usque-btn-refresh">Обновить</button>
+                        <a class="btn btn-ghost" href="#vpngen?service=warp-masque&target=usque">Генератор конфигов</a>
                         <div class="form-hint" style="margin-top:8px;">
                             Регистрация создаёт профиль с ключами вашей WARP-сессии
                             в <code>/opt/etc/zapret-gui/usque/</code>. Можно завести несколько
@@ -114,6 +115,7 @@ const UsquePage = (() => {
                 </div>
             </div>
         `;
+        if (typeof Wizard !== 'undefined') Wizard.mountBanner(container, 'usque');
 
         // MR-69: addEventListener вместо onclick
         document.getElementById("usque-btn-register").addEventListener("click", _register);

@@ -559,7 +559,7 @@ const VpnGenPage = (() => {
                 <h1 class="page-title">Генератор конфигов</h1>
                 <p class="text-muted" style="margin:4px 0 0 0;">
                     WARP и Proton VPN для AmneziaWG, WARP/MASQUE, sing-box и mihomo —
-                    за пять шагов, без сторонних сайтов.</p>
+                    за пару шагов, без сторонних сайтов.</p>
             </div>
             <div class="card" id="vg-root"><div class="text-muted">Загрузка…</div></div>`;
         const root = container.querySelector('#vg-root');

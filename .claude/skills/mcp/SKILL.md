@@ -188,6 +188,7 @@ scope, mutating, файл, аргументы), имя в README и число �
 | `core/lua_capture.py` | **не в пакете MCP**: lua-дамп движка — `--writable` для стратегий с `pcap`, вставка `pcap` в профили argv, разбор и удаление дампов |
 | `core/mcp/tools/jobs.py` | `job_wait` — ожидание конца долгой операции вместо опроса в цикле |
 | `core/mcp/tools/memory.py` | `strategy_memory` — что уже срабатывало на домене в этой сети |
+| `core/mcp/tools/vpngen.py` | генератор конфигов WARP/Proton: `vpngen_options`, `vpngen_proton_servers`, `vpngen_generate` (ключи скрыты; снимок `generated_config` — откат удаляет созданное) |
 | `core/strategy_memory.py` | **не в пакете MCP**: память подбора — файл рядом с `settings.json`, метка сети, наблюдения «домен + argv + чем кончилось» |
 | `core/catalog_export.py` | **не в пакете MCP и без I/O**: argv → секция `catalogs/*.txt` с проверкой round-trip |
 | `core/agent_runner.py` | **не в пакете MCP**: встроенный агент — цикл «модель → инструмент → модель» поверх `registry.call` |

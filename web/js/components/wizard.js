@@ -153,5 +153,25 @@ const Wizard = (() => {
         return api;
     }
 
-    return { create, esc };
+    // Плашка «настроить по шагам» под заголовком страницы движка: новичок
+    // попадает в мастер, а экспертный интерфейс остаётся на месте.
+    function mountBanner(container, engine, text) {
+        if (!container) return;
+        const header = container.querySelector('.page-header');
+        if (!header || container.querySelector('.wizard-banner')) return;
+        const box = document.createElement('div');
+        box.className = 'note-box wizard-banner';
+        box.style.display = 'flex';
+        box.style.flexWrap = 'wrap';
+        box.style.gap = '10px';
+        box.style.alignItems = 'center';
+        box.style.justifyContent = 'space-between';
+        box.innerHTML = `<span>${esc(text || 'Первый раз? Мастер настроит всё по шагам'
+                + ' — от установки до маршрутизации.')}</span>
+            <a class="btn btn-primary btn-sm"
+               href="#setup-wizard?engine=${encodeURIComponent(engine)}">Настроить по шагам →</a>`;
+        header.insertAdjacentElement('afterend', box);
+    }
+
+    return { create, esc, mountBanner };
 })();

@@ -374,6 +374,8 @@ make upstream-offline    # только локальные сверки (идё�
 | **sing-box** | `singbox_platform`, `singbox_detector`, `singbox_installer`, `singbox_manager`, `singbox_autostart`, `singbox_config` (парсер/валидатор/билдеры outbound'ов + `make_urltest_outbound`/`make_selector_outbound`/`wrap_in_group`), `singbox_transparent` (iptables TProxy/Redirect/Hybrid + `scope='self'` для ПК с 1 NIC), `singbox_transparent_nft` (nftables), `singbox_fakeip` (TUN+FakeIP «умный доменный роутинг»), `singbox_watchdog` (авто-рестарт зависшего инстанса по Clash API). |
 | **mihomo** | `mihomo_platform`, `mihomo_detector`, `mihomo_installer`, `mihomo_manager`, `mihomo_autostart`, `clash_yaml` (clash-YAML → sing-box outbound + эмиттер/URI-конвертеры), `mihomo_proxies` (прокси-таблица + Clash API), `mihomo_proxy_tester` (TCP-отсев + e2e через движок). |
 | **AmneziaWG** | `awg_platform`, `awg_detector`, `awg_installer`, `awg_keenetic_setup`, `awg_manager`, `awg_config` (парсер `.conf`), `awg_init_script`, `awg_autostart_manager`, `awg_watchdog` (авто-реконнект), `warp_generator`/`warp_importer`/`awg_warp_in_warp` (Cloudflare WARP). |
+| **Генератор конфигов** | `vpngen/` — WARP (WireGuard и MASQUE) и Proton VPN для AWG/usque/sing-box/mihomo: `keys` (X25519/Ed25519/P-256 на чистом Python), `net` (транспорт «напрямую/обход/авто»), `presets`, `warp`, `proton`, `render`, `generate` (оркестратор, сохранение без перезаписи). Скил `vpngen`. |
+| **Мастер настройки** | `setup_wizard` — «одна кнопка» для новичка: конфиг (генератор/ссылка/текст/существующий; для sing-box/mihomo — новый с TUN) → старт → автозапуск → маршрут единого слоя. UI — `web/js/pages/setup_wizard.js` на общем `components/wizard.js`. |
 
 ### 5.5 Подписки и пул серверов
 

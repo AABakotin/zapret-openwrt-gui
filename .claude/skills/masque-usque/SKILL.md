@@ -656,6 +656,18 @@ usque nativetun --config <path> --interface-name <iface> --no-iproute2
 > пространство нумерации (§2). Раньше здесь был тег стороннего пакета
 > (`v0.3.0`), и «доступно обновление» горело всегда.
 
+### 8.0 Второй путь к сессии — генератор `core/vpngen`
+
+Помимо `usque register` сессию usque умеет получать генератор конфигов
+(скил `vpngen`): тот же API (`v0a4471`, curve25519 → PATCH на
+secp256r1/masque), но ключ P-256 создаётся в Python, а запрос идёт через
+транспорт генератора (`auto`/обход). Результат — тот же `config.json`,
+сохраняется через `import_config`. Сессия из «сервис-генератора»
+(`source=service`) содержит `id`/`access_token` = `"service"`: туннелю они
+не нужны, но `usque account/enroll` с ней не работают. Мастер настройки
+(`core/setup_wizard.py`) для usque всегда идёт этим путём и затем вешает
+маршрут `warp:<iface>`.
+
 ### 8.1 «Регистрировать через» — когда режут Cloudflare
 
 Симптом: `Failed to register: ... net/http: TLS handshake timeout`. До

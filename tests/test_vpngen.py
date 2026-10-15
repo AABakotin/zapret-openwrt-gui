@@ -176,6 +176,20 @@ class TestProtonImport(unittest.TestCase):
         self.assertEqual(proton.from_config(text, port=443)["endpoint_port"],
                          443)
 
+    def test_rejects_psk_and_many_peers(self):
+        text, _ = _proton_conf()
+        psk = text.replace("AllowedIPs", "PresharedKey = %s\nAllowedIPs" % PEER)
+        two = text + "\n[Peer]\nPublicKey = %s\nEndpoint = 1.1.1.1:51820\n" % PEER
+        for bad in (psk, two):
+            with self.assertRaises(net.GenError):
+                proton.from_config(bad)
+
+    def test_interface_comment_is_not_server(self):
+        text, _ = _proton_conf()
+        text = text.replace("# Key for router", "# ROUTER").replace(
+            "# NL-FREE#123\n", "")
+        self.assertEqual(proton.from_config(text)["server"]["name"], "")
+
     def test_ipv6_endpoint(self):
         text, _ = _proton_conf("[2a07:b944::1]:51820")
         self.assertEqual(proton.from_config(text)["endpoint_host"],
@@ -238,6 +252,46 @@ class TestCheckOutput(unittest.TestCase):
         opts = gen.normalize_options("warp", "masque", {})
         r = gen.check_output("usque", gen.render_target("usque", prof, opts))
         self.assertTrue(r["ok"], r)
+
+    def test_mihomo_with_geo_rules_not_run(self):
+        mgr = mock.Mock()
+        mgr._binary.return_value = "/opt/bin/mihomo"
+        text = self._gen("mihomo").replace("- MATCH,", "- GEOIP,CN,DIRECT\n- MATCH,")
+        with mock.patch("core.mihomo_manager.get_mihomo_manager",
+                        return_value=mgr):
+            r = gen.check_output("mihomo", text)
+        self.assertTrue(r["ok"], r)
+        mgr.validate_via_binary.assert_not_called()
+        self.assertIn("внешние базы", r["warnings"][0])
+
+    def test_singbox_check_uses_unique_private_tmp(self):
+        # Параллельные проверки не должны писать в один файл, а сам файл
+        # (в нём приватный ключ) — быть читаемым всеми.
+        import os
+        import stat
+        import tempfile
+        from core import singbox_manager as sm
+        seen = []
+
+        def fake_run(args, timeout=15, input_text=None):
+            path = args[-1]
+            seen.append((path, stat.S_IMODE(os.stat(path).st_mode),
+                         open(path).read()))
+            return 0, "", ""
+        with tempfile.TemporaryDirectory() as d:
+            mgr = sm.SingboxManager.__new__(sm.SingboxManager)
+            plat = mock.Mock(run_dir=d)
+            with mock.patch.object(sm.SingboxManager, "_binary",
+                                   return_value="/bin/sing-box"), \
+                 mock.patch.object(sm.SingboxManager, "_platform",
+                                   return_value=plat), \
+                 mock.patch.object(sm, "_run", side_effect=fake_run):
+                self.assertTrue(mgr.check_text("{\"a\":1}")["ok"])
+                self.assertTrue(mgr.check_text("{\"b\":2}")["ok"])
+            self.assertEqual(os.listdir(d), [])            # убраны
+        self.assertNotEqual(seen[0][0], seen[1][0])
+        self.assertEqual([m for _p, m, _t in seen], [0o600, 0o600])
+        self.assertEqual([t for _p, _m, t in seen], ['{"a":1}', '{"b":2}'])
 
     def test_binary_verdict_wins(self):
         mgr = mock.Mock()
@@ -302,6 +356,16 @@ class TestCloudflareBlocked(unittest.TestCase):
         self.assertFalse(e.network)                 # «Авто» не перебирает
         self.assertIn("1010", str(e))
         self.assertNotIn("browser_signature", str(e))
+
+    def test_ip_ban_tries_next_transport(self):
+        # 1009 (страна) — от адреса зависит: «Авто» должно пробовать обход.
+        opener = mock.Mock()
+        opener.open.side_effect = self._http_error('{"error_code":1009}')
+        with mock.patch.object(net, "_opener", return_value=opener):
+            with self.assertRaises(net.GenError) as cm:
+                net.request_json("GET", "https://x.example/a")
+        self.assertTrue(cm.exception.network)
+        self.assertFalse(cm.exception.blocked)
 
     def test_plain_403_is_not_blocked(self):
         self.assertEqual(net._cf_access_denied('{"error":"nope"}'), "")

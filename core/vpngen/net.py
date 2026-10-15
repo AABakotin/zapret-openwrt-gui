@@ -138,17 +138,23 @@ def request_json(method: str, url: str, *, body=None, headers=None,
                 text = e.read().decode("utf-8", "replace")[:400]
             except Exception:
                 text = ""
-            blocked = _cf_access_denied(text)
-            if blocked:
-                # Cloudflare 1010/1020/1006…: владелец сервиса закрыл его
-                # для программ (пускает только браузер со своей страницы).
-                # Это не блокировка провайдера — обход не поможет, поэтому
-                # ошибка не «сетевая» и «Авто» дальше не перебирает.
+            code = _cf_access_denied(text)
+            if code == "1010":
+                # Владелец сервиса закрыл его для программ по сигнатуре
+                # клиента (пускает только браузер). От адреса не зависит —
+                # обход не поможет, поэтому ошибка не «сетевая» и «Авто»
+                # дальше не перебирает.
                 raise GenError("%s не принимает запросы от программ"
-                               " (Cloudflare %s: доступ закрыт владельцем"
+                               " (Cloudflare 1010: доступ закрыт владельцем"
                                " сервиса, обход и VPN тут не помогут)"
-                               % (host, blocked), status=e.code,
-                               blocked=True)
+                               % host, status=e.code, blocked=True)
+            if code:
+                # 1005–1009, 1012, 1020: запрет по адресу, сети или стране —
+                # через туннель с другим адресом может пройти, поэтому
+                # «Авто» пробует следующий способ.
+                raise GenError("%s закрыл доступ с этого адреса (Cloudflare"
+                               " %s) — нужен выход через обход/VPN"
+                               % (host, code), status=e.code, network=True)
             if e.code == 429 or "1015" in text:
                 raise GenError("%s: слишком много запросов (HTTP %d) —"
                                " подождите несколько минут" % (host, e.code),

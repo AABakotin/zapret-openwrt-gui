@@ -455,6 +455,12 @@ def _check_singbox(text: str) -> dict:
             [chk.get("error") or "sing-box отверг конфиг"], "checked_by": by}
 
 
+_EXTERNAL_DATA = re.compile(
+    r"\b(?:GEOIP|GEOSITE|RULE-SET|SRC-GEOIP|GEOIP6)\s*,|"
+    r"^\s*(?:rule-providers|proxy-providers|geox-url|geodata-mode)\s*:",
+    re.M | re.I)
+
+
 def _check_mihomo(text: str) -> dict:
     from core.clash_yaml import parse_yaml
     by = ["разбор YAML"]
@@ -473,6 +479,13 @@ def _check_mihomo(text: str) -> dict:
         return {"errors": [], "checked_by": by,
                 "warnings": ["mihomo не установлен — проверен только"
                              " синтаксис, без самого движка"]}
+    if _EXTERNAL_DATA.search(text):
+        # geo-базы и провайдеры mihomo -t может пойти скачивать — а
+        # проверка обещает «без сети». Такой конфиг не запускаем.
+        return {"errors": [], "checked_by": by,
+                "warnings": ["конфиг ссылается на внешние базы (GEOIP/"
+                             "GEOSITE/провайдеры) — mihomo -t не запускали,"
+                             " проверен только синтаксис"]}
     chk = mgr.validate_via_binary("", text=text)
     by.append("mihomo -t")
     return {"errors": [] if chk.get("ok") else

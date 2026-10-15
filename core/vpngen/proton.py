@@ -197,7 +197,14 @@ def from_config(text: str, *, port: int = 0) -> dict:
     peers = cfg.get("peers") or []
     if not peers:
         raise GenError("в конфиге нет секции [Peer]")
+    if len(peers) > 1:
+        raise GenError("в конфиге %d секций [Peer] — нужен конфиг одного"
+                       " сервера Proton" % len(peers))
     peer = peers[0]
+    if str(peer.get("PresharedKey") or "").strip():
+        # Рендеры PresharedKey не переносят — туннель не поднялся бы.
+        raise GenError("конфиг с PresharedKey не поддерживается — скачайте"
+                       " в аккаунте Proton обычный WireGuard-конфиг")
     priv = str(iface.get("PrivateKey") or "").strip()
     pub = str(peer.get("PublicKey") or "").strip()
     for label, value in (("PrivateKey", priv), ("PublicKey", pub)):
@@ -220,8 +227,10 @@ def from_config(text: str, *, port: int = 0) -> dict:
             v6 = ip
     if not v4:
         raise GenError("в конфиге нет IPv4-адреса (Address)")
-    m = _SERVER_COMMENT.search(text.split("[Peer]", 1)[-1]) \
-        or _SERVER_COMMENT.search(text)
+    # Имя сервера — из комментария в секции [Peer] («# NL-FREE#123»);
+    # комментарии [Interface] («# ROUTER») — не сервер.
+    peer_part = re.split(r"(?im)^\s*\[Peer\]\s*$", text, maxsplit=1)
+    m = _SERVER_COMMENT.search(peer_part[1]) if len(peer_part) > 1 else None
     name = m.group(1).strip() if m else ""
     return {
         "provider": "proton", "protocol": "wireguard", "source": "import",

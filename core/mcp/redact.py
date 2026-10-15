@@ -92,7 +92,7 @@ URL_KEY_RE = re.compile(r"(?i)subscri|(?:^|_)(?:url|link|endpoint)s?$")
 # ещё и текстовая чистка (``token=…`` внутри строки).
 TEXT_KEYS = frozenset((
     "stdout", "stderr", "output", "command", "cmd", "log", "log_tail",
-    "tail", "message", "line", "lines",
+    "tail", "message", "line", "lines", "errors", "warnings",
     # Сюда приезжает текст ЧУЖИХ программ: последняя строка лога движка
     # (`last_error` в tunnels_status), сообщение упавшего вызова,
     # cmdline постороннего процесса в находке диагностики. Секрет в

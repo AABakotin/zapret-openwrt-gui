@@ -189,12 +189,18 @@ const Wizard = (() => {
             timer = setTimeout(() => onText(textarea.value), 600);
         };
         textarea.addEventListener('input', fire);
+        // Перехватываем только файлы: перетаскивание выделенного текста
+        // работает как обычно.
+        const hasFiles = (e) => !!(e.dataTransfer && Array.from(e.dataTransfer.types || [])
+            .includes('Files'));
         textarea.addEventListener('dragover', (e) => {
+            if (!hasFiles(e)) return;
             e.preventDefault();
             textarea.classList.add('drop-target');
         });
         textarea.addEventListener('dragleave', () => textarea.classList.remove('drop-target'));
         textarea.addEventListener('drop', (e) => {
+            if (!hasFiles(e)) return;
             e.preventDefault();
             textarea.classList.remove('drop-target');
             const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];

@@ -113,6 +113,15 @@ _FALLBACK_ALIASES = {
     "ACTIVE_DISCORD_UDP": "@bin/active_discord_udp.bin",
     "game_udp":          "@bin/active_game_udp.bin",
     "ACTIVE_GAME_UDP":   "@bin/active_game_udp.bin",
+    # Блобы стратегий rndnaame/nfqws-menu. Их «tls_max» (664 байта) — это
+    # ClientHello www.onetrust.com, а не наш tls_max (max.ru, 193 байта):
+    # каталоги nfqws_menu зовут его по имени файла.
+    "tls_clienthello_www_onetrust_com":
+        "@bin/tls_clienthello_www_onetrust_com.bin",
+    "quic_5ka":          "@bin/quic_initial_5ka_ru.bin",
+    "quic_dbankcloud":   "@bin/quic_initial_dbankcloud_ru.bin",
+    "quic_lordfilm":     "@bin/quic_initial_lordfilm.bin",
+    "tls_lordfilm":      "@bin/tls_clienthello_lordfilm.bin",
     "quic_test":    "@bin/quic_test_00.bin",
     "fake_tls":     "@bin/fake_tls_1.bin",
     "fake_tls_1":   "@bin/fake_tls_1.bin",

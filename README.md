@@ -389,6 +389,15 @@ GUI видит nfqws2 и тогда, когда его поднял не он, �
   Wardogs (UDP 4192). Стратегию из того чата можно вставить как есть: имена
   блобов `tls_clienthello`, `quic_initial`, `stun`, `stun2`, `tls_sochi`,
   `game_udp`, `discord_udp` GUI знает и объявит сам.
+- **стратегии [nfqws-menu](https://github.com/rndnaame/nfqws-menu)**: 27
+  полных пресетов «nfqws-menu · …» — порты всех `general (ALT…)`,
+  `FAKE TLS AUTO…`, `SIMPLE FAKE…`, `EXP` из zapret-discord-youtube 1.10.3
+  на nfqws2 и личные конфиги участников чата nfqws2-keenetic (MartinBacker,
+  Uvvi2, eduncey, hardcorp74, krushaaa). Их приёмы, которых в каталоге ещё
+  не было, — в подборе отдельно (TLS, HTTP, QUIC, голос Discord); повторы
+  по эффективным аргументам не добавлены. Многие из них маскируют фейк
+  через TCP timestamps (`tcp_ts`): на Windows-клиенте их надо включить
+  (`netsh interface tcp set global timestamps=enabled`).
 - если профиль стратегии ловит порт, которого нет в перехвате
   («Настройки → nfqws → TCP/UDP-порты»), журнал при запуске назовёт его:
   например, DoT — TCP 853, Wardogs — UDP 4192. Без порта в настройках такой
@@ -2179,6 +2188,10 @@ GUI сам по себе — это Python/JS-код; «тяжёлые» бин�
   MARK_PROCESSED/EXCLUDE, правила на оба направления, NAT для UDP,
   тюнинг conntrack) портирована из их init-скрипта; идеи интеграции с
   Keenetic.
+- [rndnaame/nfqws-menu](https://github.com/rndnaame/nfqws-menu) —
+  стратегии nfqws2 (`strategies/nfqws2`, порты Flowseal
+  zapret-discord-youtube и конфиги из чата nfqws2-keenetic) в
+  `catalogs/builtin/nfqws_menu.txt` и `catalogs/advanced/*_nfqws_menu.txt`.
 - `youtubediscord/zapret` — каталоги стратегий и winws2-пресеты, из
   которых собраны наши `catalogs/`. В августе 2026 репозиторий снят
   вместе со всей организацией (404), поэтому ссылки нет и обновлять

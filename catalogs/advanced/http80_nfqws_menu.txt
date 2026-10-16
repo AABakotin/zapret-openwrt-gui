@@ -1,0 +1,131 @@
+# Приёмы HTTP (порт 80) из rndnaame/nfqws-menu (strategies/nfqws2, коммит
+# 424708d): порты стратегий zapret-discord-youtube 1.10.3 (Flowseal)
+# и личные конфиги из чата nfqws2-keenetic. Взяты только приёмы, которых
+# у нас ещё нет: дубликаты по эффективным аргументам (параметры lua без
+# учёта порядка, блобы — по содержимому файла, strategy=N и dir=out
+# отброшены) уже лежат в других каталогах. Полные пресеты этих конфигов —
+# builtin/nfqws_menu.txt. Сканер оборачивает их под цель (--payload=http_req и т.д.).
+
+[nm_http_alt]
+name = nfqws-menu ALT: fake onetrust ×6 + fakedsplit ×6
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём HTTP (порт 80) из «ALT: fake + fakedsplit, ts».
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=6:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fakedsplit:pattern=0x00:repeats=6:tcp_ts=-600000:tcp_ts_up
+
+[nm_http_alt10]
+name = nfqws-menu ALT10: fake onetrust ×6
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём HTTP (порт 80) из «ALT10: fake 4pda, ts».
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=6:tcp_ts=-600000:tcp_ts_up
+
+[nm_http_alt11]
+name = nfqws-menu ALT11: fake onetrust ×8 + multisplit pos=1 seqovl=664
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём HTTP (порт 80) из «ALT11: fake + multisplit seqovl=664».
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=664:seqovl_pattern=tls_clienthello_www_onetrust_com
+
+[nm_http_alt2]
+name = nfqws-menu ALT2: multisplit pos=2 seqovl=652
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём HTTP (порт 80) из «ALT2: multisplit seqovl=652».
+--lua-desync=multisplit:pos=2:seqovl=652:seqovl_pattern=tls_clienthello
+
+[nm_http_alt3]
+name = nfqws-menu ALT3: fake onetrust + hostfakesplit ya.ru
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём HTTP (порт 80) из «ALT3: fake + hostfakesplit, ts».
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:tcp_ts=-600000:tcp_ts_up
+--lua-desync=hostfakesplit:host=ya.ru:tcp_ts=-600000:tcp_ts_up
+
+[nm_http_alt4]
+name = nfqws-menu ALT4: fake onetrust ×6 + multisplit
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём HTTP (порт 80) из «ALT4: fake + multisplit, badseq +1000».
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=6:tcp_seq=1000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multisplit
+
+[nm_http_alt6]
+name = nfqws-menu ALT6: multisplit pos=1 seqovl=681
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём HTTP (порт 80) из «ALT6: multisplit seqovl=681 pos=1».
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello
+
+[nm_http_alt7]
+name = nfqws-menu ALT7: multisplit pos=2,sniext+1 seqovl=679
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём HTTP (порт 80) из «ALT7: multisplit pos=2,sniext+1 seqovl=679».
+--lua-desync=multisplit:pos=2,sniext+1:seqovl=679:seqovl_pattern=tls_clienthello
+
+[nm_http_alt8]
+name = nfqws-menu ALT8: fake onetrust ×6
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём HTTP (порт 80) из «ALT8: встроенный fake, badseq +2».
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=6:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+
+[nm_http_alt9]
+name = nfqws-menu ALT9: hostfakesplit ozon.ru ×4
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём HTTP (порт 80) из «ALT9: hostfakesplit ozon.ru, ts + md5sig».
+--lua-desync=hostfakesplit:host=ozon.ru:repeats=4:tcp_ts=-600000:tcp_md5:tcp_ts_up
+
+[nm_http_exp]
+name = nfqws-menu EXP: fake onetrust ×4 + multisplit pos=1 seqovl=480
+author = Flowseal → rndnaame/nfqws-menu
+label = experimental
+description = Приём HTTP (порт 80) из «EXP: fake + multisplit seqovl=480 (stun2)».
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=4:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=480:seqovl_pattern=stun2
+
+[nm_http_fake_tls_auto]
+name = nfqws-menu FAKE TLS AUTO: fake onetrust ×11 + multidisorder pos=1,midsld
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём HTTP (порт 80) из «FAKE TLS AUTO: fake ×11 + multidisorder».
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=11:tcp_seq=-10000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multidisorder:pos=1,midsld
+
+[nm_http_fake_tls_auto_alt]
+name = nfqws-menu FAKE TLS AUTO ALT: fake onetrust ×8 + fakedsplit pos=1 ×8
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём HTTP (порт 80) из «FAKE TLS AUTO ALT: fake + fakedsplit pos=1».
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=8:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+--lua-desync=fakedsplit:pos=1:repeats=8:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+
+[nm_http_fake_tls_auto_alt2]
+name = nfqws-menu FAKE TLS AUTO ALT2: fake onetrust ×8 + multisplit pos=1 seqovl=681
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём HTTP (порт 80) из «FAKE TLS AUTO ALT2: fake + multisplit, badseq 10000000».
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=8:tcp_seq=10000000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello
+
+[nm_http_fake_tls_auto_alt3]
+name = nfqws-menu FAKE TLS AUTO ALT3: fake onetrust ×8 + multisplit pos=1 seqovl=681
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём HTTP (порт 80) из «FAKE TLS AUTO ALT3: fake + multisplit, ts».
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello
+
+[nm_http_krushaaa]
+name = nfqws-menu krushaaa: fake stun ×8 + fakedsplit pos=midsld seqovl=417 + fake tls_lordfilm ×8 + multisplit pos=100,midsld-2,endhost-4 seqovl=681 ×8
+author = krushaaa (rndnaame/nfqws-menu)
+label = experimental
+description = Приём HTTP (порт 80) из «krushaaa: fakedsplit + multisplit на блобах lordfilm».
+--lua-desync=fake:blob=stun:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fakedsplit:pos=midsld:tcp_ack=-66000:tcp_ts_up:seqovl=417:seqovl_pattern=0x1603010000
+--lua-desync=fake:blob=tls_lordfilm:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=100,midsld-2,endhost-4:repeats=8:seqovl=681:seqovl_pattern=tls_clienthello

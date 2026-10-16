@@ -1,0 +1,21 @@
+# Приёмы QUIC из rndnaame/nfqws-menu (strategies/nfqws2, коммит
+# 424708d): порты стратегий zapret-discord-youtube 1.10.3 (Flowseal)
+# и личные конфиги из чата nfqws2-keenetic. Взяты только приёмы, которых
+# у нас ещё нет: дубликаты по эффективным аргументам (параметры lua без
+# учёта порядка, блобы — по содержимому файла, strategy=N и dir=out
+# отброшены) уже лежат в других каталогах. Полные пресеты этих конфигов —
+# builtin/nfqws_menu.txt. Сканер оборачивает их под цель (--filter-udp=443 --filter-l7=quic --payload=quic_initial).
+
+[nm_quic_hardcorp74]
+name = nfqws-menu hardcorp74: fake quic_5ka ×6
+author = hardcorp74 (rndnaame/nfqws-menu)
+label = experimental
+description = Приём QUIC из «hardcorp74: circular с ClientHello sochi.park».
+--lua-desync=fake:blob=quic_5ka:repeats=6
+
+[nm_quic_krushaaa]
+name = nfqws-menu krushaaa: fake quic_lordfilm ×11
+author = krushaaa (rndnaame/nfqws-menu)
+label = experimental
+description = Приём QUIC из «krushaaa: fakedsplit + multisplit на блобах lordfilm».
+--lua-desync=fake:blob=quic_lordfilm:repeats=11

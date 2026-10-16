@@ -1,0 +1,453 @@
+# Приёмы TLS из rndnaame/nfqws-menu (strategies/nfqws2, коммит
+# 424708d): порты стратегий zapret-discord-youtube 1.10.3 (Flowseal)
+# и личные конфиги из чата nfqws2-keenetic. Взяты только приёмы, которых
+# у нас ещё нет: дубликаты по эффективным аргументам (параметры lua без
+# учёта порядка, блобы — по содержимому файла, strategy=N и dir=out
+# отброшены) уже лежат в других каталогах. Полные пресеты этих конфигов —
+# builtin/nfqws_menu.txt. Сканер оборачивает их под цель (--filter-tcp/--filter-l7/--payload=tls_client_hello/--hostlist).
+
+[nm_tls_martinbacker_googlevideo_com]
+name = nfqws-menu MartinBacker · googlevideo.com: fake (SNI www.google.com) + hostfakesplit www.google.com
+author = MartinBacker (rndnaame/nfqws-menu)
+label = experimental
+description = Приём TLS из «MartinBacker: circular из 7 приёмов + профили YouTube» (профиль googlevideo.com).
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+--lua-desync=hostfakesplit:host=www.google.com:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+
+[nm_tls_martinbacker_mobatek_net]
+name = nfqws-menu MartinBacker · mobatek.net: fake ×1 + multisplit pos=2
+author = MartinBacker (rndnaame/nfqws-menu)
+label = experimental
+description = Приём TLS из «MartinBacker: circular из 7 приёмов + профили YouTube» (профиль mobatek.net).
+--lua-desync=fake:blob=fake_default_tls:tcp_md5:tls_mod=rnd,dupsid,padencap:repeats=1
+--lua-desync=multisplit:pos=2
+
+[nm_tls_martinbacker_s4]
+name = nfqws-menu MartinBacker · №4: fake (SNI www.google.com) + multidisorder pos=1,midsld,sniext+1,endhost-2,-10 seqovl=1
+author = MartinBacker (rndnaame/nfqws-menu)
+label = experimental
+description = Приём TLS из «MartinBacker: circular из 7 приёмов + профили YouTube» (стратегия 4 из circular).
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:tcp_ts=-1000
+--lua-desync=multidisorder:pos=1,midsld,sniext+1,endhost-2,-10:seqovl=1:seqovl_pattern=tls_clienthello:tcp_ts_up
+
+[nm_tls_martinbacker_s5]
+name = nfqws-menu MartinBacker · №5: per_instance_condition + fake tls_google + fake tls_google + multidisorder pos=1,midsld,sniext+1,endhost-2,-10 seqovl=1
+author = MartinBacker (rndnaame/nfqws-menu)
+label = experimental
+description = Приём TLS из «MartinBacker: circular из 7 приёмов + профили YouTube» (стратегия 5 из circular).
+--lua-desync=per_instance_condition
+--lua-desync=fake:blob=tls_clienthello:tcp_ts=-1000:cond=cond_tcp_has_ts
+--lua-desync=fake:blob=tls_clienthello:ip_ttl=7:ip6_ttl=4:cond=cond_tcp_has_ts:cond_neg
+--lua-desync=multidisorder:pos=1,midsld,sniext+1,endhost-2,-10:seqovl=1:seqovl_pattern=tls_clienthello:tcp_ts_up
+
+[nm_tls_martinbacker_s6]
+name = nfqws-menu MartinBacker · №6: per_instance_condition + fake tls_google (SNI fonts.google.com) + fake tls_google + multisplit pos=1 seqovl=336
+author = MartinBacker (rndnaame/nfqws-menu)
+label = experimental
+description = Приём TLS из «MartinBacker: circular из 7 приёмов + профили YouTube» (стратегия 6 из circular).
+--lua-desync=per_instance_condition
+--lua-desync=fake:blob=tls_clienthello:tls_mod=rnd,dupsid,sni=fonts.google.com:tcp_ts=-1000:cond=cond_tcp_has_ts
+--lua-desync=fake:blob=tls_clienthello:ip_ttl=7:ip6_ttl=4:cond=cond_tcp_has_ts:cond_neg
+--lua-desync=multisplit:pos=1:seqovl=336:seqovl_pattern=tls_clienthello:tcp_ts_up
+
+[nm_tls_martinbacker_s7]
+name = nfqws-menu MartinBacker · №7: multisplit pos=1 seqovl=582
+author = MartinBacker (rndnaame/nfqws-menu)
+label = experimental
+description = Приём TLS из «MartinBacker: circular из 7 приёмов + профили YouTube» (стратегия 7 из circular).
+--lua-desync=multisplit:pos=1:seqovl=582:seqovl_pattern=stun
+
+[nm_tls_alt_discord_media]
+name = nfqws-menu ALT · discord.media: fake tls_google ×6 + fakedsplit ×6
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT: fake + fakedsplit, ts» (профиль discord.media).
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fakedsplit:pattern=0x00:repeats=6:tcp_ts=-600000:tcp_ts_up
+
+[nm_tls_alt_google_youtube]
+name = nfqws-menu ALT · Google/YouTube: fake tls_google ×6 + fakedsplit ×6
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT: fake + fakedsplit, ts» (профиль Google/YouTube).
+--lua-desync=fake:blob=tls_google:repeats=6:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fakedsplit:pattern=0x00:repeats=6:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+
+[nm_tls_alt]
+name = nfqws-menu ALT: fake stun ×6 + fake tls_google ×6 + fakedsplit ×6
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT: fake + fakedsplit, ts».
+--lua-desync=fake:blob=stun:repeats=6:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fakedsplit:pattern=0x00:repeats=6:tcp_ts=-600000:tcp_ts_up
+
+[nm_tls_alt10_discord_media]
+name = nfqws-menu ALT10 · discord.media: fake tls_google ×6
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT10: fake 4pda, ts» (профиль discord.media).
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_ts=-600000:tcp_ts_up
+
+[nm_tls_alt10_google_youtube]
+name = nfqws-menu ALT10 · Google/YouTube: fake tls_google ×6
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT10: fake 4pda, ts» (профиль Google/YouTube).
+--lua-desync=fake:blob=tls_google:repeats=6:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+
+[nm_tls_alt10]
+name = nfqws-menu ALT10: fake stun ×6 + fake tls_4pda ×6
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT10: fake 4pda, ts».
+--lua-desync=fake:blob=stun:repeats=6:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fake:blob=tls_4pda:repeats=6:tcp_ts=-600000:tcp_ts_up
+
+[nm_tls_alt11_discord_media]
+name = nfqws-menu ALT11 · discord.media: fake tls_google ×8 + multisplit pos=1 seqovl=681
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT11: fake + multisplit seqovl=664» (профиль discord.media).
+--lua-desync=fake:blob=tls_google:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello
+
+[nm_tls_alt11_google_youtube]
+name = nfqws-menu ALT11 · Google/YouTube: fake tls_google ×8 + multisplit pos=1 seqovl=681
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT11: fake + multisplit seqovl=664» (профиль Google/YouTube).
+--lua-desync=fake:blob=tls_google:repeats=8:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello:ip_id=zero
+
+[nm_tls_alt11]
+name = nfqws-menu ALT11: fake stun2 ×8 + fake onetrust ×8 + multisplit pos=1 seqovl=664
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT11: fake + multisplit seqovl=664».
+--lua-desync=fake:blob=stun2:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=664:seqovl_pattern=tls_clienthello_www_onetrust_com
+
+[nm_tls_alt12_google_youtube]
+name = nfqws-menu ALT12 · Google/YouTube: hostfakesplit www.google.com
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT12: ALT11 + hostfakesplit для Google» (профиль Google/YouTube).
+--lua-desync=hostfakesplit:host=www.google.com:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+
+[nm_tls_alt12]
+name = nfqws-menu ALT12: fake stun ×8 + fake onetrust ×8 + multisplit pos=1 seqovl=664
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT12: ALT11 + hostfakesplit для Google».
+--lua-desync=fake:blob=stun:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=664:seqovl_pattern=tls_clienthello_www_onetrust_com
+
+[nm_tls_alt13_discord_media]
+name = nfqws-menu ALT13 · discord.media: fake tls_google ×7 + multisplit pos=1 seqovl=681
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT13: fake + hostfakesplit mail.ru, ts» (профиль discord.media).
+--lua-desync=fake:blob=tls_google:repeats=7:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello
+
+[nm_tls_alt13_google_youtube]
+name = nfqws-menu ALT13 · Google/YouTube: hostfakesplit www.google.com
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT13: fake + hostfakesplit mail.ru, ts» (профиль Google/YouTube).
+--lua-desync=hostfakesplit:host=www.google.com:tcp_ts=-600000:tcp_ts_up
+
+[nm_tls_alt13]
+name = nfqws-menu ALT13: fake tls_sochi ×5 + fake stun2 ×5 + hostfakesplit mail.ru
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT13: fake + hostfakesplit mail.ru, ts».
+--lua-desync=fake:blob=tls_sochi:repeats=5:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fake:blob=stun2:repeats=5:tcp_ts=-600000:tcp_ts_up
+--lua-desync=hostfakesplit:host=mail.ru:tcp_ts=-600000:tcp_ts_up
+
+[nm_tls_alt2_discord_media]
+name = nfqws-menu ALT2 · discord.media: multisplit pos=2 seqovl=652
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT2: multisplit seqovl=652» (профиль discord.media).
+--lua-desync=multisplit:pos=2:seqovl=652:seqovl_pattern=tls_clienthello
+
+[nm_tls_alt2_google_youtube]
+name = nfqws-menu ALT2 · Google/YouTube: multisplit pos=2 seqovl=652
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT2: multisplit seqovl=652» (профиль Google/YouTube).
+--lua-desync=multisplit:pos=2:seqovl=652:seqovl_pattern=tls_clienthello:ip_id=zero
+
+[nm_tls_alt3_discord_media]
+name = nfqws-menu ALT3 · discord.media: fake (SNI www.google.com) + hostfakesplit www.google.com
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT3: fake + hostfakesplit, ts» (профиль discord.media).
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:tcp_ts=-600000:tcp_ts_up
+--lua-desync=hostfakesplit:host=www.google.com:tcp_ts=-600000:tcp_ts_up
+
+[nm_tls_alt3]
+name = nfqws-menu ALT3: fake (SNI ya.ru) + hostfakesplit ya.ru
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT3: fake + hostfakesplit, ts».
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=ya.ru:tcp_ts=-600000:tcp_ts_up
+--lua-desync=hostfakesplit:host=ya.ru:tcp_ts=-600000:tcp_ts_up
+
+[nm_tls_alt4_discord_media]
+name = nfqws-menu ALT4 · discord.media: fake tls_google ×6 + multisplit
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT4: fake + multisplit, badseq +1000» (профиль discord.media).
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_seq=1000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multisplit
+
+[nm_tls_alt4_google_youtube]
+name = nfqws-menu ALT4 · Google/YouTube: fake tls_google ×6 + multisplit
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT4: fake + multisplit, badseq +1000» (профиль Google/YouTube).
+--lua-desync=fake:blob=tls_google:repeats=6:ip_id=zero:tcp_seq=1000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multisplit:ip_id=zero
+
+[nm_tls_alt4]
+name = nfqws-menu ALT4: fake stun ×6 + fake tls_google ×6 + multisplit
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT4: fake + multisplit, badseq +1000».
+--lua-desync=fake:blob=stun:repeats=6:tcp_seq=1000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_seq=1000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multisplit
+
+[nm_tls_alt5]
+name = nfqws-menu ALT5: syndata + multidisorder
+author = Flowseal → rndnaame/nfqws-menu
+label = experimental
+description = Приём TLS из «ALT5: syndata + multidisorder».
+--lua-desync=syndata
+--lua-desync=multidisorder
+
+[nm_tls_alt6_discord_media]
+name = nfqws-menu ALT6 · discord.media: multisplit pos=1 seqovl=681
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT6: multisplit seqovl=681 pos=1» (профиль discord.media).
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello
+
+[nm_tls_alt6_google_youtube]
+name = nfqws-menu ALT6 · Google/YouTube: multisplit pos=1 seqovl=681
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT6: multisplit seqovl=681 pos=1» (профиль Google/YouTube).
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello:ip_id=zero
+
+[nm_tls_alt7_discord_media]
+name = nfqws-menu ALT7 · discord.media: multisplit pos=2,sniext+1 seqovl=679
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT7: multisplit pos=2,sniext+1 seqovl=679» (профиль discord.media).
+--lua-desync=multisplit:pos=2,sniext+1:seqovl=679:seqovl_pattern=tls_clienthello
+
+[nm_tls_alt7_google_youtube]
+name = nfqws-menu ALT7 · Google/YouTube: multisplit pos=2,sniext+1 seqovl=679
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT7: multisplit pos=2,sniext+1 seqovl=679» (профиль Google/YouTube).
+--lua-desync=multisplit:pos=2,sniext+1:seqovl=679:seqovl_pattern=tls_clienthello:ip_id=zero
+
+[nm_tls_alt8_discord_media]
+name = nfqws-menu ALT8 · discord.media: fake ×6
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT8: встроенный fake, badseq +2» (профиль discord.media).
+--lua-desync=fake:blob=fake_default_tls:repeats=6:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+
+[nm_tls_alt8_google_youtube]
+name = nfqws-menu ALT8 · Google/YouTube: fake ×6
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT8: встроенный fake, badseq +2» (профиль Google/YouTube).
+--lua-desync=fake:blob=fake_default_tls:repeats=6:ip_id=zero:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+
+[nm_tls_alt9_discord_media]
+name = nfqws-menu ALT9 · discord.media: hostfakesplit www.google.com ×4
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT9: hostfakesplit ozon.ru, ts + md5sig» (профиль discord.media).
+--lua-desync=hostfakesplit:host=www.google.com:repeats=4:tcp_ts=-600000:tcp_ts_up
+
+[nm_tls_alt9_google_youtube]
+name = nfqws-menu ALT9 · Google/YouTube: hostfakesplit www.google.com ×4
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT9: hostfakesplit ozon.ru, ts + md5sig» (профиль Google/YouTube).
+--lua-desync=hostfakesplit:host=www.google.com:repeats=4:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+
+[nm_tls_alt9]
+name = nfqws-menu ALT9: hostfakesplit ozon.ru ×4
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «ALT9: hostfakesplit ozon.ru, ts + md5sig».
+--lua-desync=hostfakesplit:host=ozon.ru:repeats=4:tcp_ts=-600000:tcp_md5:tcp_ts_up
+
+[nm_tls_eduncey_s4]
+name = nfqws-menu eduncey · №4: fake tls_google (SNI www.google.com) + hostfakesplit www.google.com
+author = eduncey (rndnaame/nfqws-menu)
+label = experimental
+description = Приём TLS из «eduncey: дефолт nfqws2-keenetic + 4-й приём и Discord» (стратегия 4 из circular).
+--lua-desync=fake:blob=tls_clienthello:tls_mod=rnd,dupsid,sni=www.google.com
+--lua-desync=hostfakesplit:host=www.google.com:tcp_ts=-600000:tcp_ts_up
+
+[nm_tls_exp]
+name = nfqws-menu EXP: fake onetrust ×4 + multisplit pos=1 seqovl=480
+author = Flowseal → rndnaame/nfqws-menu
+label = experimental
+description = Приём TLS из «EXP: fake + multisplit seqovl=480 (stun2)».
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=4:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=480:seqovl_pattern=stun2
+
+[nm_tls_fake_tls_auto_discord_media]
+name = nfqws-menu FAKE TLS AUTO · discord.media: fake 0x00000000 ×11 + fake (SNI www.google.com) ×11 + multidisorder pos=1,midsld
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «FAKE TLS AUTO: fake ×11 + multidisorder» (профиль discord.media).
+--lua-desync=fake:blob=0x00000000:repeats=11:tcp_seq=-10000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=11:tcp_seq=-10000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multidisorder:pos=1,midsld
+
+[nm_tls_fake_tls_auto_google_youtube]
+name = nfqws-menu FAKE TLS AUTO · Google/YouTube: fake 0x00000000 ×11 + fake (SNI www.google.com) ×11 + multidisorder pos=1,midsld
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «FAKE TLS AUTO: fake ×11 + multidisorder» (профиль Google/YouTube).
+--lua-desync=fake:blob=0x00000000:repeats=11:tcp_seq=-10000:tcp_ack=-66000:tcp_ts_up:ip_id=zero
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=11:tcp_seq=-10000:tcp_ack=-66000:tcp_ts_up:ip_id=zero
+--lua-desync=multidisorder:pos=1,midsld:ip_id=zero
+
+[nm_tls_fake_tls_auto_alt_discord_media]
+name = nfqws-menu FAKE TLS AUTO ALT · discord.media: fake (SNI www.google.com) ×8 + fakedsplit pos=1 ×8
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «FAKE TLS AUTO ALT: fake + fakedsplit pos=1» (профиль discord.media).
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=8:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+--lua-desync=fakedsplit:pos=1:repeats=8:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+
+[nm_tls_fake_tls_auto_alt_google_youtube]
+name = nfqws-menu FAKE TLS AUTO ALT · Google/YouTube: fake (SNI www.google.com) ×8 + fakedsplit pos=1 ×8
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «FAKE TLS AUTO ALT: fake + fakedsplit pos=1» (профиль Google/YouTube).
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=8:tcp_seq=2:tcp_ack=-66000:tcp_ts_up:ip_id=zero
+--lua-desync=fakedsplit:pos=1:repeats=8:tcp_seq=2:tcp_ack=-66000:tcp_ts_up:ip_id=zero
+
+[nm_tls_fake_tls_auto_alt2_discord_media]
+name = nfqws-menu FAKE TLS AUTO ALT2 · discord.media: fake (SNI www.google.com) ×8 + multisplit pos=1 seqovl=681
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «FAKE TLS AUTO ALT2: fake + multisplit, badseq 10000000» (профиль discord.media).
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=8:tcp_seq=10000000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello
+
+[nm_tls_fake_tls_auto_alt2_google_youtube]
+name = nfqws-menu FAKE TLS AUTO ALT2 · Google/YouTube: fake (SNI www.google.com) ×8 + multisplit pos=1 seqovl=681
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «FAKE TLS AUTO ALT2: fake + multisplit, badseq 10000000» (профиль Google/YouTube).
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=8:tcp_seq=10000000:tcp_ack=-66000:tcp_ts_up:ip_id=zero
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello:ip_id=zero
+
+[nm_tls_fake_tls_auto_alt3_discord_media]
+name = nfqws-menu FAKE TLS AUTO ALT3 · discord.media: fake (SNI www.google.com) ×8 + multisplit pos=1 seqovl=681
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «FAKE TLS AUTO ALT3: fake + multisplit, ts» (профиль discord.media).
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello
+
+[nm_tls_fake_tls_auto_alt3_google_youtube]
+name = nfqws-menu FAKE TLS AUTO ALT3 · Google/YouTube: fake (SNI www.google.com) ×8 + multisplit pos=1 seqovl=681
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «FAKE TLS AUTO ALT3: fake + multisplit, ts» (профиль Google/YouTube).
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=8:tcp_ts=-600000:tcp_ts_up:ip_id=zero
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello:ip_id=zero
+
+[nm_tls_hardcorp74_google_youtube]
+name = nfqws-menu hardcorp74 · Google/YouTube: multidisorder pos=1,sniext+1,host+1,midsld-2,midsld,midsld+2,endhost-1 + fake tls_sochi (SNI rzd.ru) ×4
+author = hardcorp74 (rndnaame/nfqws-menu)
+label = experimental
+description = Приём TLS из «hardcorp74: circular с ClientHello sochi.park» (профиль Google/YouTube).
+--lua-desync=multidisorder:pos=1,sniext+1,host+1,midsld-2,midsld,midsld+2,endhost-1
+--lua-desync=fake:blob=tls_sochi:optional:tcp_seq=-10000:tcp_ack=-66000:badsum:tls_mod=rnd,dupsid,sni=rzd.ru:tcp_ts_up:repeats=4
+
+[nm_tls_hardcorp74_s1]
+name = nfqws-menu hardcorp74 · №1: fake tls_sochi + hostfakesplit ozon.ru seqovl=sniext+3 + multisplit pos=1,sniext-2 seqovl=1
+author = hardcorp74 (rndnaame/nfqws-menu)
+label = experimental
+description = Приём TLS из «hardcorp74: circular с ClientHello sochi.park» (стратегия 1 из circular).
+--lua-desync=fake:blob=tls_sochi:tls_mod=rnd,dupsid:tcp_ts=-1500:badsum
+--lua-desync=hostfakesplit:host=ozon.ru:midhost=host-2:seqovl=sniext+3:seqovl_pattern=tls_clienthello:badsum:tcp_md5:tcp_ts_up
+--lua-desync=multisplit:pos=1,sniext-2:seqovl=1:seqovl_pattern=tls_sochi
+
+[nm_tls_hardcorp74_s2]
+name = nfqws-menu hardcorp74 · №2: fake stun + fake tls_sochi + multisplit pos=1,sniext-2 seqovl=1 + hostfakesplit seqovl=sniext+3
+author = hardcorp74 (rndnaame/nfqws-menu)
+label = experimental
+description = Приём TLS из «hardcorp74: circular с ClientHello sochi.park» (стратегия 2 из circular).
+--lua-desync=fake:blob=stun:tcp_ts=-1500:badsum
+--lua-desync=fake:blob=tls_sochi:tls_mod=rnd,dupsid:tcp_ts=-1500:badsum
+--lua-desync=multisplit:pos=1,sniext-2:seqovl=1:seqovl_pattern=tls_sochi
+--lua-desync=hostfakesplit:midhost=host-2:seqovl=sniext+3:seqovl_pattern=tls_clienthello:badsum:tcp_md5
+
+[nm_tls_hardcorp74_s3]
+name = nfqws-menu hardcorp74 · №3: multidisorder pos=1,sniext+1,host+1,midsld-2,midsld,midsld+2,endhost-1 + fake tls_sochi (SNI rzd.ru) ×4
+author = hardcorp74 (rndnaame/nfqws-menu)
+label = experimental
+description = Приём TLS из «hardcorp74: circular с ClientHello sochi.park» (стратегия 3 из circular).
+--lua-desync=multidisorder:pos=1,sniext+1,host+1,midsld-2,midsld,midsld+2,endhost-1
+--lua-desync=fake:blob=tls_sochi:optional:tcp_seq=-10000:tcp_ack=-66000:badsum:tls_mod=rnd,dupsid,sni=rzd.ru:repeats=4
+
+[nm_tls_krushaaa]
+name = nfqws-menu krushaaa: fake stun ×8 + fakedsplit pos=midsld seqovl=417 + fake tls_lordfilm ×8 + multisplit pos=100,midsld-2,endhost-4 seqovl=681 ×8
+author = krushaaa (rndnaame/nfqws-menu)
+label = experimental
+description = Приём TLS из «krushaaa: fakedsplit + multisplit на блобах lordfilm».
+--lua-desync=fake:blob=stun:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fakedsplit:pos=midsld:tcp_ack=-66000:tcp_ts_up:seqovl=417:seqovl_pattern=0x1603010000
+--lua-desync=fake:blob=tls_lordfilm:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=100,midsld-2,endhost-4:repeats=8:seqovl=681:seqovl_pattern=tls_clienthello
+
+[nm_tls_simple_fake_alt_discord_media]
+name = nfqws-menu SIMPLE FAKE ALT · discord.media: fake tls_google ×6
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «SIMPLE FAKE ALT: только fake, badseq +2» (профиль discord.media).
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+
+[nm_tls_simple_fake_alt_google_youtube]
+name = nfqws-menu SIMPLE FAKE ALT · Google/YouTube: fake tls_google ×6
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «SIMPLE FAKE ALT: только fake, badseq +2» (профиль Google/YouTube).
+--lua-desync=fake:blob=tls_google:repeats=6:ip_id=zero:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+
+[nm_tls_simple_fake_alt]
+name = nfqws-menu SIMPLE FAKE ALT: fake stun2 ×6 + fake tls_google ×6
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «SIMPLE FAKE ALT: только fake, badseq +2».
+--lua-desync=fake:blob=stun2:repeats=6:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+
+[nm_tls_simple_fake_alt2]
+name = nfqws-menu SIMPLE FAKE ALT2: fake stun2 ×6 + fake onetrust ×6
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём TLS из «SIMPLE FAKE ALT2: только fake (max.ru), ts».
+--lua-desync=fake:blob=stun2:repeats=6:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=6:tcp_ts=-600000:tcp_ts_up

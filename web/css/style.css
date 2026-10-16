@@ -5764,3 +5764,37 @@ body.expert-mode .expert-note { display: none !important; }
 }
 .advanced-block[open] > summary { margin-bottom: 12px; }
 .advanced-block > .card:first-of-type { margin-top: 0 !important; }
+
+/* ── Главная: «Кратко» и сворачиваемые блоки ── */
+.dash-brief { margin-bottom: 12px; }
+.dash-brief-line { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 500; }
+.dash-brief-line #dash-brief-text { flex: 1; min-width: 0; }
+.dash-view-btn { flex-shrink: 0; }
+.dash-brief-problems { margin: 8px 0 0 22px; padding: 0; font-size: 13px; }
+.dash-brief-problems:empty { display: none; }
+.dash-problem.stopped a { color: var(--error); }
+.dash-problem.warning a { color: var(--warning); }
+.dash-site-form { display: flex; gap: 8px; margin-top: 12px; }
+.dash-site-form .form-input { flex: 1; min-width: 0; }
+.dash-block { margin: 12px 0; }
+.dash-block-head {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    font-size: 14px; color: var(--text-muted); padding: 4px 0; list-style: none;
+}
+.dash-block-head::-webkit-details-marker { display: none; }
+.dash-block-head::before { content: '▸'; font-size: 12px; transition: transform .15s; }
+.dash-block[open] > .dash-block-head::before { transform: rotate(90deg); }
+.dash-block-title { text-transform: uppercase; letter-spacing: 0.5px; }
+.dash-block-text { color: var(--text-secondary, var(--text-muted)); text-transform: none; font-size: 13px; }
+.dash-block > .status-grid, .dash-block > .card { margin-top: 8px; }
+@media (max-width: 768px) {
+    .dash-brief-line { flex-wrap: wrap; }
+    .dash-site-form { flex-direction: column; }
+}
+
+/* Переключатель «Простое меню / Все разделы» внизу меню */
+.nav-view-switch {
+    margin: 10px 12px 4px; font-size: 12px; color: var(--text-muted);
+    cursor: pointer; user-select: none;
+}
+.nav-view-switch:hover { color: var(--text-primary); text-decoration: underline; }

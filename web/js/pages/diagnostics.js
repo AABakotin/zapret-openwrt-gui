@@ -318,6 +318,15 @@ const DiagnosticsPage = (() => {
         loadConflicts();
         loadSelfcheckStatus();
         loadMaintenanceCaps();
+
+        // Пришли с главной («Сайт не открывается?»): сразу «Куда пойдёт сайт».
+        const site = new URLSearchParams((location.hash.split('?')[1]) || '').get('site');
+        if (site) {
+            const input = document.getElementById('diag-trace-domain');
+            if (input) input.value = site;
+            document.getElementById('diag-trace-card')?.scrollIntoView({ block: 'start' });
+            traceSite();
+        }
     }
 
     function destroy() {

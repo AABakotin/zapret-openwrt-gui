@@ -10,6 +10,9 @@ const DashboardPage = (() => {
     let pollTimer = null;
     let lastData = null;
     let isActionPending = false;
+    // Блоки, которые человек сам раскрыл или свернул, — их не трогаем.
+    const manualBlocks = {};
+    const VIEW_KEY = 'zapret-gui-dash-view';
 
     function render(container) {
         container.innerHTML = `
@@ -18,9 +21,31 @@ const DashboardPage = (() => {
                 <p class="page-description">Обзор состояния системы</p>
             </div>
 
+            <!-- «Кратко»: всё ли работает + «Сайт не открывается?» -->
+            <div class="card dash-brief" id="dash-brief">
+                <div class="dash-brief-line">
+                    <span class="status-dot" id="dash-brief-dot"></span>
+                    <span id="dash-brief-text">Проверяю…</span>
+                    <button type="button" class="btn btn-ghost btn-sm dash-view-btn"
+                            data-action="dash-view" id="dash-view-btn"></button>
+                </div>
+                <ul class="dash-brief-problems" id="dash-brief-problems"></ul>
+                <form class="dash-site-form" id="dash-site-form">
+                    <input class="form-input" id="dash-site" autocomplete="off"
+                           placeholder="Сайт не открывается? Например, youtube.com">
+                    <button type="submit" class="btn btn-primary btn-sm">Разобраться</button>
+                </form>
+            </div>
+
             <!-- Другие обходчики DPI: вдвоём с nfqws2 мешают друг другу -->
             <div id="dash-rivals" style="display:none; margin-bottom:12px;"></div>
 
+            <details class="dash-block" data-block="nfqws" open>
+            <summary class="dash-block-head">
+                <span class="status-dot" data-dot="nfqws"></span>
+                <span class="dash-block-title">Обход DPI</span>
+                <span class="dash-block-text" data-sum="nfqws"></span>
+            </summary>
             <!-- Статус nfqws -->
             <div class="status-grid" id="status-grid">
                 <div class="status-card" id="card-nfqws">
@@ -90,8 +115,15 @@ const DashboardPage = (() => {
                 </div>
             </div>
 
+            </details>
+
             <!-- VPN / Туннели -->
-            <h2 style="font-size:14px; color:var(--text-muted); margin:16px 0 8px; text-transform:uppercase; letter-spacing:0.5px;">VPN / Туннели</h2>
+            <details class="dash-block" data-block="vpn" open>
+            <summary class="dash-block-head">
+                <span class="status-dot" data-dot="vpn"></span>
+                <span class="dash-block-title">VPN / Туннели</span>
+                <span class="dash-block-text" data-sum="vpn"></span>
+            </summary>
             <div class="status-grid" id="vpn-grid">
                 <div class="status-card" id="card-warp" data-action="hash-usque">
                     <div class="status-card-header">
@@ -174,8 +206,15 @@ const DashboardPage = (() => {
                 </div>
             </div>
 
+            </details>
+
             <!-- Мониторинг -->
-            <h2 style="font-size:14px; color:var(--text-muted); margin:16px 0 8px; text-transform:uppercase; letter-spacing:0.5px;">Мониторинг</h2>
+            <details class="dash-block" data-block="monitoring" open>
+            <summary class="dash-block-head">
+                <span class="status-dot" data-dot="monitoring"></span>
+                <span class="dash-block-title">Мониторинг</span>
+                <span class="dash-block-text" data-sum="monitoring"></span>
+            </summary>
             <div class="status-grid" id="monitoring-grid">
                 <div class="status-card" id="card-block-detector" data-action="hash-block-detector">
                     <div class="status-card-header">
@@ -203,6 +242,8 @@ const DashboardPage = (() => {
                     <div class="status-card-detail" id="hc-detail"></div>
                 </div>
             </div>
+
+            </details>
 
             <!-- Быстрые действия -->
             <div class="card">
@@ -236,6 +277,10 @@ const DashboardPage = (() => {
             </div>
 
             <!-- Последние логи -->
+            <details class="dash-block" data-block="logs" open>
+            <summary class="dash-block-head">
+                <span class="dash-block-title">Последние события</span>
+            </summary>
             <div class="card">
                 <div class="card-title" style="justify-content: space-between;">
                     <span style="display:flex;align-items:center;gap:8px;">
@@ -254,6 +299,7 @@ const DashboardPage = (() => {
                     </div>
                 </div>
             </div>
+            </details>
         `;
 
         // Первая загрузка
@@ -275,6 +321,7 @@ const DashboardPage = (() => {
                                    mihomo: res.mihomo});
                 updateMonitoringCards(res.block_detector, res.healthcheck);
                 renderRivals(res.rivals || []);
+                renderBrief(res.brief);
                 renderLogs(res.logs || []);
             }
         } catch (err) {
@@ -535,6 +582,78 @@ const DashboardPage = (() => {
         _toggleCard('card-healthcheck', hcInstalled);
     }
 
+    /**
+     * Вид главной: «Кратко» (по умолчанию) — блоки свёрнуты, итог в
+     * заголовке, проблемный раскрыт сам; «Подробно» — всё раскрыто.
+     */
+    function _view() {
+        try { return localStorage.getItem(VIEW_KEY) === 'full' ? 'full' : 'brief'; }
+        catch (_) { return 'brief'; }
+    }
+
+    function _setView(v) {
+        try { localStorage.setItem(VIEW_KEY, v); } catch (_) {}
+        Object.keys(manualBlocks).forEach(k => delete manualBlocks[k]);
+        _applyBlocks();
+    }
+
+    let lastBrief = null;
+
+    function _applyBlocks() {
+        const view = _view();
+        const btn = document.getElementById('dash-view-btn');
+        if (btn) btn.textContent = view === 'brief' ? 'Подробно' : 'Кратко';
+        const blocks = (lastBrief && lastBrief.blocks) || {};
+        document.querySelectorAll('.dash-block').forEach(el => {
+            const key = el.dataset.block;
+            if (manualBlocks[key]) return;
+            const level = (blocks[key] || {}).level;
+            el.open = view === 'full' || (!!level && level !== 'ok');
+        });
+    }
+
+    function renderBrief(b) {
+        if (!b) return;
+        lastBrief = b;
+        const dot = document.getElementById('dash-brief-dot');
+        if (dot) dot.className = 'status-dot ' + _levelClass(b.level);
+        const text = document.getElementById('dash-brief-text');
+        if (text) text.textContent = b.line || '';
+        const ul = document.getElementById('dash-brief-problems');
+        if (ul) {
+            ul.innerHTML = (b.problems || []).map(p =>
+                `<li class="dash-problem ${_levelClass(p.level)}">`
+                + `<a href="#${escapeHtml(p.page || 'diagnostics')}">${escapeHtml(p.text)}</a></li>`
+            ).join('');
+        }
+        Object.entries(b.blocks || {}).forEach(([key, blk]) => {
+            const sum = document.querySelector(`[data-sum="${key}"]`);
+            if (sum) sum.textContent = blk.text || '';
+            const d = document.querySelector(`[data-dot="${key}"]`);
+            if (d) d.className = 'status-dot ' + _levelClass(blk.level);
+        });
+        _applyBlocks();
+    }
+
+    function _levelClass(level) {
+        return level === 'bad' ? 'stopped' : (level === 'warn' ? 'warning' : 'running');
+    }
+
+    function onSiteSubmit(e) {
+        e.preventDefault();
+        const input = document.getElementById('dash-site');
+        const site = input ? input.value.trim() : '';
+        if (!site) return;
+        window.location.hash = 'diagnostics?site=' + encodeURIComponent(site);
+    }
+
+    function onBlockClick(e) {
+        const head = e.target.closest('.dash-block-head');
+        if (!head) return;
+        const block = head.parentElement && head.parentElement.dataset.block;
+        if (block) manualBlocks[block] = true;
+    }
+
     function renderRivals(rivals) {
         const el = document.getElementById('dash-rivals');
         if (!el) return;
@@ -671,12 +790,18 @@ const DashboardPage = (() => {
         if (a === 'hash-block-detector') { window.location.hash = 'blockcheck?tab=monitor'; return; }
         if (a === 'hash-strategies') { window.location.hash = 'strategies'; return; }
         if (a === 'hash-diagnostics') { window.location.hash = 'diagnostics'; return; }
+        if (a === 'dash-view') { _setView(_view() === 'brief' ? 'full' : 'brief'); return; }
     }
 
     function bindEvents() {
         document.addEventListener('visibilitychange', onVisibilityChange);
         // MR-69: Event delegation вместо inline onclick
         document.querySelector('.content')?.addEventListener('click', onContentClick);
+        // Эти узлы живут внутри страницы и уходят вместе с ней.
+        document.getElementById('dash-site-form')?.addEventListener('submit', onSiteSubmit);
+        document.querySelectorAll('.dash-block-head').forEach(el =>
+            el.addEventListener('click', onBlockClick));
+        _applyBlocks();
     }
 
     function destroy() {

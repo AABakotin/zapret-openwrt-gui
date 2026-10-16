@@ -543,7 +543,7 @@ stdout). Период опроса задаёт сам
 
 | Файл | Префикс | Кратко |
 |------|---------|--------|
-| `status.py` | `/api/status` | общий статус (+`/network/environment`, `/install/transports`) |
+| `status.py` | `/api/status` | общий статус (+`/network/environment`, `/install/transports`); `/api/dashboard/status` отдаёт и `brief` — «Кратко» на главной (`core/dashboard_brief.py`, чистая функция от того же ответа: уровень ok/warn/bad, строка, итог блоков, проблемы со ссылкой на раздел) |
 | `control.py` | `/api/start`, `/api/stop`, `/api/restart` | nfqws2 |
 | `strategies.py` | `/api/strategies` | стратегии и категории |
 | `scan.py` | `/api/scan` | подбор стратегий |
@@ -608,7 +608,7 @@ stdout). Период опроса задаёт сам
   SSE (см. `diagnostics.js`, `singbox_configs.js` — там есть poll-таймеры).
 - **API-хелпер** `web/js/api.js`: `API.get/post/put/delete(path, body)` →
   Promise(JSON), бросает на ошибке.
-- **Компоненты** `web/js/components/`: `sidebar` (меню + мобильный бургер),
+- **Компоненты** `web/js/components/`: `sidebar` (меню + мобильный бургер; «Простое меню» — пункты с `simple: true`, ключ `zapret-gui-nav` в localStorage),
   `toast` (`Toast.success/error/info/warning`), `list_ui` (универсальные
   списки), `sparkline` (inline-SVG графики), `help` (модалка с примерами,
   кнопка «?»), `theme` (тема ☾/☀). Переиспользуемые блоки разделов:

@@ -262,7 +262,7 @@ def register(app):
         except Exception:
             pass
 
-        return {
+        result = {
             "ok": True,
             "status": status_data,
             "warp": warp_configs,
@@ -276,6 +276,13 @@ def register(app):
             "rivals": rivals,
             "logs": logs_data,
         }
+        # «Кратко»: одна строка «всё ли работает» и итог каждого блока.
+        try:
+            from core.dashboard_brief import brief
+            result["brief"] = brief(result)
+        except Exception:
+            pass
+        return result
 
     @app.route("/api/status")
     def api_status():

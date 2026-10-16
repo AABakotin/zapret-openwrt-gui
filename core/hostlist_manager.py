@@ -523,7 +523,8 @@ class HostlistManager:
 
         try:
             with self._lock:
-                os.rename(src, dst)
+                from core.file_history import rename_file
+                rename_file(src, dst)
             log.info(f"Список {old_name}.txt переименован в {new_name}.txt",
                      source="hostlists")
             try:
@@ -561,7 +562,8 @@ class HostlistManager:
 
         try:
             with self._lock:
-                os.remove(filepath)
+                from core.file_history import remove_file
+                remove_file(filepath)
             log.info(f"Удалён список {name}.txt", source="hostlists")
             # Подписка удалённого списка не должна достаться новому
             # списку с тем же именем.

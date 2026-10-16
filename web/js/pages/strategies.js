@@ -235,7 +235,11 @@ const StrategiesPage = (() => {
         consumePendingPrefill();
         // Делегирование обработчиков:data-action → методы StrategiesPage.
         _bindEvents(container);
+        // Итог «Применить с проверкой» меняет активную стратегию.
+        window.addEventListener('safeapply:done', onSafeApplyDone);
     }
+
+    function onSafeApplyDone() { fetchStrategies(); }
 
     // ══════════════════ Event delegation ══════════════════
 
@@ -290,6 +294,7 @@ const StrategiesPage = (() => {
                 }
                 case 'toggleFavorite': toggleFavorite(sid); break;
                 case 'applyStrategy': applyStrategy(sid); break;
+                case 'safeApplyStrategy': safeApplyStrategy(sid); break;
                 case 'copyStrategyToClipboard': copyStrategyToClipboard(sid); break;
                 case 'exportToCatalog': exportToCatalog(sid); break;
                 case 'openEdit': openEdit(sid); break;
@@ -1236,6 +1241,7 @@ const StrategiesPage = (() => {
                     <details class="strategy-card-menu">
                         <summary class="btn btn-ghost btn-sm" title="Ещё действия">⋯</summary>
                         <div class="strategy-card-menu-list">
+                            ${!isActive ? '<button class="btn btn-ghost btn-sm" data-action="safeApplyStrategy" title="Замерить сайты мониторинга до и после; если не подтвердить — вернётся прежняя">Применить с проверкой</button>' : ''}
                             <button class="btn btn-ghost btn-sm" data-action="showPreview">Превью команды</button>
                             <button class="btn btn-ghost btn-sm" data-action="copyStrategyToClipboard">Скопировать в буфер</button>
                             ${isBuiltin
@@ -1278,6 +1284,18 @@ const StrategiesPage = (() => {
         } catch (err) {
             Toast.error(err.message);
         }
+    }
+
+    // «Применить с проверкой» (core/safe_apply.py): замер до/после и
+    // ожидание подтверждения; дальше всё ведёт баннер SafeApply.
+    async function safeApplyStrategy(sid) {
+        const s = strategies.find(x => x.id === sid);
+        if (!s) return;
+        if (!confirm('Применить «' + s.name + '» с проверкой?\n\n'
+            + 'Сначала проверю сайты мониторинга, потом применю стратегию и проверю ещё раз. '
+            + 'Если перестанет открываться всё, что открывалось, или движок упадёт — сразу верну прежнюю. '
+            + 'Иначе подтвердите в течение 3 минут, что всё работает, — без подтверждения тоже верну.')) return;
+        await SafeApply.start(sid, 180);
     }
 
     async function toggleFavorite(sid) {
@@ -2576,6 +2594,7 @@ const StrategiesPage = (() => {
     }
 
     function destroy() {
+        window.removeEventListener('safeapply:done', onSafeApplyDone);
         NfqwsAutocomplete.detachAll();
         detachGlobalKeys();
         disableModalResize();
@@ -2601,6 +2620,7 @@ const StrategiesPage = (() => {
         destroy,
         setFilter,
         applyStrategy,
+        safeApplyStrategy,
         toggleFavorite,
         deleteStrategy,
         duplicateStrategy,

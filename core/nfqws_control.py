@@ -342,9 +342,11 @@ def apply_strategy(strategy_id: str, source: str = "strategies") -> dict:
         return out
 
     previous_id = cfg.get("strategy", "current_id")
-    cfg.set("strategy", "current_id", strategy_id)
-    cfg.set("strategy", "current_name", strategy.get("name", ""))
-    cfg.save()
+    from core.file_history import operation
+    with operation("Применена стратегия: %s" % strategy.get("name", "")):
+        cfg.set("strategy", "current_id", strategy_id)
+        cfg.set("strategy", "current_name", strategy.get("name", ""))
+        cfg.save()
 
     # Автозапуск помнит стратегию, а не «ту, что активна»: без
     # пересборки после перезагрузки роутера поднялась бы предыдущая.

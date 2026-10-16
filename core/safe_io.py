@@ -29,6 +29,46 @@ import zipfile
 
 # ───────────────────────── атомарная запись ──────────────────────────
 
+# Наблюдатели записи: [(wants(path) -> bool, callback(path, old, new))].
+# Через них история файлов (core/file_history.py) видит каждую запись,
+# не заставляя этот модуль импортировать core/* (см. шапку).
+_write_observers = []
+
+
+def add_write_observer(wants, callback) -> None:
+    """Подписаться на атомарные записи.
+
+    ``wants(path)`` решает, интересен ли путь: прежнее содержимое
+    читается только тогда, когда интересен хоть кому-то. ``callback(path,
+    old, new)`` зовётся после ``os.replace``; ``old`` — ``None``, если
+    файла не было. Исключения наблюдателя глотаются: запись уже прошла,
+    и сорвать её отчётностью нельзя."""
+    _write_observers.append((wants, callback))
+
+
+def remove_write_observer(callback) -> None:
+    _write_observers[:] = [o for o in _write_observers if o[1] is not callback]
+
+
+def _interested(path: str) -> list:
+    out = []
+    for wants, callback in list(_write_observers):
+        try:
+            if wants(path):
+                out.append(callback)
+        except Exception:                           # noqa: BLE001
+            pass
+    return out
+
+
+def _read_or_none(path: str):
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
 def atomic_write_bytes(path: str, data: bytes, mode=None) -> None:
     """Атомарно записать ``data`` в ``path`` (temp в той же ФС → fsync →
     ``os.replace``). Бросает ``OSError`` при неудаче — вызывающий решает,
@@ -41,6 +81,8 @@ def atomic_write_bytes(path: str, data: bytes, mode=None) -> None:
     иначе после сохранения движок перестал бы их видеть."""
     directory = os.path.dirname(path) or "."
     os.makedirs(directory, exist_ok=True)
+    watchers = _interested(path) if _write_observers else []
+    old = _read_or_none(path) if watchers else None
     # temp обязан лежать в той же ФС, что и dest — иначе os.replace не атомарен.
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-", suffix=".swp")
     try:
@@ -58,6 +100,11 @@ def atomic_write_bytes(path: str, data: bytes, mode=None) -> None:
                 os.remove(tmp)
             except OSError:
                 pass
+    for callback in watchers:
+        try:
+            callback(path, old, data)
+        except Exception:                           # noqa: BLE001
+            pass
 
 
 def atomic_write_text(path: str, text: str, encoding: str = "utf-8",

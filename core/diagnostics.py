@@ -268,9 +268,12 @@ def traceroute_host(host, max_hops=20, port=443, use_tcp=True, timeout=45):
 
 # ─────────────────────── HTTP Check ───────────────────────
 
-def check_http(url, timeout=5):
+def check_http(url, timeout=5, fresh=False):
     """
     HTTP(S) проверка через curl → wget → urllib fallback.
+
+    ``fresh=True`` — мимо кеша: замер «до/после» смены стратегии
+    (core/safe_apply.py) иначе сравнил бы результат сам с собой.
 
     Returns:
         dict: { url, status_code, ok, response_time, error, tls_version, redirect_url }
@@ -278,7 +281,7 @@ def check_http(url, timeout=5):
     # timeout — часть ключа, как у ping_host: healthcheck (8 с) и
     # диагностика (5 с) иначе делили бы один результат.
     cache_key = f"http:{url}:{timeout}"
-    cached = _cache_get(cache_key)
+    cached = None if fresh else _cache_get(cache_key)
     if cached:
         return cached
 

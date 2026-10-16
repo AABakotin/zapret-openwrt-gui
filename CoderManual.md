@@ -295,7 +295,9 @@ make upstream-offline    # только локальные сверки (идё�
 | `download_transport.py` | «Через что» качать (когда GitHub заблокирован напрямую): `direct`/`awg[:iface]`/`singbox[:cfg]`/`mihomo[:cfg]` → `urlopen_via`. Используется установщиками и рефрешерами. |
 | `network_env.py` | Детект окружения: `router` (форвардим LAN) vs `pc` (одна NIC, заворачиваем только себя). Override `network.profile`. |
 | `host_guard.py` | Белый список заголовка `Host` против DNS-rebinding (чистая функция; зовёт гейт `app.py`). |
-| `safe_io.py` | Общие безопасные I/O: атомарная запись (`atomic_write_*`: temp→fsync→`os.replace`) и пр. |
+| `safe_io.py` | Общие безопасные I/O: атомарная запись (`atomic_write_*`: temp→fsync→`os.replace`) и пр. Наблюдатели записи `add_write_observer(wants, callback)` — так история файлов видит каждое сохранение, не втягивая `core/*` в этот модуль. |
+| `file_history.py` | История файлов: версии `settings.json`, своих стратегий, хостлистов и ipset'ов (`<config_dir>/history/`, gzip-объекты по sha256), действия `operation(label)`, сверка с диском (правки вне GUI), разница, откат версии, «отменить последнее», `restore_to(ts)`. Новое место записи отслеживаемых файлов — только через `safe_io.atomic_write_*`, удаление/переименование — `remove_file`/`rename_file`. Наблюдатель зовётся под замком `ConfigManager` — настройки читаются мимо замка (`_conf`). |
+| `safe_apply.py` | «Применить с проверкой»: замер сайтов мониторинга до/после, ожидание подтверждения со сроком, откат по истории + перезапуск движка с прежними аргументами; рабочая точка и «Вернуть рабочее состояние». Состояние — `safe-apply.json`, `recover()` при старте. |
 | `backup.py` | Экспорт/импорт всей конфигурации в один JSON. |
 | `teardown.py` | Снятие всех runtime-артефактов перед удалением. |
 | `selfcheck.py` | Самодиагностика на устройстве: зависимости/движки/конфиг/сеть + прогон тестов. CLI: `python3 -m core.selfcheck`. |
@@ -564,6 +566,7 @@ stdout). Период опроса задаёт сам
 | `block_detector.py` / `auto_remediation.py` / `geosite.py` | … | фоновой детектор блокировок / авто-починка / импорт geosite |
 | `connectivity.py` / `devices.py` | … | матрица связности / устройства LAN |
 | `diagnostics.py` | `/api/diagnostics` | ping/http/dns/conflicts/**known-conflicts**/firewall/system/**selfcheck**/**help-report** («Отчёт для помощи», `core/help_report.py`: оба варианта маски одним ответом) |
+| `history.py` | `/api/history`, `/api/safe-apply` | история файлов (список, diff, restore, undo, scan) / применение с проверкой (start, confirm, rollback, mark-working, restore-working) |
 | `healthcheck.py` | `/api/healthcheck` | autocircular-демон: enable/disable/run/status/config |
 | `backup.py` / `config_api.py` / `autostart.py` / `gui_update.py` / `logs.py` | … | бэкап / настройки / автозапуск / обновление GUI (+`/releases`) / логи (SSE) |
 | `mcp.py` / `mcp_ui.py` | `/api/mcp`, `/api/mcp/ui` | MCP-сервер (JSON-RPC, legacy-SSE, loopback-only `/info`) / панель управления им. **Две разные двери:** в `/api/mcp` пускает Bearer-токен, в `/api/mcp/ui` — только авторизация GUI (панель раздаёт разрешения, и токен модели не должен их расширять — врезка в `app.py`) |

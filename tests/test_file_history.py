@@ -1,0 +1,356 @@
+# tests/test_file_history.py
+"""История файлов (core/file_history) и применение с проверкой
+(core/safe_apply): версии, склейка, правки вне GUI, откат, отмена."""
+
+import os
+import shutil
+import tempfile
+import time
+import unittest
+from unittest import mock
+
+from core import file_history as fh
+from core import safe_apply as sa
+from core.safe_io import atomic_write_text, remove_write_observer
+
+
+class HistoryCase(unittest.TestCase):
+
+    def setUp(self):
+        import core.config_manager as cm
+        self.dir = tempfile.mkdtemp(prefix="hist-")
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        saved = cm._config_manager
+        self.addCleanup(setattr, cm, "_config_manager", saved)
+        cm._config_manager = cm.ConfigManager(config_dir=self.dir)
+        cm._config_manager.load()
+        self.cfg = cm._config_manager
+        self.lists = os.path.join(self.dir, "lists")
+        os.makedirs(self.lists)
+        patcher = mock.patch.object(
+            fh, "_roots", lambda: [(self.lists, "lists", ".txt")])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        fh._reset_for_tests()
+        self.addCleanup(fh._reset_for_tests)
+        fh.install()
+        self.addCleanup(self._uninstall)
+        # Без перечитывания движка/стратегий в тестах.
+        p2 = mock.patch.object(fh, "_after_restore", lambda paths: [])
+        p2.start()
+        self.addCleanup(p2.stop)
+
+    def _uninstall(self):
+        remove_write_observer(fh._observer)
+        fh._installed = False
+
+    def path(self, name):
+        return os.path.join(self.lists, name)
+
+    def write(self, name, text):
+        atomic_write_text(self.path(name), text, mode=0o644)
+
+    def read(self, name):
+        with open(self.path(name), encoding="utf-8") as f:
+            return f.read()
+
+    def entries(self):
+        return fh._load()["entries"]
+
+
+class TestRecord(HistoryCase):
+
+    def test_tracked_and_untracked(self):
+        self.assertTrue(fh.is_tracked(self.path("a.txt")))
+        self.assertFalse(fh.is_tracked(self.path(".a.remote")))
+        self.assertFalse(fh.is_tracked(self.path("unified-x.txt")))
+        self.assertFalse(fh.is_tracked(self.path("a.json")))
+        self.assertTrue(fh.is_tracked(self.cfg.path))
+
+    def test_write_creates_version_and_diff(self):
+        self.write("a.txt", "one\n")
+        with fh.operation("правка"):
+            self.write("a.txt", "one\ntwo\n")
+        e = self.entries()[-1]
+        self.assertEqual(e["file"], "lists/a.txt")
+        self.assertEqual(e["label"], "правка")
+        d = fh.diff(e["id"])
+        self.assertTrue(d["ok"])
+        self.assertIn("+two", d["diff"])
+
+    def test_coalesce_quick_writes(self):
+        self.write("a.txt", "1\n")
+        self.write("a.txt", "2\n")
+        self.write("a.txt", "3\n")
+        items = [e for e in self.entries() if e["file"] == "lists/a.txt"]
+        self.assertEqual(len(items), 1)
+        self.assertIsNone(items[0]["before"])
+
+    def test_write_back_to_original_drops_version(self):
+        self.write("a.txt", "1\n")
+        with fh.operation("x"):
+            self.write("a.txt", "2\n")
+        self.write("b.txt", "z\n")
+        n = len(self.entries())
+        self.write("b.txt", "y\n")      # склеится с созданием b
+        self.assertEqual(len(self.entries()), n)
+
+    def test_per_file_cap(self):
+        for i in range(fh.PER_FILE + 5):
+            with fh.operation("v%d" % i):
+                self.write("a.txt", "%d\n" % i)
+        items = [e for e in self.entries() if e["file"] == "lists/a.txt"]
+        self.assertEqual(len(items), fh.PER_FILE)
+
+    def test_settings_volatile_only_not_versioned(self):
+        self.cfg.save()
+        n = len(self.entries())
+        self.cfg.set("history", "last_note", "x")
+        self.cfg.save()
+        self.assertEqual(len(self.entries()), n)
+        with fh.operation("настройка"):
+            self.cfg.set("history", "max_mb", 4)
+            self.cfg.save()
+        self.assertEqual(self.entries()[-1]["label"], "настройка")
+
+    def test_settings_diff_masks_secrets(self):
+        self.cfg.save()
+        with fh.operation("токен"):
+            self.cfg.set("mcp", "token", "supersecret-value-123")
+            self.cfg.save()
+        d = fh.diff(self.entries()[-1]["id"])
+        self.assertNotIn("supersecret-value-123", d["diff"])
+
+    def test_remove_and_rename(self):
+        self.write("a.txt", "1\n")
+        with fh.operation("x"):
+            self.write("a.txt", "2\n")
+        fh.remove_file(self.path("a.txt"))
+        self.assertTrue(self.entries()[-1]["after"] is None)
+        self.write("b.txt", "q\n")
+        fh.rename_file(self.path("b.txt"), self.path("c.txt"))
+        last = [e for e in self.entries() if e["op"] == self.entries()[-1]["op"]]
+        self.assertEqual({e["file"] for e in last}, {"lists/b.txt", "lists/c.txt"})
+
+
+class TestExternal(HistoryCase):
+
+    def test_baseline_then_external_edit(self):
+        with open(self.path("a.txt"), "w") as f:
+            f.write("old\n")
+        r = fh.scan()
+        self.assertEqual(r.get("baseline"), 2)   # settings.json + a.txt
+        with open(self.path("a.txt"), "w") as f:
+            f.write("new\n")
+        r = fh.scan()
+        self.assertEqual(r["files"], ["lists/a.txt"])
+        e = self.entries()[-1]
+        self.assertEqual(e["source"], "external")
+        self.assertIn("-old", fh.diff(e["id"])["diff"])
+
+    def test_external_delete(self):
+        with open(self.path("a.txt"), "w") as f:
+            f.write("x\n")
+        fh.scan()
+        os.remove(self.path("a.txt"))
+        fh.scan()
+        self.assertIsNone(self.entries()[-1]["after"])
+        r = fh.restore(self.entries()[-1]["id"])
+        self.assertTrue(r["ok"])
+        self.assertEqual(self.read("a.txt"), "x\n")
+
+    def test_non_atomic_edit_caught_on_next_write(self):
+        fh.scan()
+        self.write("a.txt", "1\n")
+        with open(self.path("a.txt"), "w") as f:     # мимо safe_io
+            f.write("hand\n")
+        with fh.operation("gui"):
+            self.write("a.txt", "2\n")
+        sources = [e["source"] for e in self.entries()
+                   if e["file"] == "lists/a.txt"]
+        self.assertEqual(sources[-2:], ["external", "gui"])
+
+
+class TestRestore(HistoryCase):
+
+    def test_restore_before(self):
+        self.write("a.txt", "1\n")
+        with fh.operation("x"):
+            self.write("a.txt", "2\n")
+        r = fh.restore(self.entries()[-1]["id"], "before")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(self.read("a.txt"), "1\n")
+        self.assertEqual(self.entries()[-1]["source"], "restore")
+
+    def test_undo_last_whole_operation(self):
+        self.write("a.txt", "a1\n")
+        self.write("b.txt", "b1\n")
+        with fh.operation("обе"):
+            self.write("a.txt", "a2\n")
+            self.write("b.txt", "b2\n")
+        r = fh.undo_last()
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(self.read("a.txt"), "a1\n")
+        self.assertEqual(self.read("b.txt"), "b1\n")
+        # Откат сам не отменяется «отменой последнего» — отменится
+        # действие до него (здесь — создание b.txt).
+        self.assertIn("b.txt", fh._undo_candidate_public()["label"])
+
+    def test_undo_skips_file_changed_since(self):
+        self.write("a.txt", "a1\n")
+        with fh.operation("правка"):
+            self.write("a.txt", "a2\n")
+        with open(self.path("a.txt"), "w") as f:
+            f.write("hand\n")
+        r = fh.undo_last()
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["skipped"], ["lists/a.txt"])
+
+    def test_restore_to_time(self):
+        self.write("a.txt", "a1\n")
+        with fh.operation("x"):
+            self.write("a.txt", "a1b\n")
+        time.sleep(0.01)
+        t = time.time()
+        time.sleep(0.01)
+        with fh.operation("y"):
+            self.write("a.txt", "a2\n")
+            self.write("n.txt", "new\n")
+        self.assertEqual(sorted(fh.changed_since(t)),
+                         ["lists/a.txt", "lists/n.txt"])
+        r = fh.restore_to(t)
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(self.read("a.txt"), "a1b\n")
+        self.assertFalse(os.path.exists(self.path("n.txt")))
+        self.assertEqual(fh.changed_since(t), [])
+
+
+class TestSafeApplyCompare(unittest.TestCase):
+
+    def test_broken_all(self):
+        v = sa.compare({"sites": {"a": True, "b": True, "c": False}},
+                       {"sites": {"a": False, "b": False, "c": True}})
+        self.assertTrue(v["broken_all"])
+        self.assertEqual(v["lost"], ["a", "b"])
+        self.assertEqual(v["gained"], ["c"])
+
+    def test_partial_loss_not_broken_all(self):
+        v = sa.compare({"sites": {"a": True, "b": True}},
+                       {"sites": {"a": True, "b": False}})
+        self.assertFalse(v["broken_all"])
+
+    def test_nothing_worked_before(self):
+        v = sa.compare({"sites": {"a": False}}, {"sites": {"a": False}})
+        self.assertFalse(v["broken_all"])
+
+
+class FakeEngine:
+    def __init__(self, running=True, args=None):
+        self.running = running
+        self.args = list(args or ["--old"])
+
+    def is_running(self):
+        return self.running
+
+    def get_last_args(self):
+        return list(self.args)
+
+
+class TestSafeApplyFlow(HistoryCase):
+
+    def setUp(self):
+        super().setUp()
+        self.eng = FakeEngine()
+        self.calls = []
+        patches = [
+            mock.patch.object(sa, "_engine", lambda: self.eng),
+            mock.patch.object(sa, "SETTLE_SEC", 0),
+            mock.patch.object(sa, "_regen_autostart", lambda: None),
+            mock.patch.object(sa, "_restart_engine", self._restart),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.cfg.set("strategy", "current_id", "old")
+        self.cfg.set("strategy", "current_name", "Old")
+        self.cfg.save()
+
+    def _restart(self, was_running, args):
+        self.calls.append(("restart", was_running, args))
+        return {"ok": True}
+
+    def _fake_apply(self, sid, source=""):
+        self.cfg.set("strategy", "current_id", sid)
+        self.cfg.save()
+        self.eng.args = ["--new"]
+        return {"ok": True}
+
+    def _session(self):
+        return sa._read().get("session") or {}
+
+    def _run(self, before, after):
+        probes = iter([before, after])
+        from core import nfqws_control
+        from core.strategy_builder import get_strategy_manager
+        with mock.patch.object(sa, "probe", lambda: next(probes)), \
+                mock.patch.object(nfqws_control, "apply_strategy",
+                                  self._fake_apply), \
+                mock.patch.object(get_strategy_manager(), "get_strategy",
+                                  lambda sid: {"id": sid, "name": "New"}), \
+                mock.patch.object(sa, "_wait", lambda: None):
+            r = sa.start("new", 60)
+            self.assertTrue(r["ok"], r)
+            sa._thread.join(5)
+
+    def test_broken_all_rolls_back(self):
+        self._run({"sites": {"a": True}}, {"sites": {"a": False}})
+        s = self._session()
+        self.assertEqual(s["phase"], "rolled_back")
+        self.cfg.load()
+        self.assertEqual(self.cfg.get("strategy", "current_id"), "old")
+        self.assertEqual(self.calls, [("restart", True, ["--old"])])
+
+    def test_waiting_then_confirm_marks_working(self):
+        self._run({"sites": {"a": True}}, {"sites": {"a": True}})
+        self.assertEqual(self._session()["phase"], "waiting")
+        r = sa.confirm()
+        self.assertTrue(r["ok"])
+        st = sa.status()
+        self.assertEqual(st["session"]["phase"], "confirmed")
+        self.assertEqual(st["working"]["strategy_id"], "new")
+        self.assertEqual(st["working"]["args"], ["--new"])
+
+    def test_manual_rollback(self):
+        self._run({"sites": {"a": True}}, {"sites": {"a": True}})
+        r = sa.cancel()
+        self.assertTrue(r["ok"], r)
+        self.cfg.load()
+        self.assertEqual(self.cfg.get("strategy", "current_id"), "old")
+
+    def test_recover_expired_rolls_back(self):
+        self._run({"sites": {"a": True}}, {"sites": {"a": True}})
+        sa._update(deadline=time.time() - 1)
+        sa.recover()
+        self.assertEqual(self._session()["phase"], "rolled_back")
+
+    def test_second_start_refused_while_waiting(self):
+        self._run({"sites": {"a": True}}, {"sites": {"a": True}})
+        from core.strategy_builder import get_strategy_manager
+        with mock.patch.object(get_strategy_manager(), "get_strategy",
+                               lambda sid: {"id": sid, "name": "X"}):
+            r = sa.start("other")
+        self.assertEqual(r.get("error_code"), "busy")
+
+    def test_restore_working(self):
+        sa.mark_working("тест")
+        time.sleep(0.01)
+        with fh.operation("потом"):
+            self.write("a.txt", "later\n")
+        self.assertIn("lists/a.txt", sa.status()["changed_since_working"])
+        r = sa.restore_working()
+        self.assertTrue(r["ok"], r)
+        self.assertFalse(os.path.exists(self.path("a.txt")))
+
+
+if __name__ == "__main__":
+    unittest.main()

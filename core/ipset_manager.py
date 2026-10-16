@@ -453,7 +453,8 @@ class IPSetManager:
 
         try:
             with self._lock:
-                os.remove(filepath)
+                from core.file_history import remove_file
+                remove_file(filepath)
             log.info(f"Удалён IP-список {name}.txt", source="ipsets")
             # Подписка удалённого списка не должна достаться новому
             # списку с тем же именем.
@@ -506,7 +507,8 @@ class IPSetManager:
 
         try:
             with self._lock:
-                os.rename(src, dst)
+                from core.file_history import rename_file
+                rename_file(src, dst)
             log.info(f"IP-список {old_name}.txt переименован в {new_name}.txt",
                      source="ipsets")
             try:

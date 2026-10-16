@@ -110,6 +110,7 @@ const Sidebar = (() => {
             label: 'Система',
             items: [
                 { id: 'updates',     label: 'Обновления',  icon: 'zapret' },
+                { id: 'history',     label: 'История изменений', icon: 'log' },
                 { id: 'zapret',      label: 'Zapret2 (установка)', icon: 'zapret' },
                 { id: 'autostart',   label: 'Автозапуск',  icon: 'autostart' },
                 { id: 'mcp',         label: 'MCP-сервер',  icon: 'mcp' },

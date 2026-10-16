@@ -553,7 +553,8 @@ def register(app):
         Изменить настройки. Передавать любое подмножество полей:
           enabled, handshake_timeout_sec, check_interval_sec,
           cooldown_sec, max_restarts_per_hour, probe_*,
-          rx_stall_enabled, rx_stall_timeout_sec, rx_stall_min_tx_bytes.
+          rx_stall_enabled, rx_stall_timeout_sec, rx_stall_min_tx_bytes,
+          zero_rx_enabled, zero_rx_timeout_sec.
         """
         response.content_type = "application/json; charset=utf-8"
         try:
@@ -569,7 +570,8 @@ def register(app):
                 "probe_enabled", "probe_host", "probe_port",
                 "probe_timeout_sec", "probe_fail_threshold",
                 "rx_stall_enabled", "rx_stall_timeout_sec",
-                "rx_stall_min_tx_bytes", "rx_stall_min_rx_bytes") if k in body})
+                "rx_stall_min_tx_bytes", "rx_stall_min_rx_bytes",
+                "zero_rx_enabled", "zero_rx_timeout_sec") if k in body})
             return {"ok": True, "status": get_watchdog().get_status(),
                     "settings": new}
         except Exception as e:

@@ -63,11 +63,21 @@ FILTER = ("--filter-tcp=443", "--filter-l7=tls")
 PAYLOAD = "--payload=tls_client_hello"
 
 TOTAL_LIMIT = 900     # секунд на подбор имён всех сетей
-NET_LIMIT = 150       # и на одну сеть
+# И на одну сеть: неудачный вариант стоит ~16 с (старт, тайм-аут
+# загрузки, пауза, повтор) — в 400 с влезают все 24.
+NET_LIMIT = 400
 NEED_OK = 3           # засчитывается только «3 раза из 3»
 URLS_PER_NET = 2      # адресов сети в пробе без обхода (первый живой)
 RETRY_PAUSE = 3       # провайдер какое-то время помнит замёрзший адрес
 STABILIZE_SEC = 1.0
+# Тайм-аут одной загрузки при подборе: зависание на 16 КБ ждать 15 с
+# (как в обычном тесте) — значит перебрать четыре имени вместо 24.
+TRY_TIMEOUT = 6
+# Песочница не поднялась столько раз подряд — дело не в варианте.
+SANDBOX_FAILS = 3
+# Сколько находок ставить первыми в подбор любого TLS-сайта: сеть сайта
+# заранее неизвестна, а каждая лишняя — целая проба.
+SCAN_FIRST_MAX = 3
 
 PROFILE_PREFIX = "net16k-asn"
 STRATEGY_PREFIX = "net16k-"
@@ -165,23 +175,36 @@ def network_profile(net: dict, ipset_name: str) -> dict:
             "args": " ".join(args), "enabled": True}
 
 
-def with_profile(base, profile: dict) -> dict:
+def with_profile(base: dict, profile: dict, scope: dict = None) -> dict:
     """Стратегия = профиль сети ПЕРВЫМ + профили базы (nfqws2 берёт
     первый подошедший, а профиль сети уже прочих: только её адреса).
-    База, уже собранная здесь, правится на месте."""
-    base = dict(base or {})
+
+    Поля базы сохраняются. Копия — уже не встроенная, и сборщик не
+    ограничит её «голые приёмы» сам (``_autowrap_scope``) — поэтому они
+    ограничиваются здесь, по ``scope`` базы. База, уже собранная здесь,
+    правится на месте.
+    """
+    from core.strategy_builder import autowrap_bare_trick
+    base = {k: v for k, v in dict(base or {}).items()
+            if k not in ("is_builtin", "_filepath")}
     base_id = str(base.get("id") or "")
-    profiles = [p for p in base.get("profiles") or []
-                if isinstance(p, dict) and p.get("id") != profile["id"]]
-    if base_id.startswith(STRATEGY_PREFIX):
-        sid, name = base_id, base.get("name") or base_id
-    else:
-        sid = STRATEGY_PREFIX + (base_id or "only")
-        name = "%s + обрыв 16 КБ" % (base.get("name") or "без стратегии")
-    return {"id": sid, "name": name,
-            "description": "профили сетей с обрывом 16 КБ поверх «%s»"
-                           % (base.get("name") or "—"),
-            "profiles": [profile] + profiles}
+    profiles = []
+    for p in base.get("profiles") or []:
+        if not isinstance(p, dict) or p.get("id") == profile["id"]:
+            continue
+        p = dict(p)
+        if scope and isinstance(p.get("args"), str):
+            p["args"] = " ".join(autowrap_bare_trick(p["args"].split(),
+                                                     **scope))
+        profiles.append(p)
+    out = dict(base)
+    if not base_id.startswith(STRATEGY_PREFIX):
+        out["id"] = STRATEGY_PREFIX + base_id
+        out["name"] = "%s + обрыв 16 КБ" % (base.get("name") or base_id)
+        out["description"] = ("профили сетей с обрывом 16 КБ поверх «%s»"
+                              % (base.get("name") or base_id))
+    out["profiles"] = [profile] + profiles
+    return out
 
 
 # ─────────────────────────────── файл ───────────────────────────────
@@ -211,9 +234,10 @@ def _save(state: dict) -> None:
 
 
 def status() -> dict:
-    """Идёт проба — её состояние, иначе итог прошлой."""
+    """Ход пробы или итог прошлой: в памяти — этого процесса (переживёт
+    и несохранённый файл), иначе с диска."""
     with _lock:
-        if _status.get("state") == "running":
+        if _status.get("state", "idle") != "idle":
             return json.loads(json.dumps(_status))
     data = load()
     return data if data else {"state": "idle"}
@@ -226,19 +250,27 @@ def running() -> bool:
 
 # ─────────────────────────────── прогон ───────────────────────────────
 
-def _probe(url: str, mark: int) -> str:
-    """ok / freeze / error одной загрузки до 25 КБ."""
+def _probe(url: str, mark: int, timeout: int = 0) -> str:
+    """ok / freeze / error одной загрузки до 25 КБ.
+
+    «ok» — только когда пришло больше 20 КБ: короткий ответ (страница
+    ошибки, редирект) об обрыве ничего не говорит.
+    """
     from core import probe_mark
-    from core.testers.tcp_test import check_tcp_16_20_single
+    from core.testers.tcp_test import (TCP_BLOCK_RANGE_MAX,
+                                       check_tcp_16_20_single)
     try:
         with probe_mark.marking(mark):
-            r = check_tcp_16_20_single(url)
+            r = (check_tcp_16_20_single(url, timeout) if timeout
+                 else check_tcp_16_20_single(url))
     except Exception as e:                      # noqa: BLE001 — граница
         log.debug("Проба %s: %s" % (url, e), source=SOURCE)
         return "error"
     if r.error == "TCP_16_20":
         return "freeze"
-    return "ok" if r.status == "success" else "error"
+    got = int((r.raw_data or {}).get("bytes_received") or 0)
+    return "ok" if r.status == "success" and got > TCP_BLOCK_RANGE_MAX \
+        else "error"
 
 
 def _preflight() -> dict:
@@ -323,13 +355,18 @@ def _run(pre: dict) -> None:
         log.error("Проба обрыва упала: %s" % e, source=SOURCE)
         _set(state="error", error="%s: %s" % (type(e).__name__, e))
     finally:
+        # Сначала файл, потом конец прогона: иначе опрос между ними
+        # увидел бы «не идёт» и прочитал прошлый итог с диска.
         with _lock:
-            if _status.get("state") == "running":
-                _status["state"] = "done"
-            _status["finished"] = int(time.time())
-            _status["current"] = ""
             final = json.loads(json.dumps(_status))
+        if final.get("state") == "running":
+            final["state"] = "done"
+        final["finished"] = int(time.time())
+        final["current"] = ""
         _save(final)
+        with _lock:
+            _status.update(state=final["state"], finished=final["finished"],
+                           current="")
 
 
 def _baseline(nets: list, mark: int) -> None:
@@ -364,10 +401,10 @@ def _try(sandbox, steps: list, url: str, mark: int) -> int:
             return -1
         ok = 0
         for i in range(NEED_OK):
-            v = _probe(url, mark)
+            v = _probe(url, mark, TRY_TIMEOUT)
             if v != "ok" and i == 0:
                 time.sleep(RETRY_PAUSE)
-                v = _probe(url, mark)
+                v = _probe(url, mark, TRY_TIMEOUT)
             if v != "ok":
                 break
             ok += 1
@@ -397,6 +434,7 @@ def _run_locked(pre: dict) -> None:
     sandbox = nfqws_sandbox.NFQWSSandbox(pre["queue"])
     all_variants = variants(lint_env.known_functions())
     started = time.monotonic()
+    fails = 0
     try:
         for net in frozen:
             # Сначала то, что уже помогло другой сети: часто подходит.
@@ -413,16 +451,26 @@ def _run_locked(pre: dict) -> None:
                     _set(state="time")
                     return
                 if time.monotonic() - net_started > NET_LIMIT:
-                    net["gave_up"] = True
+                    with _lock:
+                        net["gave_up"] = True
                     break
                 _set(current="AS%s %s: %s" % (net["asn"], net["provider"],
                                                _title(v["steps"], v["name"])))
                 ok = _try(sandbox, v["steps"], net["url"],
                           pre["sandbox_mark"])
+                if ok == -1:
+                    # Не вариант «не помог», а nfqws2 песочницы не встал;
+                    # подряд — значит не встанет ни с каким.
+                    fails += 1
+                    if fails >= SANDBOX_FAILS:
+                        _set(state="error", error="nfqws2 в песочнице не "
+                             "запускается — подробности в журнале "
+                             "(источник nfqws-sandbox)")
+                        return
+                    continue
+                fails = 0
                 with _lock:
                     net["tried"] += 1
-                if ok == -1:
-                    continue
                 if ok == NEED_OK:
                     with _lock:
                         net["found"] = {"name": v["name"],
@@ -450,12 +498,33 @@ def apply_network(asn: str, timeout: int = 0) -> dict:
     from core.ipset_manager import get_ipset_manager
     from core.strategy_builder import get_strategy_manager
 
+    from core import nfqws_control
+
     asn = str(asn or "").strip().upper()
     asn = asn[2:] if asn.startswith("AS") else asn
+    if running():
+        return {"ok": False, "error": "проба ещё идёт — дождитесь итога"}
     net = next((n for n in load().get("nets") or []
                 if str(n.get("asn")) == asn and n.get("found")), None)
     if net is None:
         return {"ok": False, "error": "для AS%s проба ничего не нашла" % asn}
+    sm = get_strategy_manager()
+    current = get_config_manager().get("strategy", "current_id",
+                                       default="") or ""
+    base = sm.get_strategy(current) if current else None
+    if not base:
+        # Стратегия из одного профиля сети сняла бы обход всего прочего.
+        return {"ok": False, "error": "сначала выберите стратегию: профиль "
+                                      "сети ставится поверх текущей"}
+    # Занято — до записи файлов: иначе список и стратегия остались бы,
+    # а применение — нет.
+    if safe_apply.active():
+        return {"ok": False, "error": "идёт проверка другой стратегии — "
+                                      "подтвердите или откатите её"}
+    busy = nfqws_control.busy()
+    if busy:
+        return {"ok": False, "error": "движок занят: %s"
+                % (busy.get("reason") or busy.get("who"))}
     prefixes = get_ipset_manager().load_by_asn(asn)
     if not prefixes:
         return {"ok": False, "error": "не удалось получить адреса AS%s у "
@@ -463,12 +532,8 @@ def apply_network(asn: str, timeout: int = 0) -> dict:
     ipset_name = "asn%s" % asn
     if not get_ipset_manager().save_ipset(ipset_name, prefixes):
         return {"ok": False, "error": "IP-список %s не записан" % ipset_name}
-    sm = get_strategy_manager()
-    current = get_config_manager().get("strategy", "current_id",
-                                       default="") or ""
-    base = sm.get_strategy(current) if current else None
-    saved = sm.save_user_strategy(with_profile(base, network_profile(
-        net, ipset_name)))
+    saved = sm.save_user_strategy(with_profile(
+        base, network_profile(net, ipset_name), sm._autowrap_scope(base)))
     if not saved:
         return {"ok": False, "error": "стратегия не сохранена"}
     kwargs = {"timeout": timeout} if timeout else {}

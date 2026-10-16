@@ -342,10 +342,12 @@ const ScanPage = (() => {
             html += '<table class="table" style="margin-top:6px;"><tbody>' + frozen.map(n => {
                 const name = 'AS' + escapeHtml(n.asn) + ' ' + escapeHtml(n.provider);
                 let what;
-                if (n.found) {
+                if (n.found && !running) {
                     what = 'снимает: <code>' + escapeHtml(n.found.steps.join(' ')) + '</code> '
                         + '<button type="button" class="btn btn-primary btn-sm" onclick="ScanPage.freezeApply(\''
                         + escapeHtml(n.asn) + '\')">Применить для сети</button>';
+                } else if (n.found) {
+                    what = 'снимает: <code>' + escapeHtml(n.found.steps.join(' ')) + '</code>';
                 } else if (running && s.phase === 'names') {
                     what = 'подбираем… (проверено ' + (n.tried || 0) + ')';
                 } else {

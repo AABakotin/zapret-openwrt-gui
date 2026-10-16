@@ -1065,6 +1065,7 @@ class StrategyScanner:
             else:
                 from core import freeze_probe
                 found = freeze_probe.candidates(freeze_probe.load())
+                found = found[:freeze_probe.SCAN_FIRST_MAX]
             from core.custom_candidates import entries as custom_entries
             front = custom_entries(found, self._protocol)
         except Exception as e:                  # noqa: BLE001 — граница
@@ -1076,7 +1077,10 @@ class StrategyScanner:
         self._freeze = found
         log.info("Проба обрыва 16 КБ: первыми проверим %d её находок"
                  % len(front), source="scanner")
-        return front + entries
+        # Те же шаги из каталога второй раз не пробуем.
+        have = {tuple(e.get_args_list()) for e in front}
+        return front + [e for e in entries
+                        if tuple(e.get_args_list()) not in have]
 
     def _remembered_ids(self) -> list:
         """id стратегий из памяти: для resume — сохранённые, иначе свежие."""

@@ -76,10 +76,18 @@ class TestPure(unittest.TestCase):
         self.assertEqual(again["id"], "net16k-my")
         self.assertEqual([p["id"] for p in again["profiles"]],
                          ["net16k-asn24940", "p1"])
-        # Без текущей стратегии — только профиль сети.
-        alone = fp.with_profile(None, prof)
-        self.assertEqual(alone["id"], "net16k-only")
-        self.assertEqual(len(alone["profiles"]), 1)
+        # Встроенная база: поля сохраняются, «голый приём» ограничен
+        # здесь — копию сборщик сам уже не обернёт.
+        builtin = {"id": "b", "name": "B", "is_builtin": True,
+                   "protocol": "tcp", "family": "tls", "profiles": [
+                       {"id": "p1", "args": "--payload=tls_client_hello "
+                                            "--lua-desync=fake"}]}
+        st = fp.with_profile(builtin, prof, {"protocol": "tcp",
+                                             "family": "tls",
+                                             "ports": "443"})
+        self.assertNotIn("is_builtin", st)
+        self.assertEqual(st["protocol"], "tcp")
+        self.assertIn("--filter-tcp=", st["profiles"][1]["args"])
 
     def test_profile_passes_linter(self):
         from core import strategy_lint
@@ -126,7 +134,7 @@ class TestRun(unittest.TestCase):
     def _run(self, good_name):
         sandbox = FakeSandbox(good_name)
 
-        def probe(url, mark):
+        def probe(url, mark, timeout=0):
             if mark == 0:          # без обхода: у Hetzner обрыв
                 return "freeze" if "a.example" in url else "ok"
             args = " ".join(sandbox.args or [])
@@ -158,6 +166,26 @@ class TestRun(unittest.TestCase):
         self.assertEqual(sandbox.started[0][:3], list(fp.FILTER) + [fp.PAYLOAD])
         fw.remove_sandbox_rules.assert_called_once()
 
+    def test_sandbox_not_starting_is_error(self):
+        sandbox = FakeSandbox("x")
+        sandbox.start = lambda args: False
+        fw = mock.Mock()
+        fw.apply_sandbox_rules.return_value = True
+        with mock.patch.object(fp, "_probe",
+                               side_effect=lambda u, m, t=0: "freeze"), \
+                mock.patch.object(fp.time, "sleep"), \
+                mock.patch("core.nfqws_sandbox.NFQWSSandbox",
+                           return_value=sandbox), \
+                mock.patch("core.firewall.get_firewall_manager",
+                           return_value=fw), \
+                mock.patch("core.lint_env.known_functions",
+                           return_value=None):
+            fp._run_locked({"baseline_mark": 0, "sandbox_mark": 8,
+                            "queue": 301})
+        self.assertEqual(fp._status["state"], "error")
+        self.assertEqual(fp._status["nets"][0]["tried"], 0)
+        fw.remove_sandbox_rules.assert_called_once()
+
     def test_nothing_frozen_no_sandbox(self):
         fp._status["nets"] = [dict(n, verdict="", found=None, tried=0,
                                    url="") for n in self.nets[1:]]
@@ -174,15 +202,20 @@ class TestScannerFirst(unittest.TestCase):
         sc._protocol, sc._start_index = "tcp", 0
         found = [{"id": "custom_abc", "args": ["--lua-desync=fake"],
                   "name": "Обрыв 16 КБ: fake", "description": "d"}]
+        x = mock.Mock()
+        x.get_args_list.return_value = ["--lua-desync=multisplit"]
+        dup = mock.Mock()
+        dup.get_args_list.return_value = ["--lua-desync=fake"]
         with mock.patch.object(fp, "candidates", return_value=found), \
                 mock.patch.object(fp, "load", return_value={}):
-            out = sc._freeze_first(["x"], "tls")
+            out = sc._freeze_first([x, dup], "tls")
             self.assertEqual(out[0].section_id, "custom_abc")
             self.assertEqual(out[0].description, "d")
-            self.assertEqual(out[1:], ["x"])
+            # Тот же шаг из каталога второй раз не идёт.
+            self.assertEqual(out[1:], [x])
             self.assertEqual(sc._freeze, found)
             # QUIC/HTTP — не трогаем.
-            self.assertEqual(sc._freeze_first(["x"], "http"), ["x"])
+            self.assertEqual(sc._freeze_first([x], "http"), [x])
 
 
 class TestApply(unittest.TestCase):
@@ -198,9 +231,12 @@ class TestApply(unittest.TestCase):
         sm.get_strategy.return_value = {"id": "cur", "name": "Cur",
                                         "profiles": []}
         sm.save_user_strategy.side_effect = lambda d: d
+        sm._autowrap_scope.return_value = {}
         cfg = mock.Mock()
         cfg.get.return_value = "cur"
         with mock.patch.object(fp, "load", return_value=state), \
+                mock.patch("core.safe_apply.active", return_value=False), \
+                mock.patch("core.nfqws_control.busy", return_value={}), \
                 mock.patch("core.ipset_manager.get_ipset_manager",
                            return_value=ipm), \
                 mock.patch("core.strategy_builder.get_strategy_manager",
@@ -220,6 +256,43 @@ class TestApply(unittest.TestCase):
     def test_apply_unknown_asn(self):
         with mock.patch.object(fp, "load", return_value={}):
             self.assertFalse(fp.apply_network("1")["ok"])
+
+    def test_apply_needs_current_strategy(self):
+        state = {"nets": [{"asn": "1", "found": {"steps": ["--lua-desync=x"]}}]}
+        sm = mock.Mock()
+        sm.get_strategy.return_value = None
+        cfg = mock.Mock()
+        cfg.get.return_value = ""
+        ipm = mock.Mock()
+        with mock.patch.object(fp, "load", return_value=state), \
+                mock.patch("core.ipset_manager.get_ipset_manager",
+                           return_value=ipm), \
+                mock.patch("core.strategy_builder.get_strategy_manager",
+                           return_value=sm), \
+                mock.patch("core.config_manager.get_config_manager",
+                           return_value=cfg):
+            res = fp.apply_network("1")
+        self.assertFalse(res["ok"])
+        ipm.save_ipset.assert_not_called()
+
+
+class TestProbeVerdict(unittest.TestCase):
+
+    def _r(self, status, error="", got=0):
+        r = mock.Mock(status=status, error=error,
+                      raw_data={"bytes_received": got})
+        return r
+
+    def test_short_body_is_not_ok(self):
+        with mock.patch("core.testers.tcp_test.check_tcp_16_20_single",
+                        return_value=self._r("success", got=900)):
+            self.assertEqual(fp._probe("https://x/", 0), "error")
+        with mock.patch("core.testers.tcp_test.check_tcp_16_20_single",
+                        return_value=self._r("success", got=25000)):
+            self.assertEqual(fp._probe("https://x/", 0), "ok")
+        with mock.patch("core.testers.tcp_test.check_tcp_16_20_single",
+                        return_value=self._r("failed", "TCP_16_20", 17000)):
+            self.assertEqual(fp._probe("https://x/", 0), "freeze")
 
 
 if __name__ == "__main__":

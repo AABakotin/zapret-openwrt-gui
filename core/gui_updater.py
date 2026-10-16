@@ -31,10 +31,10 @@ from core.version import GUI_VERSION
 
 # ── Настройки ─────────────────────────────────────────────────
 
-GITHUB_API_URL = "https://api.github.com/repos/avatarDD/zapret-gui/releases/latest"
-GITHUB_API_RELEASES = "https://api.github.com/repos/avatarDD/zapret-gui/releases"
-GITHUB_RELEASES_URL = "https://github.com/avatarDD/zapret-gui/releases"
-GITHUB_REPO_URL = "https://github.com/avatarDD/zapret-gui"
+GITHUB_API_URL = "https://api.github.com/repos/AABakotin/zapret-openwrt-gui/releases/latest"
+GITHUB_API_RELEASES = "https://api.github.com/repos/AABakotin/zapret-openwrt-gui/releases"
+GITHUB_RELEASES_URL = "https://github.com/AABakotin/zapret-openwrt-gui/releases"
+GITHUB_REPO_URL = "https://github.com/AABakotin/zapret-openwrt-gui"
 
 # Тэг GUI-релиза: vX.Y[.Z]. Бинарные релизы (singbox-bin-*/awg-bin-*/
 # manual-*) под этот шаблон не подходят и при проверке обновлений
@@ -1261,7 +1261,7 @@ class GuiUpdater:
         бинарные.
         """
         for page in (1, 2):
-            url = ("https://api.github.com/repos/avatarDD/zapret-gui/"
+            url = ("https://api.github.com/repos/AABakotin/zapret-openwrt-gui/"
                    "releases?per_page=100&page=%d" % page)
             req = Request(url, headers={
                 "Accept": "application/vnd.github.v3+json",

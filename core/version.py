@@ -6,4 +6,4 @@
     from core.version import GUI_VERSION
 """
 
-GUI_VERSION = "1.0.1"
+GUI_VERSION = "1.0.2"

@@ -36,8 +36,10 @@ issue в репозитории базы (:func:`share_url`) — что уйдё
 ## Провайдер
 
 AS провайдера — ``community.asn``; пусто — определяется по внешнему
-адресу через RIPEstat (``whats-my-ip`` → ``network-info``) и
-запоминается в настройках. Сам адрес не сохраняется и не показывается.
+адресу через RIPEstat (``whats-my-ip`` → ``network-info``) и помнится
+сутки во временном каталоге, не в настройках: адрес мог выйти через
+туннель (тогда это AS туннеля — страница так и пишет), а провайдер —
+смениться. Сам адрес не сохраняется и не показывается.
 
 Чистые функции (:func:`parse_items`, :func:`candidates`,
 :func:`share_url`, …) отделены от сети.
@@ -62,7 +64,10 @@ FRESH_DAYS = 60         # подтверждалась позже — «свеж
 MAX_STEPS = 8
 TTL_OK = 86400
 TTL_ERROR = 600
-FETCH_TIMEOUT = 20
+# Запросы со страницы ждёт фронт (15 с) — поэтому короткий тайм-аут и
+# без повтора; из потока подбора — подлиннее и с повтором.
+FETCH_TIMEOUT = 15
+UI_TIMEOUT = 5
 # Шаг — только --lua-desync без путей и блобов из файлов; тот же шаблон
 # проверяет и приём в репозитории базы.
 STEP_RE = re.compile(
@@ -186,6 +191,17 @@ def candidates(items: list, host: str = "", host_asn: int = None,
     return [c for _k, c in out[:limit]]
 
 
+_BLOB_REF_RE = re.compile(r"(?<!-)blob=([A-Za-z0-9_]+)")
+
+
+def declared_blobs(args) -> set:
+    """Имена blob'ов, объявленных в самой строке (``--blob=имя:…``)."""
+    if isinstance(args, str):
+        args = args.split()
+    return {a[len("--blob="):].split(":", 1)[0] for a in args or []
+            if isinstance(a, str) and a.startswith("--blob=")}
+
+
 def steps_of(args) -> list:
     """Шаги ``--lua-desync`` из полной строки аргументов (без путей)."""
     if isinstance(args, str):
@@ -251,23 +267,24 @@ def repo() -> str:
         else DEFAULT_REPO
 
 
-def _get(url: str):
+def _get(url: str, quick: bool = False):
     """(код, тело) — через транспорт ``community.transport``.
 
     Соединение не состоялось (DNS роутера на секунду пропал) — ещё одна
-    попытка через 3 секунды.
+    попытка через 3 секунды; ``quick`` (запрос со страницы) — одна
+    попытка с коротким тайм-аутом.
     """
     import urllib.error
     from core.download_transport import urlopen_via
     from core.version import GUI_VERSION
     transport = _cfg().get("community", "transport", default="") or ""
     last = None
-    for attempt in range(2):
+    for attempt in range(1 if quick else 2):
         if attempt:
             time.sleep(3)
         try:
             with urlopen_via(url, transport=transport,
-                             timeout=FETCH_TIMEOUT,
+                             timeout=UI_TIMEOUT if quick else FETCH_TIMEOUT,
                              headers={"User-Agent": "zapret-gui/%s"
                                       % GUI_VERSION}) as resp:
                 return resp.status, resp.read(2 * 1024 * 1024)
@@ -278,11 +295,11 @@ def _get(url: str):
     raise OSError(str(last) or "нет соединения")
 
 
-def _ripe(name: str, resource: str = "") -> dict:
+def _ripe(name: str, resource: str = "", quick: bool = False) -> dict:
     url = "https://stat.ripe.net/data/%s/data.json" % name
     if resource:
         url += "?resource=" + urllib.parse.quote(resource)
-    code, body = _get(url)
+    code, body = _get(url, quick)
     if code != 200:
         return {}
     try:
@@ -291,42 +308,64 @@ def _ripe(name: str, resource: str = "") -> dict:
         return {}
 
 
-def ip_asn(ip: str) -> int:
-    asns = _ripe("network-info", ip).get("asns") or []
+def ip_asn(ip: str, quick: bool = False) -> int:
+    asns = _ripe("network-info", ip, quick).get("asns") or []
     try:
         return int(asns[0])
     except (IndexError, TypeError, ValueError):
         return 0
 
 
-def provider(detect: bool = False) -> dict:
-    """AS провайдера: из настроек; ``detect`` — определить, если пусто."""
+def _detected_path() -> str:
+    return os.path.join(tempfile.gettempdir(),
+                        "zapret-gui-community-provider.json")
+
+
+def provider(detect: bool = False, quick: bool = False) -> dict:
+    """AS провайдера: ``community.asn``; пусто — определённый по внешнему
+    адресу (помнится сутки во временном каталоге, а не в настройках:
+    адрес мог выйти через туннель, а провайдер — смениться); ``detect`` —
+    определить, если не помнится. ``auto`` в ответе — определён сам."""
     cfg = _cfg()
     try:
         asn = int(cfg.get("community", "asn", default=0) or 0)
     except (TypeError, ValueError):
         asn = 0
     name = str(cfg.get("community", "provider", default="") or "")
-    if asn or not detect:
-        return {"asn": asn, "provider": name}
+    if asn:
+        return {"asn": asn, "provider": name, "auto": False}
     try:
-        ip = _ripe("whats-my-ip").get("ip")
-        asn = ip_asn(ip) if ip else 0
-        if asn:
-            name = name or _text(_ripe("as-overview", "AS%d" % asn)
-                                 .get("holder"), 80)
-            cfg.set("community", "asn", asn)
-            if name:
-                cfg.set("community", "provider", name)
-            cfg.save()
+        with open(_detected_path(), "r", encoding="utf-8") as f:
+            cached = json.load(f)
+        if time.time() - cached.get("checked", 0) < TTL_OK \
+                and int(cached.get("asn") or 0):
+            return {"asn": int(cached["asn"]),
+                    "provider": name or _text(cached.get("provider"), 80),
+                    "auto": True}
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    if not detect:
+        return {"asn": 0, "provider": name, "auto": True}
+    try:
+        ip = _ripe("whats-my-ip", quick=quick).get("ip")
+        asn = ip_asn(ip, quick) if ip else 0
+        holder = _text(_ripe("as-overview", "AS%d" % asn, quick)
+                       .get("holder"), 80) if asn else ""
     except OSError as e:
-        return {"asn": 0, "provider": name,
+        return {"asn": 0, "provider": name, "auto": True,
                 "error": "провайдер не определён: %s" % e}
-    return {"asn": asn, "provider": name,
+    if asn:
+        try:
+            from core.safe_io import atomic_write_json
+            atomic_write_json(_detected_path(), {
+                "asn": asn, "provider": holder, "checked": int(time.time())})
+        except (OSError, TypeError, ValueError):
+            pass
+    return {"asn": asn, "provider": name or holder, "auto": True,
             "error": "" if asn else "провайдер не определён"}
 
 
-def host_asn(host: str) -> int:
+def host_asn(host: str, quick: bool = False) -> int:
     """Сеть сайта по первому адресу; заглушка, частный адрес — 0."""
     import ipaddress
     import socket
@@ -334,7 +373,7 @@ def host_asn(host: str) -> int:
         ip = socket.getaddrinfo(host, 443, socket.AF_INET)[0][4][0]
         if not ipaddress.ip_address(ip).is_global:
             return 0
-        return ip_asn(ip)
+        return ip_asn(ip, quick)
     except (OSError, ValueError, IndexError):
         return 0
 
@@ -344,7 +383,7 @@ def _cache_path(asn: int) -> str:
                         "zapret-gui-community-AS%d.json" % asn)
 
 
-def load(asn: int, force: bool = False) -> dict:
+def load(asn: int, force: bool = False, quick: bool = False) -> dict:
     """Записи базы для AS: {asn, items, fetched, checked, error}.
 
     Кеш — во временном каталоге (в RAM на роутере): после перезагрузки
@@ -366,7 +405,7 @@ def load(asn: int, force: bool = False) -> dict:
         repo(), asn)
     now = int(time.time())
     try:
-        code, body = _get(url)
+        code, body = _get(url, quick)
     except OSError as e:
         code, body = 0, b""
         cached.update(checked=now, error="база недоступна: %s" % e)
@@ -421,14 +460,15 @@ def scan_candidates(host: str, proto: str = "tls") -> tuple:
 
 def overview(force: bool = False, detect: bool = False) -> dict:
     """Что база знает о своём провайдере — для страницы."""
-    prov = provider(detect=detect)
+    prov = provider(detect=detect, quick=True)
     asn = prov.get("asn") or 0
     out = {"asn": asn, "provider": prov.get("provider", ""),
+           "auto": prov.get("auto", False),
            "repo": "https://github.com/%s" % repo(), "items": [],
            "error": prov.get("error") or ""}
     if not asn:
         return out
-    data = load(asn, force=force)
+    data = load(asn, force=force, quick=True)
     items = []
     for x in data.get("items") or []:
         items.append(dict(x, fresh=fresh(x), skipped=skipped(x)))
@@ -453,9 +493,17 @@ def share(outcome: str, args, host: str = "", community: str = "",
             or not all(STEP_RE.match(s) for s in steps):
         return {"ok": False, "error": "в базу уходят только шаги "
                                       "--lua-desync без путей к файлам — у "
-                                      "этой стратегии таких нет или есть "
-                                      "лишнее"}
-    prov = provider(detect=True)
+                                      "этой стратегии таких нет или в "
+                                      "шагах есть путь"}
+    own = declared_blobs(args)
+    used = sorted({n for s in steps for n in _BLOB_REF_RE.findall(s)
+                   if n in own})
+    if used:
+        # Без своего --blob шаг у другого был бы другой стратегией.
+        return {"ok": False, "error": "стратегия опирается на свой blob "
+                                      "«%s» — в базу уходят только шаги, "
+                                      "у других его не будет" % used[0]}
+    prov = provider(detect=True, quick=True)
     if not prov.get("asn"):
         return {"ok": False, "error": prov.get("error")
                 or "провайдер не определён — впишите номер AS в настройке "
@@ -471,7 +519,7 @@ def share(outcome: str, args, host: str = "", community: str = "",
     url, text = share_url(repo(), outcome, {
         "asn": prov["asn"], "provider": prov.get("provider", ""),
         "proto": proto, "target_host": host,
-        "target_asn": host_asn(host) if host else "",
+        "target_asn": host_asn(host, quick=True) if host else "",
         "steps": steps, "result": result, "nfqws2": nfqws2,
         "ui": "zapret-gui " + GUI_VERSION, "community": community})
     return {"ok": True, "url": url, "text": text}

@@ -128,6 +128,35 @@ class TestShare(unittest.TestCase):
         self.assertEqual(cs.steps_of("--filter-tcp=443 " + GOOD), [GOOD])
 
 
+class TestProvider(unittest.TestCase):
+
+    def test_detected_kept_in_temp_not_settings(self):
+        tmp = tempfile.mkdtemp()
+        cfg = mock.Mock()
+        cfg.get.side_effect = lambda sec, key, default=None: default
+        ripe = {"whats-my-ip": {"ip": "1.2.3.4"},
+                "network-info": {"asns": ["12389"]},
+                "as-overview": {"holder": "RT"}}
+        with mock.patch.object(cs.tempfile, "gettempdir", return_value=tmp), \
+                mock.patch.object(cs, "_cfg", return_value=cfg), \
+                mock.patch.object(cs, "_ripe",
+                                  side_effect=lambda n, r="", quick=False: ripe[n]):
+            p = cs.provider(detect=True)
+            self.assertEqual((p["asn"], p["provider"], p["auto"]),
+                             (12389, "RT", True))
+            cfg.set.assert_not_called()
+            # Второй раз — из временного файла, без сети.
+            with mock.patch.object(cs, "_ripe") as again:
+                self.assertEqual(cs.provider(detect=True)["asn"], 12389)
+            again.assert_not_called()
+
+    def test_share_refuses_own_blob(self):
+        res = cs.share("works", ["--blob=my:0x1603", "--filter-tcp=443",
+                                 "--lua-desync=fake:blob=my"])
+        self.assertFalse(res["ok"])
+        self.assertIn("«my»", res["error"])
+
+
 class TestLoad(unittest.TestCase):
 
     def setUp(self):
@@ -191,6 +220,38 @@ class TestScanner(unittest.TestCase):
         with mock.patch.object(cs, "scan_candidates") as sc_call:
             self.assertEqual(sc._community_first([other], "tls"), [other])
         sc_call.assert_not_called()
+
+    def test_order_memory_then_freeze_then_community(self):
+        from core.strategy_scanner import StrategyScanner
+        sc = StrategyScanner()
+        calls = []
+        sc._community_first = lambda e, f: calls.append("community") or e
+        sc._freeze_first = lambda e, f: calls.append("freeze") or e
+        sc._memory_first = lambda e: calls.append("memory") or e
+        sc._custom = None
+        sc._protocol, sc._mode, sc._target = "tcp", "quick", "x.org"
+        sc._dpi_type, sc._start_index = "", 0
+        cm = mock.Mock()
+        cm.get_quick_set.return_value = []
+        cm.get_catalog_entries.return_value = []
+        with mock.patch("core.catalog_loader.get_catalog_manager",
+                        return_value=cm):
+            sc._select_strategies()
+        # Каждый ставит своё в начало: последний вызванный — первым.
+        self.assertEqual(calls, ["community", "freeze", "memory"])
+
+    def test_resume_restores_even_when_unchecked(self):
+        from core.strategy_scanner import StrategyScanner
+        sc = StrategyScanner()
+        sc._protocol, sc._start_index, sc._target = "tcp", 5, "x.org"
+        sc._community_req = False
+        saved = [{"id": "custom_1", "args": [GOOD], "label": "community"}]
+        with mock.patch.object(sc, "_load_resume_state",
+                               return_value={"community": saved}), \
+                mock.patch.object(cs, "provider", return_value={"asn": 7}):
+            out = sc._community_first([], "tls")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(sc._community_info, {"asn": 7})
 
     def test_scan_candidates_lints(self):
         items = [item(id="a1"), item(id="b2", steps=["--lua-desync=nope"])]

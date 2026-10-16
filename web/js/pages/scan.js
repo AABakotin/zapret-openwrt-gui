@@ -245,7 +245,7 @@ const ScanPage = (() => {
                     <div id="scan-freeze-result" style="margin-top:8px; font-size:13px;"></div>
                 </div>
 
-                <div class="card" id="scan-community">
+                <div class="card" id="scan-community-card">
                     <div class="card-title">Стратегии сообщества</div>
                     <p class="form-hint">Открытая база стратегий по провайдерам (номер AS): что сработало у абонентов
                         вашего провайдера. Провайдер определяется по внешнему адресу через RIPEstat, база читается с GitHub.
@@ -909,6 +909,7 @@ const ScanPage = (() => {
             return;
         }
         const head = 'AS' + escapeHtml(d.asn) + (d.provider ? ' · ' + escapeHtml(d.provider) : '')
+            + (d.auto ? ' (определён по внешнему адресу; если это туннель, а не провайдер, впишите номер в community.asn)' : '')
             + ' — ' + plural(d.items.length, 'стратегия', 'стратегии', 'стратегий')
             + (d.error ? ' · ' + escapeHtml(d.error) : '');
         const rows = d.items.map(x => '<tr' + (x.skipped ? ' style="opacity:.55"' : '') + '><td><code>'
@@ -947,6 +948,7 @@ const ScanPage = (() => {
             host: (lastStatus && lastStatus.target) || '',
             community: src.startsWith('community:') ? src.slice(10) : '',
             result: r.checks > 1 ? r.passes + '/' + r.checks : (item.works ? '1/1' : '0/1'),
+            proto: (lastStatus && lastStatus.family) === 'http' ? 'http' : 'tls',
         };
         try {
             const res = await API.post('/api/scan/community/share', body);

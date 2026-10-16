@@ -458,7 +458,18 @@ class StrategyScanner:
                 # База сообщества: AS, сколько записей, ошибка.
                 "community": dict(self._community_info),
                 "community_first": len(self._community),
+                # Семейство цели (tls/http/quic/voice) — для «Поделиться».
+                "family": self._family_name(),
             }
+
+    def _family_name(self) -> str:
+        if self._scan_profile is None:
+            return ""
+        try:
+            from core.scan_targets import traffic_family
+            return traffic_family(self._scan_profile, self._protocol)
+        except Exception:                       # noqa: BLE001
+            return ""
 
     def _probe_kind_name(self) -> str:
         """Чем проверяется цель: ``tls+body`` / ``quic`` / ``stun``."""
@@ -1047,9 +1058,12 @@ class StrategyScanner:
 
         # То, что уже срабатывало на этой цели в этой сети, — первым:
         # пользователю важна рабочая стратегия, и шанс у этих выше.
-        entries = self._memory_first(entries)
-        entries = self._freeze_first(entries, family)
+        # Каждый ставит своё в самое начало, поэтому порядок вызовов
+        # обратный итоговому: память подбора, находки пробы обрыва,
+        # сообщество.
         entries = self._community_first(entries, family)
+        entries = self._freeze_first(entries, family)
+        entries = self._memory_first(entries)
 
         # Применяем start_index для resume
         if self._start_index > 0 and self._start_index < len(entries):
@@ -1138,14 +1152,18 @@ class StrategyScanner:
                                                     default=False))
             except Exception:                   # noqa: BLE001 — граница
                 req = False
-        if not req or self._protocol != "tcp" \
+        resuming = self._start_index > 0
+        # Resume — по сохранённому списку, даже если галку сняли: иначе
+        # позиция продолжения съехала бы на длину этого списка.
+        if (not req and not resuming) or self._protocol != "tcp" \
                 or family not in ("tls", "http"):
             return entries
         try:
-            if self._start_index > 0:
+            if resuming:
                 saved = self._load_resume_state().get("community")
                 found = saved if isinstance(saved, list) else []
-                info = {}
+                from core import community_strategies
+                info = {"asn": community_strategies.provider().get("asn")}
             else:
                 from core import community_strategies
                 self._set_phase("Стратегии сообщества для вашего провайдера")

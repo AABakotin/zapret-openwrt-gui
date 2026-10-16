@@ -34,7 +34,7 @@ name = nfqws-menu ALT2: multisplit pos=2 seqovl=652
 author = Flowseal → rndnaame/nfqws-menu
 label = stable
 description = Приём HTTP (порт 80) из «ALT2: multisplit seqovl=652».
---lua-desync=multisplit:pos=2:seqovl=652:seqovl_pattern=tls2n
+--lua-desync=multisplit:pos=2:seqovl=652:seqovl_pattern=tls_clienthello
 
 [nm_http_alt3]
 name = nfqws-menu ALT3: fake onetrust + hostfakesplit ya.ru
@@ -57,14 +57,14 @@ name = nfqws-menu ALT6: multisplit pos=1 seqovl=681
 author = Flowseal → rndnaame/nfqws-menu
 label = stable
 description = Приём HTTP (порт 80) из «ALT6: multisplit seqovl=681 pos=1».
---lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello
 
 [nm_http_alt7]
 name = nfqws-menu ALT7: multisplit pos=2,sniext+1 seqovl=679
 author = Flowseal → rndnaame/nfqws-menu
 label = stable
 description = Приём HTTP (порт 80) из «ALT7: multisplit pos=2,sniext+1 seqovl=679».
---lua-desync=multisplit:pos=2,sniext+1:seqovl=679:seqovl_pattern=tls2n
+--lua-desync=multisplit:pos=2,sniext+1:seqovl=679:seqovl_pattern=tls_clienthello
 
 [nm_http_alt8]
 name = nfqws-menu ALT8: fake onetrust ×6
@@ -110,7 +110,7 @@ author = Flowseal → rndnaame/nfqws-menu
 label = stable
 description = Приём HTTP (порт 80) из «FAKE TLS AUTO ALT2: fake + multisplit, badseq 10000000».
 --lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=8:tcp_seq=10000000:tcp_ack=-66000:tcp_ts_up
---lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello
 
 [nm_http_fake_tls_auto_alt3]
 name = nfqws-menu FAKE TLS AUTO ALT3: fake onetrust ×8 + multisplit pos=1 seqovl=681
@@ -118,7 +118,7 @@ author = Flowseal → rndnaame/nfqws-menu
 label = stable
 description = Приём HTTP (порт 80) из «FAKE TLS AUTO ALT3: fake + multisplit, ts».
 --lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=8:tcp_ts=-600000:tcp_ts_up
---lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello
 
 [nm_http_krushaaa]
 name = nfqws-menu krushaaa: fake stun ×8 + fakedsplit pos=midsld seqovl=417 + fake tls_lordfilm ×8 + multisplit pos=100,midsld-2,endhost-4 seqovl=681 ×8
@@ -128,4 +128,4 @@ description = Приём HTTP (порт 80) из «krushaaa: fakedsplit + multis
 --lua-desync=fake:blob=stun:repeats=8:tcp_ts=-600000:tcp_ts_up
 --lua-desync=fakedsplit:pos=midsld:tcp_ack=-66000:tcp_ts_up:seqovl=417:seqovl_pattern=0x1603010000
 --lua-desync=fake:blob=tls_lordfilm:repeats=8:tcp_ts=-600000:tcp_ts_up
---lua-desync=multisplit:pos=100,midsld-2,endhost-4:repeats=8:seqovl=681:seqovl_pattern=tls2n
+--lua-desync=multisplit:pos=100,midsld-2,endhost-4:repeats=8:seqovl=681:seqovl_pattern=tls_clienthello

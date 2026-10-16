@@ -1178,11 +1178,18 @@ class NFQWSManager:
         # --qnum
         queue_num = cfg.get("nfqws", "queue_num", default=300)
         args.append("--qnum=%d" % int(queue_num))
-        # OpenWrt: --daemon + --pidfile.
-        # --daemon нужен, чтобы nfqws2 корректно форкнулся и записал PID
-        # ребёнка в файл. Без --daemon он тоже форкается, но PID не пишет,
-        # и GUI не находит процесс.
 
+        # OpenWrt: НЕ добавляем --daemon и --pidfile.
+        # --pidfile заставляет nfqws2 форкаться: родитель умирает,
+        # peer_pid в очереди NFQUEUE остаётся мёртвым, GUI видит
+        # "exit code 0" и снимает правила firewall.
+        # Без --daemon/--pidfile nfqws2 не форкается, остаётся одним
+        # процессом, GUI отслеживает его через Popen.poll().
+        #
+        # Процесс, запущенный через S99zapret (автозапуск Entware),
+        # УЖЕ имеет --daemon --pidfile в cmdline — там форк
+        # происходит корректно, и GUI находит его через скан /proc
+        # (см. _find_external_pid).
 
         # --debug — пер-пакетный лог nfqws2 для диагностики. Глобальная опция,
         # добавляется один раз в base. nfqws2 пишет debug в STDOUT (DLOG),
@@ -1377,15 +1384,19 @@ class NFQWSManager:
             return None
         self._last_external_scan = now
 
-        for pid in self._find_nfqws_pids():
+        candidates = self._find_nfqws_pids()
+        # Приоритет: процесс с --daemon/--pidfile (запущен S99zapret).
+        # Такой процесс корректно форкнулся и держит очередь NFQUEUE.
+        for pid in candidates:
             cmdline = self._proc_cmdline(pid)
-            # На Keenetic/Entware — только с --daemon/--pidfile.
-            # На OpenWrt — любой nfqws2 (он не форкается).
-            if IS_OPENWRT:
-                return pid
             if any(a == "--daemon" or a.startswith("--pidfile")
                    for a in cmdline):
                 return pid
+        # Fallback на OpenWrt: процесс без --daemon/--pidfile —
+        # это GUI-запущенный nfqws2 (он не форкается).
+        if IS_OPENWRT and candidates:
+            return candidates[0]
+        return None
 
     @staticmethod
     def _proc_cmdline(pid: int) -> list:

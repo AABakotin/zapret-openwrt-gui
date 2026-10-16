@@ -13,6 +13,9 @@ API списков доменов (hostlists).
   POST   /api/hostlists/:name/remove — удалить домены
   POST   /api/hostlists/:name/reset  — сброс к дефолтам
   POST   /api/hostlists/:name/import — импорт из URL или текста
+  GET    /api/hostlists-check        — проверка записей и конфликтов
+                                       (core/list_lint.report)
+  POST   /api/hostlists-check/fix    — исправить список {name}
 
 Имя списка:
   — встроенные: other, other2, netrogat (нельзя удалить/переименовать)
@@ -29,6 +32,33 @@ def _validate_name(hm, name):
 
 
 def register(app):
+
+    # Отдельный префикс, а не /api/hostlists/check: «check» — допустимое
+    # имя пользовательского списка, и маршрут перекрыл бы его.
+    @app.route("/api/hostlists-check")
+    def api_hostlists_check():
+        """Проверка записей всех хостлистов и конфликтов между ними."""
+        response.content_type = "application/json; charset=utf-8"
+        from core.list_lint import report
+        return {"ok": True, "result": report()}
+
+    @app.post("/api/hostlists-check/fix")
+    def api_hostlists_check_fix():
+        """Исправить один список: нормализация, повторы, покрытые поддомены."""
+        response.content_type = "application/json; charset=utf-8"
+        from core.list_lint import fix_list
+        try:
+            body = request.json or {}
+        except Exception:
+            body = {}
+        name = str(body.get("name") or "").strip()
+        if not name:
+            response.status = 400
+            return {"ok": False, "error": "Поле 'name' обязательно"}
+        result = fix_list(name)
+        if not result.get("ok"):
+            response.status = 400
+        return result
 
     @app.route("/api/hostlists")
     def api_hostlists_list():

@@ -43,12 +43,20 @@ const HostlistsPage = (() => {
                         «Исключения» — сайты, которые обход не трогает никогда.
                     </p>
                 </div>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button class="btn btn-ghost" onclick="HostlistsPage.showCheckModal()" title="Мусор в записях, повторы, сайт и в обходе, и в исключениях">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                        <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                    Проверить списки
+                </button>
                 <button class="btn btn-primary" onclick="HostlistsPage.showCreateModal()">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
                         <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
                     </svg>
                     Создать список
                 </button>
+                </div>
             </div>
 
 
@@ -173,6 +181,21 @@ const HostlistsPage = (() => {
                             </button>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <!-- Проверка списков -->
+            <div class="modal-backdrop" id="hl-check-modal" style="display:none;">
+                <div class="modal-content" style="max-width:760px;">
+                    <div class="modal-header">
+                        <h3 class="modal-title">Проверка списков</h3>
+                        <button class="modal-close" onclick="HostlistsPage.closeCheckModal()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="modal-body" id="hl-check-body">Проверяю…</div>
                 </div>
             </div>
 
@@ -919,6 +942,106 @@ const HostlistsPage = (() => {
         return div.innerHTML;
     }
 
+    // ══════════════════ Проверка списков ══════════════════
+
+    async function showCheckModal() {
+        const modal = document.getElementById('hl-check-modal');
+        const body = document.getElementById('hl-check-body');
+        if (!modal || !body) return;
+        modal.style.display = 'flex';
+        body.textContent = 'Проверяю…';
+        try {
+            const res = await API.get('/api/hostlists-check');
+            body.innerHTML = renderCheck(res.result || {});
+        } catch (err) {
+            body.textContent = 'Не удалось проверить: ' + err.message;
+        }
+    }
+
+    function closeCheckModal() {
+        const modal = document.getElementById('hl-check-modal');
+        if (modal) modal.style.display = 'none';
+    }
+
+    const USAGE_LABEL = { bypass: 'обход', exclude: 'исключения' };
+
+    function renderCheck(r) {
+        const parts = [];
+        const conflicts = r.conflicts || [];
+        if (conflicts.length) {
+            parts.push(`<div class="alert alert-danger" style="margin-bottom:12px;">
+                <div class="alert-title">Сайт и в обходе, и в исключениях (${r.conflicts_total})</div>
+                <div>Исключение побеждает: эти сайты обход не трогает, хотя они в списке обхода.</div>
+                <ul style="margin:6px 0 0 18px;">${conflicts.slice(0, 30).map(c =>
+                    `<li><code>${escapeHtml(c.entry)}</code> в ${c.bypass.map(escapeHtml).join(', ')}
+                     — исключён записью <code>${escapeHtml(c.exclude_entry)}</code> в ${escapeHtml(c.exclude)}</li>`).join('')}</ul>
+            </div>`);
+        }
+        const rows = (r.lists || []).map(l => {
+            const issues = Object.entries(l.issues || {});
+            const usage = USAGE_LABEL[l.usage]
+                ? `<span class="badge">${USAGE_LABEL[l.usage]}</span>`
+                : '<span class="badge" title="Активная стратегия этот список не читает">не подключён</span>';
+            const detail = issues.length
+                ? issues.map(([code, v]) => `<div style="margin-top:4px;">
+                    ${escapeHtml(CHECK_TITLES[code] || code)}: <b>${v.count}</b>
+                    <span class="text-muted" style="font-size:12px;">${v.samples.slice(0, 3).map(s =>
+                        escapeHtml(s.entry) + (s.fix ? ' → ' + escapeHtml(s.fix) : '')).join('; ')}</span>
+                  </div>`).join('')
+                : '<div class="text-muted" style="margin-top:4px;">замечаний нет</div>';
+            const fix = l.fixable
+                ? `<button class="btn btn-primary btn-sm" onclick="HostlistsPage.fixChecked('${escapeAttr(l.name)}')">Исправить (${l.fixable})</button>`
+                : '';
+            return `<div style="padding:10px 0; border-bottom:1px solid var(--border);">
+                <div style="display:flex; justify-content:space-between; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <div><b>${escapeHtml(l.name)}</b> ${usage}
+                        <span class="text-muted" style="font-size:12px;">${l.total} записей</span></div>
+                    ${fix}
+                </div>${detail}</div>`;
+        });
+        parts.push(rows.join(''));
+        const dups = r.duplicates || [];
+        if (dups.length) {
+            parts.push(`<details style="margin-top:12px;"><summary>Одна запись в нескольких списках (${r.duplicates_total})</summary>
+                <ul style="margin:6px 0 0 18px;">${dups.slice(0, 50).map(d =>
+                    `<li><code>${escapeHtml(d.entry)}</code> — ${d.lists.map(escapeHtml).join(', ')}</li>`).join('')}</ul></details>`);
+        }
+        parts.push(`<div class="form-hint" style="margin-top:12px;">«Исправить» нормализует записи
+            (убирает «*.», «https://», «www.», приводит к нижнему регистру), удаляет повторы и
+            поддомены, уже покрытые родителем. Нераспознанные строки не удаляются.</div>`);
+        return parts.join('');
+    }
+
+    const CHECK_TITLES = {
+        wildcard: 'маска «*.» — nfqws2 её не понимает',
+        not_normalized: 'запись не в том виде, в каком её сравнивает nfqws2',
+        invalid: 'не похоже на домен',
+        duplicate: 'повторы',
+        covered_by_parent: 'поддомены, уже покрытые родителем',
+    };
+
+    async function fixChecked(name) {
+        if (name === activeTab && hasUnsaved
+                && !confirm('В открытом списке есть несохранённые изменения — исправление их перезапишет. Продолжить?')) {
+            return;
+        }
+        try {
+            const res = await API.post('/api/hostlists-check/fix', { name });
+            if (res.ok) {
+                Toast.success(res.changed
+                    ? `${name}: было ${res.before}, стало ${res.after}`
+                    : `${name}: исправлять нечего`);
+                if (name === activeTab) loadTab(activeTab);
+                loadStats();
+                showCheckModal();
+            } else {
+                Toast.error(res.error || 'Не удалось исправить');
+            }
+        } catch (err) {
+            Toast.error(err.message);
+        }
+    }
+
     function escapeAttr(text) {
         return escapeHtml(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
@@ -952,5 +1075,8 @@ const HostlistsPage = (() => {
         closeImportModal,
         importFromUrl,
         importFromText,
+        showCheckModal,
+        closeCheckModal,
+        fixChecked,
     };
 })();

@@ -984,7 +984,7 @@ const HostlistsPage = (() => {
                 : '<span class="badge" title="Активная стратегия этот список не читает">не подключён</span>';
             const detail = issues.length
                 ? issues.map(([code, v]) => `<div style="margin-top:4px;">
-                    ${escapeHtml(CHECK_TITLES[code] || code)}: <b>${v.count}</b>
+                    ${escapeHtml((r.titles || {})[code] || code)}: <b>${v.count}</b>
                     <span class="text-muted" style="font-size:12px;">${v.samples.slice(0, 3).map(s =>
                         escapeHtml(s.entry) + (s.fix ? ' → ' + escapeHtml(s.fix) : '')).join('; ')}</span>
                   </div>`).join('')
@@ -1011,14 +1011,6 @@ const HostlistsPage = (() => {
             поддомены, уже покрытые родителем. Нераспознанные строки не удаляются.</div>`);
         return parts.join('');
     }
-
-    const CHECK_TITLES = {
-        wildcard: 'маска «*.» — nfqws2 её не понимает',
-        not_normalized: 'запись не в том виде, в каком её сравнивает nfqws2',
-        invalid: 'не похоже на домен',
-        duplicate: 'повторы',
-        covered_by_parent: 'поддомены, уже покрытые родителем',
-    };
 
     async function fixChecked(name) {
         if (name === activeTab && hasUnsaved

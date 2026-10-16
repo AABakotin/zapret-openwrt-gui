@@ -87,6 +87,56 @@ class TestCrossCheck(unittest.TestCase):
         self.assertEqual(r["conflicts"], [])
 
 
+class TestReviewFixes(unittest.TestCase):
+
+    def test_tld_exclude_covers(self):
+        r = ll.cross_check({"other": ["xn--80ak6aa92e.xn--p1ai"],
+                            "netrogat": ["xn--p1ai"]},
+                           excludes=["netrogat"], normalize=NORM)
+        self.assertEqual(len(r["conflicts"]), 1)
+
+    def test_unread_list_does_not_conflict(self):
+        r = ll.cross_check({"other": ["ya.ru"], "other2": ["sber.ru"],
+                            "netrogat": ["ya.ru", "sber.ru"]},
+                           excludes=["netrogat"], bypass=["other"],
+                           normalize=NORM)
+        self.assertEqual([c["entry"] for c in r["conflicts"]], ["ya.ru"])
+
+    def test_fixable_counts_lines_once(self):
+        r = ll.lint_entries(["example.com", "*.example.com"], normalize=NORM)
+        self.assertEqual(r["fixable"], 1)
+        self.assertEqual(len(ll.fix_entries(["example.com", "*.example.com"],
+                                            normalize=NORM)), 1)
+
+    def test_fix_lines_keeps_comments(self):
+        out = ll.fix_lines(["# банки", "*.sber.ru", "", "# видео",
+                            "a.sber.ru", "YouTube.com"], normalize=NORM)
+        self.assertEqual(out, ["# банки", "sber.ru", "", "# видео",
+                               "youtube.com"])
+
+    def test_fix_list_on_disk(self):
+        import os
+        import tempfile
+        from unittest import mock
+        from core import hostlist_manager as hlm
+        with tempfile.TemporaryDirectory() as d:
+            hm = hlm.HostlistManager()
+            path = os.path.join(d, "my.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("# мой\n*.ya.ru\nya.ru\n")
+            with mock.patch.object(hlm.HostlistManager, "lists_path",
+                                   new=property(lambda self: d)), \
+                 mock.patch.object(hlm, "get_hostlist_manager",
+                                   return_value=hm), \
+                 mock.patch.object(hm, "list_names", return_value=["my"]):
+                res = ll.fix_list("my")
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+        self.assertTrue(res["changed"])
+        self.assertEqual((res["before"], res["after"]), (2, 1))
+        self.assertEqual(text, "# мой\nya.ru\n")
+
+
 class TestUsage(unittest.TestCase):
 
     def test_usage_from_argv(self):

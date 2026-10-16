@@ -62,9 +62,14 @@ def _normalizer():
 
 
 def _parents(domain: str):
-    """example.com для a.b.example.com: все родители, кроме TLD."""
+    """b.example.com, example.com, com для a.b.example.com.
+
+    TLD — тоже родитель: nfqws2 проходит все суффиксы имени
+    (nfq2/hostlist.c), и запись «xn--p1ai» в исключениях снимает обход со
+    всех сайтов .рф.
+    """
     parts = domain.split(".")
-    for i in range(1, len(parts) - 1):
+    for i in range(1, len(parts)):
         yield ".".join(parts[i:])
 
 
@@ -91,36 +96,65 @@ def lint_entries(entries, normalize=None) -> dict:
 
     seen = set()
     normalized = []
+    changed = 0            # строк, которые «Исправить» перепишет на месте
+    total = 0
     for raw in entries or ():
         entry = str(raw).strip()
         if not entry or entry.startswith("#"):
             continue
+        total += 1
         norm = normalize(entry)
         if norm is None:
             add(CODE_INVALID, entry)
             continue
-        if entry.lstrip("^").startswith(("*.", ".")):
-            add(CODE_WILDCARD, entry, norm)
-        elif norm != entry:
-            add(CODE_NOT_NORMAL, entry, norm)
         if norm in seen:
             add(CODE_DUPLICATE, entry)
             continue
+        if entry.lstrip("^").startswith(("*.", ".")):
+            add(CODE_WILDCARD, entry, norm)
+            changed += 1
+        elif norm != entry:
+            add(CODE_NOT_NORMAL, entry, norm)
+            changed += 1
         seen.add(norm)
         normalized.append(norm)
 
     plain = {d for d in normalized if not d.startswith("^")}
+    covered = 0
     for domain in normalized:
         if domain.startswith("^"):
             continue
         parent = next((p for p in _parents(domain) if p in plain), None)
         if parent:
             add(CODE_COVERED, domain, parent)
+            covered += 1
 
-    fixable = sum(issues.get(c, {}).get("count", 0) for c in (
-        CODE_WILDCARD, CODE_NOT_NORMAL, CODE_DUPLICATE, CODE_COVERED))
-    return {"total": len([e for e in entries or () if str(e).strip()]),
-            "issues": issues, "fixable": fixable}
+    # Одна строка — одно действие: повтор, который ещё и с маской, уйдёт
+    # один раз, а не «исправится и удалится».
+    duplicates = issues.get(CODE_DUPLICATE, {}).get("count", 0)
+    return {"total": total, "issues": issues,
+            "fixable": changed + duplicates + covered}
+
+
+def fix_lines(lines, normalize=None) -> list:
+    """Как :func:`fix_entries`, но по строкам файла: комментарии и пустые
+    строки остаются на своих местах (их пишут для себя — «# банки»)."""
+    normalize = normalize or _normalizer()
+    keep = set(fix_entries(lines, normalize=normalize))
+    out = []
+    emitted = set()
+    for raw in lines or ():
+        line = str(raw).rstrip("\n")
+        entry = line.strip()
+        if not entry or entry.startswith("#"):
+            out.append(line)
+            continue
+        norm = normalize(entry)
+        value = norm if norm is not None else entry
+        if value in keep and value not in emitted:
+            emitted.add(value)
+            out.append(value)
+    return out
 
 
 def fix_entries(entries, normalize=None) -> list:
@@ -146,13 +180,16 @@ def fix_entries(entries, normalize=None) -> list:
             if d.startswith("^") or not any(p in plain for p in _parents(d))]
 
 
-def cross_check(lists: dict, excludes=(), normalize=None) -> dict:
+def cross_check(lists: dict, excludes=(), normalize=None,
+                bypass=None) -> dict:
     """Конфликты между списками.
 
     Args:
         lists: {имя: [записи]}.
-        excludes: имена списков-исключений (``--hostlist-exclude``,
-            ``netrogat``).
+        excludes: имена списков-исключений (``--hostlist-exclude``).
+        bypass: имена списков обхода, которые реально читает стратегия;
+            None — все, что не исключения. Список, который стратегия не
+            читает, с исключениями не конфликтует.
 
     Returns:
         {"duplicates": [{"entry", "lists"}], "conflicts":
@@ -179,14 +216,17 @@ def cross_check(lists: dict, excludes=(), normalize=None) -> dict:
             exclude_hits.setdefault(entry, []).append(name)
 
     conflicts = []
+    bypass_set = None if bypass is None else set(bypass)
     for entry, names in sorted(where.items()):
-        bypass = sorted(names - excludes)
-        if not bypass:
+        by = names - excludes
+        if bypass_set is not None:
+            by &= bypass_set
+        if not by:
             continue
         bare = entry.lstrip("^")
         for cand in [bare, "^" + bare] + list(_parents(bare)):
             for ex_name in exclude_hits.get(cand, ()):
-                conflicts.append({"entry": entry, "bypass": bypass,
+                conflicts.append({"entry": entry, "bypass": sorted(by),
                                   "exclude": ex_name,
                                   "exclude_entry": cand})
     return {"duplicates": duplicates, "conflicts": conflicts}
@@ -221,7 +261,21 @@ def strategy_list_usage(argv) -> dict:
 
 
 def _current_argv() -> list:
-    """argv активной стратегии: собранный заново, иначе — последний запуск."""
+    """argv активной стратегии: собранный заново, иначе — последний запуск.
+
+    Плюс ``--hostlist`` единого слоя (``nfqws.unified_hostlist``): его
+    дописывает в командную строку nfqws_manager, а не сборщик стратегии.
+    """
+    extra = []
+    try:
+        from core.unified import nfqws_hostlist
+        extra = list(nfqws_hostlist.compose_extra_args() or [])
+    except Exception:                               # noqa: BLE001 — граница
+        extra = []
+    return _strategy_argv() + extra
+
+
+def _strategy_argv() -> list:
     try:
         from core.config_manager import get_config_manager
         from core.strategy_builder import get_strategy_manager
@@ -247,25 +301,30 @@ def report(names=None) -> dict:
         {"lists": [{name, usage, total, fixable, issues}],
          "duplicates", "conflicts", "excludes"}
     """
+    import functools
     from core.hostlist_manager import get_hostlist_manager
     hm = get_hostlist_manager()
     all_names = list(hm.list_names())
     names = [n for n in (names or all_names) if n in all_names]
-    usage = strategy_list_usage(_current_argv())
-    # netrogat — исключения по смыслу, даже если стратегия его не назвала:
-    # сборщик дописывает его в каждый профиль сам (strategy_builder).
-    usage.setdefault("netrogat", "exclude")
+    # Только то, что стратегия реально передаёт nfqws2: netrogat — тоже
+    # (сборщик добавляет его при filter.protect_excluded, а не всегда).
+    argv = _current_argv()
+    usage = strategy_list_usage(argv)
     excludes = sorted(n for n, k in usage.items() if k == "exclude")
+    bypass = sorted(n for n, k in usage.items() if k == "bypass")
+    # Одна нормализация на запись: списки бывают на десятки тысяч строк.
+    normalize = functools.lru_cache(maxsize=None)(hm.normalize_domain)
 
     contents = {n: hm.get_hostlist(n) for n in all_names}
     lists = []
     for name in names:
-        res = lint_entries(contents[name], normalize=hm.normalize_domain)
+        res = lint_entries(contents[name], normalize=normalize)
         lists.append({"name": name, "usage": usage.get(name, ""),
                       "total": res["total"], "fixable": res["fixable"],
                       "issues": res["issues"]})
-    cross = cross_check(contents, excludes, normalize=hm.normalize_domain)
-    return {"lists": lists, "excludes": excludes,
+    cross = cross_check(contents, excludes, normalize=normalize,
+                        bypass=bypass if argv else None)
+    return {"lists": lists, "excludes": excludes, "titles": TITLES,
             "duplicates": cross["duplicates"][:200],
             "duplicates_total": len(cross["duplicates"]),
             "conflicts": cross["conflicts"][:200],
@@ -273,17 +332,34 @@ def report(names=None) -> dict:
 
 
 def fix_list(name: str) -> dict:
-    """Исправить один список на диске. Returns {ok, before, after}."""
+    """Исправить один список на диске, сохранив комментарии.
+
+    Под замком менеджера на всё «прочитать → исправить → записать»: иначе
+    параллельный add_domains (детектор, MCP) потерялся бы.
+
+    Returns {ok, before, after, changed} — before/after в записях.
+    """
     from core.hostlist_manager import get_hostlist_manager
     hm = get_hostlist_manager()
     if name not in hm.list_names():
         return {"ok": False, "error": "нет такого списка: %s" % name}
-    before = hm.get_hostlist(name)
-    after = fix_entries(before, normalize=hm.normalize_domain)
-    if after == before:
-        return {"ok": True, "before": len(before), "after": len(after),
-                "changed": False}
-    ok = hm.save_hostlist(name, after)
-    return {"ok": bool(ok), "before": len(before), "after": len(after),
+    path = hm._file_path(name)
+
+    def count(lines):
+        return sum(1 for x in lines
+                   if x.strip() and not x.strip().startswith("#"))
+
+    with hm._lock:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except OSError as e:
+            return {"ok": False, "error": "не прочитать список: %s" % e}
+        fixed = fix_lines(lines, normalize=hm.normalize_domain)
+        if fixed == lines:
+            return {"ok": True, "before": count(lines),
+                    "after": count(lines), "changed": False}
+        ok = hm._write_text(name, "\n".join(fixed) + "\n" if fixed else "")
+    return {"ok": bool(ok), "before": count(lines), "after": count(fixed),
             "changed": bool(ok),
             "error": "" if ok else "не удалось записать список"}

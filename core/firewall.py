@@ -29,6 +29,12 @@ from core.log_buffer import log
 # Имя таблицы nftables
 NFT_TABLE = "zapret_gui"
 
+# OpenWrt adaptation
+IS_OPENWRT = os.path.exists("/etc/openwrt_release")
+
+# Отдельная таблица для LAN-трафика (не трогается при reapply)
+NFT_LAN_TABLE = "zapret_lan"
+
 # Маркер комментария iptables для поиска и удаления
 IPT_COMMENT = "zapret-gui"
 
@@ -617,6 +623,9 @@ class FirewallManager:
                     # Тюнинг conntrack: без be_liberal ядро отбрасывает
                     # out-of-window сегменты, которые порождает десинхронизация
                     # (split/disorder/fake с badseq) — обход не срабатывает.
+                    # OpenWrt: отдельные правила для LAN-клиентов
+                    if IS_OPENWRT and fw_type == "nftables":
+                        self._apply_lan_nftables(qnum, tcp, udp)
                     self._apply_sysctl_tuning()
                     # Персистентность на роутере: сохранить рантайм-конфиг и
                     # установить ndm/hotplug-хуки, чтобы правила переживали
@@ -638,6 +647,58 @@ class FirewallManager:
                 log.error("Исключение при применении правил: %s" % e,
                           source="firewall")
                 return False
+
+        def _apply_lan_nftables(self, qnum, ports_tcp, ports_udp) -> bool:
+        #Отдельная таблица inet zapret_lan для трафика LAN-клиентов.
+        # На OpenWrt GUI строит правила только для WAN. Трафик клиентов
+        # локальной сети не попадает в NFQUEUE без дополнительных правил.
+        #Отдельная таблица — потому что reapply-firewall.sh удаляет
+        # inet zapret_gui целиком при смене стратегии, а наши LAN-правила
+        # должны пережить это.
+       
+        tcp_ports = "{ %s }" % _nft_port_set(ports_tcp) if ports_tcp else None
+        udp_ports = "{ %s }" % _nft_port_set(ports_udp) if ports_udp else None
+
+        # Пересоздаём таблицу целиком
+        try:
+            subprocess.run(["nft", "delete", "table", "inet", NFT_LAN_TABLE],
+                           capture_output=True, timeout=5)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+        cmds = [
+            "add table inet %s" % NFT_LAN_TABLE,
+            "add chain inet %s prerouting_hook "
+            "{ type filter hook prerouting priority -160 ; policy accept ; }"
+            % NFT_LAN_TABLE,
+        ]
+        if tcp_ports:
+            cmds.append(
+                "add rule inet %s prerouting_hook iifname \"br-lan\" "
+                "tcp dport %s ct original packets 1-20 "
+                "counter queue flags bypass to %d"
+                % (NFT_LAN_TABLE, tcp_ports, qnum))
+        if udp_ports:
+            cmds.append(
+                "add rule inet %s prerouting_hook iifname \"br-lan\" "
+                "udp dport %s counter queue flags bypass to %d"
+                % (NFT_LAN_TABLE, udp_ports, qnum))
+
+        ok = True
+        for cmd in cmds:
+            try:
+                r = subprocess.run(["nft"] + cmd.split(),
+                                   capture_output=True, text=True,
+                                   timeout=10)
+                if r.returncode != 0:
+                    ok = False
+            except (subprocess.TimeoutExpired, OSError):
+                ok = False
+        if ok:
+            log.info("Правила для LAN добавлены в inet %s" % NFT_LAN_TABLE,
+                     source="firewall")
+        return ok
+        
 
     @staticmethod
     def _apply_sysctl_tuning():
@@ -1831,6 +1892,14 @@ class FirewallManager:
     def _remove_nftables(self) -> bool:
         """Удалить таблицу nftables. Отсутствие таблицы — не ошибка."""
         result = self._run_cmd(["nft", "delete", "table", "inet", NFT_TABLE])
+        # OpenWrt: чистим и LAN-таблицу
+        if IS_OPENWRT:
+            try:
+                subprocess.run(
+                    ["nft", "delete", "table", "inet", NFT_LAN_TABLE],
+                    capture_output=True, timeout=5)
+            except (subprocess.TimeoutExpired, OSError):
+                pass
         if not result:
             # delete падает и когда таблицы просто нет (первый запуск после
             # ребута, прошлый apply не дошёл до конца) — снимать было нечего,

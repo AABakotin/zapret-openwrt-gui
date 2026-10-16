@@ -23,6 +23,9 @@ import subprocess
 import threading
 import time
 
+# OpenWrt adaptation
+IS_OPENWRT = os.path.exists("/etc/openwrt_release")
+
 from core.log_buffer import log
 
 # PID-файл, управляемый GUI
@@ -1161,7 +1164,11 @@ class NFQWSManager:
         args = []
 
         # --user
-        user = cfg.get("nfqws", "user") or "nobody"
+        # OpenWrt: всегда root, иначе nfq_create_queue fails
+        if IS_OPENWRT:
+            user = "root"
+        else:
+            user = cfg.get("nfqws", "user") or "nobody"
         args.append("--user=%s" % user)
 
         # --fwmark
@@ -1171,6 +1178,9 @@ class NFQWSManager:
         # --qnum
         queue_num = cfg.get("nfqws", "queue_num", default=300)
         args.append("--qnum=%d" % int(queue_num))
+         # OpenWrt: --pidfile для поиска процесса через /proc
+        if IS_OPENWRT:
+            args.append("--pidfile=/var/run/zapret-nfqws.pid")
 
         # --debug — пер-пакетный лог nfqws2 для диагностики. Глобальная опция,
         # добавляется один раз в base. nfqws2 пишет debug в STDOUT (DLOG),
@@ -1421,7 +1431,8 @@ class NFQWSManager:
                     continue
                 argv0 = raw.split(b"\x00", 1)[0].decode(
                     "utf-8", errors="replace")
-                if argv0 and os.path.basename(argv0) in ("nfqws", "nfqws2") \
+                base = os.path.basename(argv0) if argv0 else ""
+                if base in ("nfqws", "nfqws2", "nfqws2.real") \
                         and pid != sandbox:
                     pids.append(pid)
         except OSError:

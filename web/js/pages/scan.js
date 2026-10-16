@@ -246,6 +246,18 @@ const ScanPage = (() => {
         refreshHints();
         fetchStatus();
         freezeFetch();
+        initParallel();
+    }
+
+    /** Галка «несколько разом» — по настройке scan.parallel. */
+    async function initParallel() {
+        try {
+            const data = await API.get('/api/config');
+            const v = String((data && data.config && data.config.scan
+                              && data.config.scan.parallel) || 'off').toLowerCase();
+            const el = document.getElementById('scan-parallel');
+            if (el && !el.disabled) el.checked = v === 'auto' || v === 'on' || parseInt(v, 10) > 1;
+        } catch (_e) { /* без фатала */ }
     }
 
     function destroy() {

@@ -24,6 +24,9 @@ class TestSlots(unittest.TestCase):
         self.assertEqual(sp.slots_for_memory(meminfo(512, 21)), 4)
         self.assertEqual(sp.slots_for_memory(meminfo(512, 10)), 1)
         self.assertEqual(sp.slots_for_memory(""), 1)
+        # Старое ядро без MemAvailable — по MemFree.
+        old = "MemTotal: %d kB\nMemFree: %d kB\n" % (512 * 1024, 100 * 1024)
+        self.assertEqual(sp.slots_for_memory(old), 15)
 
     def test_marks_and_ports_distinct(self):
         marks = {sp.slot_mark(k) for k in range(sp.PAR_MAX)}
@@ -81,6 +84,30 @@ class TestCombine(unittest.TestCase):
 
 class TestPortBinding(unittest.TestCase):
 
+    def test_bind_skips_busy_and_rotates_across_threads(self):
+        import threading
+        from core import probe_mark
+        lo, hi = 45200, 45203
+        busy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        busy.bind(("0.0.0.0", lo))
+        got = []
+        try:
+            def one():
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                probe_mark._bind_port(s, (lo, hi))
+                got.append(s)
+            for _ in range(2):
+                t = threading.Thread(target=one)
+                t.start()
+                t.join()
+            ports = [s.getsockname()[1] for s in got]
+            self.assertEqual(ports, [lo + 1, lo + 2])
+        finally:
+            busy.close()
+            for s in got:
+                s.close()
+            probe_mark._next_port.pop((lo, hi), None)
+
     def test_bind_rotates_in_range(self):
         from core import probe_mark
         lo, hi = 45100, 45103
@@ -96,7 +123,7 @@ class TestPortBinding(unittest.TestCase):
         finally:
             for s in socks:
                 s.close()
-            probe_mark._tls.__dict__.pop("next_port", None)
+            probe_mark._next_port.pop((lo, hi), None)
 
     def test_marking_restores_ports(self):
         from core import probe_mark
@@ -193,7 +220,8 @@ class TestBatch(unittest.TestCase):
                                   return_value=meminfo(512, 400)), \
                 mock.patch.object(sc, "_probe_one_strategy", solo), \
                 mock.patch("core.probe_mark._install"):
-            out = sc._probe_batch(entries, 0)
+            out, end = sc._probe_batch(entries, 0)
+        self.assertEqual(end, 4)
         self.assertEqual(sorted(out), [0, 1, 2, 3])
         # Один nfqws2 на пачку из 4.
         sc._sandbox.start.assert_called_once()
@@ -211,14 +239,20 @@ class TestBatch(unittest.TestCase):
         sc = self._scanner()
         entries = [FakeEntry("s%d" % i) for i in range(3)]
         with mock.patch.object(sc, "_meminfo", return_value=meminfo(512, 10)):
-            self.assertEqual(sc._probe_batch(entries, 0), {})
+            self.assertEqual(sc._probe_batch(entries, 0), ({}, 1))
         sc._sandbox.start.return_value = False
         with mock.patch.object(sc, "_build_strategy_args",
                                side_effect=lambda e: e.get_args_list()), \
                 mock.patch.object(sc, "_ensure_scan_rules", return_value=True), \
                 mock.patch.object(sc, "_meminfo",
                                   return_value=meminfo(512, 400)):
-            self.assertEqual(sc._probe_batch(entries, 0), {})
+            # Не поднялась — новую пачку цикл начнёт за концом этой.
+            self.assertEqual(sc._probe_batch(entries, 0), ({}, 3))
+            self.assertEqual(sc._parallel, 4)
+            sc._probe_batch(entries, 0)
+        # Две подряд — дальше по одной.
+        self.assertEqual(sc._parallel, 0)
+        self.assertIn("дважды", sc._parallel_note)
 
     def test_decide_parallel(self):
         sc = self._scanner()
@@ -235,6 +269,29 @@ class TestBatch(unittest.TestCase):
         sc._parallel_req = False
         sc._decide_parallel(100)
         self.assertEqual((sc._parallel, sc._parallel_note), (0, ""))
+        # Галка включена, в настройке число — потолок из настройки.
+        sc._parallel_req = True
+        sc._sandbox.supports_option.return_value = True
+        cfg = mock.Mock()
+        cfg.get.return_value = "4"
+        with mock.patch("core.config_manager.get_config_manager",
+                        return_value=cfg):
+            sc._decide_parallel(100)
+        self.assertEqual(sc._parallel, 4)
+
+    def test_cancel_drops_unverified_finding(self):
+        sc = self._scanner()
+        sc._cancelled = True
+        entries = [FakeEntry("s%d" % i) for i in range(2)]
+        ok = mock.Mock(success=True)
+        bad = mock.Mock(success=False)
+        with mock.patch.object(sc, "_build_strategy_args",
+                               side_effect=lambda e: e.get_args_list()), \
+                mock.patch.object(sc, "_meminfo",
+                                  return_value=meminfo(512, 400)), \
+                mock.patch.object(sc, "_run_batch", return_value=[ok, bad]):
+            out, _ = sc._probe_batch(entries, 0)
+        self.assertEqual(out, {1: bad})
 
 
 if __name__ == "__main__":

@@ -174,19 +174,24 @@ def _install() -> None:
         _installed = True
 
 
+# Следующий порт каждого диапазона — общий для всех потоков: дорожка
+# каждой пачки — новый поток, и с начала диапазона он попадал бы в порты
+# прошлой пачки, ещё висящие в TIME_WAIT к тому же серверу.
+_next_port = {}
+
+
 def _bind_port(sock, ports: tuple) -> None:
     """Занять исходный порт из диапазона ``ports`` (по кругу).
 
     По порту правила песочницы узнают дорожку параллельного подбора
-    (core/scan_parallel.py). ``SO_REUSEADDR`` — чтобы порт в TIME_WAIT
-    от прошлой пробы не выбивал диапазон из 64 портов за минуту.
+    (core/scan_parallel.py). Без ``SO_REUSEADDR``: занятый (и TIME_WAIT)
+    порт пропускается, а не переиспользуется — connect с того же порта к
+    тому же серверу упал бы.
     """
     lo, hi = int(ports[0]), int(ports[1])
     span = hi - lo + 1
-    start = getattr(_tls, "next_port", lo)
-    if not lo <= start <= hi:
-        start = lo
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    with _lock:
+        start = _next_port.get((lo, hi), lo)
     host = "::" if sock.family == socket.AF_INET6 else "0.0.0.0"
     last = None
     for i in range(span):
@@ -196,7 +201,8 @@ def _bind_port(sock, ports: tuple) -> None:
         except OSError as e:
             last = e
             continue
-        _tls.next_port = lo + (port - lo + 1) % span
+        with _lock:
+            _next_port[(lo, hi)] = lo + (port - lo + 1) % span
         return
     raise last or OSError("порты %d–%d заняты" % (lo, hi))
 

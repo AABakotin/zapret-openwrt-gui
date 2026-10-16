@@ -15,7 +15,7 @@ nfqws2 песочницы — каждый своим профилем, — и �
   диапазона (:func:`slot_ports`, ``probe_mark.marking(ports=…)``).
 * Правила песочницы (``FirewallManager.apply_sandbox_rules(slots=…)``)
   по этому порту ставят пакету метку дорожки (:func:`slot_mark`, биты
-  :data:`PAR_MASK`) — в обе стороны, после маршрутизации.
+  :data:`PAR_MASK`) — в обе стороны.
 * Профиль кандидата начинается с ``--filter-mark=<метка>/<маска>``
   (nfqws2 1.0.5+): nfqws2 отдаёт пакет только профилю своей дорожки.
 
@@ -41,9 +41,10 @@ from __future__ import annotations
 import re
 
 PAR_MAX = 15
-# Биты метки дорожки. На Keenetic это биты политик NDMS — но метка
-# ставится в POSTROUTING/PREROUTING, после выбора маршрута, и только
-# соединениям песочницы.
+# Биты метки дорожки. На Keenetic это биты политик NDMS: исходящим
+# пакетам метка ставится в POSTROUTING — после выбора маршрута; ответам —
+# в PREROUTING, до него, но они адресованы самому роутеру (локальная
+# доставка), и только соединениям песочницы. Так же делает nfqws2-ui.
 PAR_MASK = 0x0F000000
 # Исходные порты дорожек: вне эфемерного диапазона Linux (32768–60999
 # по умолчанию) их занять некому; по 64 на дорожку.
@@ -58,7 +59,7 @@ RAM_PER_SLOT_MB = 24   # и не больше дорожки на столько
 
 # Опции, которые nfqws2 читает до первого профиля (глобальные).
 _GLOBAL_PREFIXES = ("--blob=", "--lua-init=")
-_MEMINFO_RE = re.compile(r"^(MemTotal|MemAvailable):\s+(\d+)", re.M)
+_MEMINFO_RE = re.compile(r"^(MemTotal|MemAvailable|MemFree):\s+(\d+)", re.M)
 
 
 def slots_for_memory(meminfo: str) -> int:
@@ -67,7 +68,10 @@ def slots_for_memory(meminfo: str) -> int:
     Нечитаемый meminfo — 1: не зная памяти, рисковать роутером нельзя.
     """
     values = {k: int(v) for k, v in _MEMINFO_RE.findall(str(meminfo or ""))}
-    if "MemTotal" not in values or "MemAvailable" not in values:
+    # Ядро до 3.14 MemAvailable не пишет — тогда по MemFree (меньше,
+    # то есть осторожнее).
+    values.setdefault("MemAvailable", values.get("MemFree", 0))
+    if "MemTotal" not in values or not values["MemAvailable"]:
         return 1
     by_free = int((values["MemAvailable"] / 1024.0 - RESERVE_MB) // SLOT_MB)
     by_total = int(values["MemTotal"] / 1024.0 // RAM_PER_SLOT_MB)

@@ -130,8 +130,7 @@ def register(app):
             confirm=confirm,
             custom=custom,
             # Нет в запросе — по настройке scan.parallel.
-            parallel=(bool(body["parallel"]) if "parallel" in body
-                      else None),
+            parallel=_flag(body.get("parallel")),
         )
 
         if not started:
@@ -351,6 +350,15 @@ def register(app):
             "ok": True,
             "message": "Стратегия применена",
         }
+
+
+def _flag(value):
+    """true/false из JSON или строки («off», «0» — нет); нет поля — None."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "on", "yes", "auto")
+    return bool(value)
 
 
 def _check_custom(text, protocol) -> dict:

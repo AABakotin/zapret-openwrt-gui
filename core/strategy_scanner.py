@@ -676,6 +676,7 @@ class StrategyScanner:
             self._set_phase("Перебор стратегий")
 
             batch: dict = {}
+            batch_end = 0
             for idx, entry in enumerate(strategies):
                 if self._cancelled:
                     break
@@ -683,8 +684,8 @@ class StrategyScanner:
                 actual_idx = self._start_index + idx
                 # Параллельно: пачка начиная с этой стратегии — разом;
                 # дальше цикл берёт готовые итоги по одному.
-                if self._parallel and idx not in batch:
-                    batch = self._probe_batch(strategies, idx)
+                if self._parallel and idx >= batch_end:
+                    batch, batch_end = self._probe_batch(strategies, idx)
                 with self._lock:
                     self._progress = idx + 1
                     self._current_strategy_name = entry.name
@@ -1504,16 +1505,20 @@ class StrategyScanner:
         """Пачками или по одной — и почему (в статус и журнал)."""
         from core import scan_parallel
         self._parallel, self._parallel_note = 0, ""
+        self._batch_fails = 0
         req = getattr(self, "_parallel_req", None)
-        if req is None:
-            try:
-                from core.config_manager import get_config_manager
-                value = get_config_manager().get("scan", "parallel",
-                                                 default="off")
-            except Exception:                   # noqa: BLE001 — граница
-                value = "off"
-        else:
-            value = "auto" if req else "off"
+        try:
+            from core.config_manager import get_config_manager
+            value = get_config_manager().get("scan", "parallel",
+                                             default="off")
+        except Exception:                       # noqa: BLE001 — граница
+            value = "off"
+        # Галка формы главнее; включена — потолок дорожек всё равно из
+        # настройки, если там число.
+        if req is False:
+            value = "off"
+        elif req and not scan_parallel.enabled(value):
+            value = "auto"
         if not scan_parallel.enabled(value):
             return
         if not self._isolated or self._sandbox is None:
@@ -1541,16 +1546,22 @@ class StrategyScanner:
         except OSError:
             return ""
 
-    def _probe_batch(self, strategies: list, idx: int) -> dict:
-        """Пачка с ``idx`` разом; {индекс: результат}. Не вошедшие (и
-        пачка, которую nfqws2 не принял) — пустые: их цикл проверит по
-        одной. Находка пачки сразу перепроверяется в одиночку."""
+    def _probe_batch(self, strategies: list, idx: int) -> tuple:
+        """Пачка с ``idx`` разом: ({индекс: результат}, конец пачки).
+
+        Не вошедшие в пачку (и вся пачка, которую nfqws2 не принял) в
+        словаре отсутствуют — цикл проверит их по одной, а новую пачку
+        начнёт только за концом этой. Находка пачки сразу
+        перепроверяется в одиночку; две пачки подряд не поднялись —
+        дальше по одной до конца прогона.
+        """
         from core import scan_parallel
         slots = min(self._parallel,
                     scan_parallel.slots_for_memory(self._meminfo()))
         chunk = strategies[idx:idx + slots]
+        end = idx + max(1, len(chunk))
         if slots < 2 or len(chunk) < 2:
-            return {}
+            return {}, idx + 1
         args_lists = []
         for entry in chunk:
             try:
@@ -1559,18 +1570,29 @@ class StrategyScanner:
                 args_lists.append([])
         argv, packed, _alone = scan_parallel.combine(args_lists)
         if len(packed) < 2:
-            return {}
+            return {}, end
         entries = [chunk[i] for i in packed]
         self._set_phase("Перебор стратегий: %d разом" % len(entries))
         results = self._run_batch(entries, argv,
                                   [" ".join(args_lists[i]) for i in packed])
         if results is None:
+            self._batch_fails = getattr(self, "_batch_fails", 0) + 1
             log.info("Пачка не поднялась — эти %d по одной" % len(entries),
                      source="scanner")
-            return {}
+            if self._batch_fails >= 2:
+                self._parallel = 0
+                self._parallel_note = ("nfqws2 дважды не принял пачку — "
+                                       "дальше по одной")
+                log.warning("Параллельный подбор выключен: %s"
+                            % self._parallel_note, source="scanner")
+            return {}, end
+        self._batch_fails = 0
         out = {}
         for i, result in zip(packed, results):
-            if result.success and not self._cancelled:
+            if result.success and self._cancelled:
+                # Неперепроверенная находка в итог не идёт.
+                continue
+            if result.success:
                 with self._lock:
                     self._current_strategy_name = chunk[i].name
                 solo = self._probe_one_strategy(
@@ -1581,7 +1603,7 @@ class StrategyScanner:
                     "найдена в пачке, перепроверена по одной")
                 result = solo
             out[idx + i] = result
-        return out
+        return out, end
 
     def _run_batch(self, entries: list, argv: list, previews: list):
         """Один nfqws2 песочницы на пачку, пробы — параллельно."""
@@ -1592,7 +1614,6 @@ class StrategyScanner:
         if nfqws is None or not self._ensure_scan_rules(
                 get_firewall_manager()):
             return None
-        start_time = time.time()
         if not nfqws.start(argv):
             return None
         try:
@@ -1600,14 +1621,17 @@ class StrategyScanner:
             if not nfqws.is_running():
                 return None
             probes = [None] * len(entries)
+            took = [0.0] * len(entries)
 
             def work(k):
+                t0 = time.time()
                 try:
                     with probe_mark.marking(self._sandbox_mark,
                                             ports=scan_parallel.slot_ports(k)):
                         probes[k] = self._deep_probe()
                 except Exception as e:          # noqa: BLE001 — в итог
                     probes[k] = e
+                took[k] = (time.time() - t0) * 1000
 
             threads = [threading.Thread(target=work, args=(k,), daemon=True,
                                         name="scan-slot-%d" % k)
@@ -1622,14 +1646,14 @@ class StrategyScanner:
             except Exception as e:              # noqa: BLE001
                 log.warning("Ошибка остановки nfqws2: %s" % e,
                             source="scanner")
-        elapsed_ms = (time.time() - start_time) * 1000
+        # Время — своей дорожки, а не всей пачки.
         out = []
-        for entry, probe, preview in zip(entries, probes, previews):
+        for entry, probe, preview, ms in zip(entries, probes, previews,
+                                             took):
             if isinstance(probe, dict):
-                out.append(self._probe_result(entry, probe, preview,
-                                              elapsed_ms))
+                out.append(self._probe_result(entry, probe, preview, ms))
             else:
-                out.append(self._exception_result(entry, probe, elapsed_ms))
+                out.append(self._exception_result(entry, probe, ms))
         return out
 
     # ─────────────────── Правила на весь прогон ───────────────────

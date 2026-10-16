@@ -92,7 +92,7 @@ const DiagnosticsPage = (() => {
                             никуда не отправляется — его копируете вы.
                         </p>
                         <label style="display:flex; gap:6px; align-items:center; font-size:13px; margin-bottom:8px;">
-                            <input type="checkbox" id="diag-report-sites" onchange="DiagnosticsPage.showHelpReport()">
+                            <input type="checkbox" id="diag-report-sites" onchange="DiagnosticsPage.renderHelpReport()">
                             Показать имена сайтов (по умолчанию скрыты)
                         </label>
                         <textarea class="form-input" id="diag-report-text" rows="18" readonly
@@ -1432,20 +1432,32 @@ const DiagnosticsPage = (() => {
     }
 
     /* ═══════════════════ отчёт для помощи ═══════════════════ */
+    // Оба варианта приходят одним ответом: галочка переключает их на
+    // месте и не может получить текст «не того» запроса.
+    let helpReport = null;
+
     async function showHelpReport() {
         const modal = document.getElementById('diag-report-modal');
         const box = document.getElementById('diag-report-text');
-        const sites = document.getElementById('diag-report-sites');
         if (!modal || !box) return;
         modal.style.display = 'flex';
+        helpReport = null;
         box.value = 'Собираю…';
         try {
-            const q = sites && sites.checked ? '?show_sites=1' : '';
-            const r = await API.get('/api/diagnostics/help-report' + q);
-            box.value = (r.result && r.result.text) || '';
+            const r = await API.get('/api/diagnostics/help-report');
+            helpReport = r.result || null;
+            renderHelpReport();
         } catch (e) {
             box.value = 'Не удалось собрать отчёт: ' + e.message;
         }
+    }
+
+    function renderHelpReport() {
+        const box = document.getElementById('diag-report-text');
+        const sites = document.getElementById('diag-report-sites');
+        if (!box || !helpReport) return;
+        const variant = sites && sites.checked ? helpReport.sites : helpReport.masked;
+        box.value = (variant && variant.text) || '';
     }
 
     function closeHelpReport() {
@@ -1484,6 +1496,7 @@ const DiagnosticsPage = (() => {
         rebootDevice,
         retryMaintenanceCaps,
         showHelpReport,
+        renderHelpReport,
         closeHelpReport,
         copyHelpReport,
     };

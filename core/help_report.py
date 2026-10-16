@@ -11,66 +11,91 @@
 
 ## Чего в отчёте нет
 
-* паролей, токенов, ключей — весь текст проходит
-  ``core.mcp.redact.redact_text(force=True)``, как журнал MCP;
+* паролей, токенов, ключей — свободный текст (аргументы запуска, журнал)
+  проходит ``core.mcp.redact.redact_text(force=True)``, как журнал MCP,
+  а адреса в нём укорачиваются до хоста (``shorten_url``): в пути
+  подписки бывает ключ. Собственные строки отчёта («- имя: значение»)
+  через чистку пар «ключ: значение» не идут — иначе список с именем
+  ``token`` терял бы счётчик;
 * внешнего (публичного) адреса — глобальные IP маскируются всегда;
 * содержимого списков — только имена и число записей;
 * имён сайтов — по умолчанию тоже маскируются (``<домен-1>``), галочка
   «показать сайты» это выключает: иногда помогающему нужно знать, какой
   сайт не открывается.
 
-Маскировка — та же, что у черновиков issue (``core/mcp/issues._Masker``):
-одна метка на одно значение во всём отчёте, адреса апстримов и GitHub
-не прячутся.
+Раздел «Версии» не маскируется: в нём нет ни сайтов, ни адресов, а
+четырёхчастная версия (``1.12.4.1``) выглядит для маски как IP.
+
+Маска — та же, что у черновиков issue (``core.mcp.issues.mask_text``).
+
+## Ошибка — это не «нет»
+
+Раздел, который не удалось собрать, так и подписан. «Конфликтов нет»
+или «nfqws2 остановлен», выведенные из упавшей проверки, отправили бы
+помогающего искать не там.
 
 Отчёт ничего никуда не отправляет — его копирует человек.
 """
 
 from __future__ import annotations
 
+import re
 import time
 
 # Сколько строк журнала уровня WARNING+ класть в отчёт.
 LOG_LINES = 30
 
+_URL_RE = re.compile(r"https?://[^\s\"'<>`]+", re.IGNORECASE)
 
-def _section(title: str, rows) -> str:
-    rows = [r for r in rows if r]
+
+class _Failed(Exception):
+    """Часть раздела не собралась — показать это, а не пустоту."""
+
+
+def _section(title: str, fn) -> str:
+    try:
+        rows = [r for r in fn() if r]
+    except Exception as e:                          # noqa: BLE001 — граница
+        rows = ["- не удалось собрать: %s: %s" % (type(e).__name__,
+                                                  str(e)[:120])]
     if not rows:
         return ""
     return "### %s\n%s\n" % (title, "\n".join(rows))
 
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:                               # noqa: BLE001 — граница
-        return default
+def _free_text(text: str) -> str:
+    """Чистка свободного текста: секреты по маркерам, адреса — до хоста."""
+    from core.mcp.redact import redact_text, shorten_url
+    text = _URL_RE.sub(lambda m: shorten_url(m.group(0), force=True), text)
+    return redact_text(text, force=True)
 
 
 def _versions() -> list:
     from core.version import GUI_VERSION
     from core.mcp import issues
+    from core.zapret_installer import get_zapret_installer
     rows = ["- zapret-gui: %s" % GUI_VERSION]
-    env = _safe(issues._environment, {}) or {}
-    if env:
-        rows.append("- платформа: %s, %s, ядро %s, python %s" % (
-            env.get("platform", "?"), env.get("arch", "?"),
-            env.get("kernel", "?"), env.get("python", "?")))
-    zapret = _safe(lambda: __import__(
-        "core.zapret_installer", fromlist=["x"]).get_zapret_installer()
-        .get_installed_version(), {}) or {}
+    env = issues._environment()
+    rows.append("- платформа: %s, %s, ядро %s, python %s" % (
+        env.get("platform", "?"), env.get("arch", "?"),
+        env.get("kernel", "?"), env.get("python", "?")))
+    zapret = get_zapret_installer().get_installed_version() or {}
     rows.append("- zapret2: %s" % (zapret.get("version") or "не установлен"))
-    for e in _safe(issues._engines, []) or []:
+    # Остальные движки — из кеша проверки обновлений (в сеть не ходим).
+    # GUI и zapret2 оттуда не берём: выше они свежие, а кеш мог отстать.
+    for e in issues._engines():
+        if str(e.get("name", "")).lower() in ("gui", "zapret2", "zapret"):
+            continue
         rows.append("- %s: %s" % (e.get("name", "?"), e.get("current", "?")))
     return rows
 
 
 def _nfqws() -> list:
     from core.config_manager import get_config_manager
+    from core.firewall import get_firewall_manager
     from core.nfqws_manager import get_nfqws_manager
     cfg = get_config_manager()
-    st = _safe(lambda: get_nfqws_manager().get_status(), {}) or {}
+    st = get_nfqws_manager().get_status()
     rows = ["- nfqws2: %s%s%s" % (
         "работает" if st.get("running") else "остановлен",
         ", %s" % st["uptime_human"] if st.get("uptime_human") else "",
@@ -80,17 +105,18 @@ def _nfqws() -> list:
     rows.append("- стратегия: %s (%s)" % (
         cfg.get("strategy", "current_name") or "не выбрана",
         cfg.get("strategy", "current_id") or "—"))
-    fw = _safe(lambda: __import__("core.firewall", fromlist=["x"])
-               .get_firewall_manager().get_status(), {}) or {}
-    if fw:
+    try:
+        fw = get_firewall_manager().get_status()
         rows.append("- firewall: %s, правила %s" % (
             fw.get("type") or "?",
             "стоят (%s)" % fw.get("rules_count", 0) if fw.get("applied")
             else "не стоят"))
+    except Exception as e:                          # noqa: BLE001 — граница
+        rows.append("- firewall: не удалось узнать (%s)" % type(e).__name__)
     args = st.get("last_args") or []
     if args:
         rows.append("- аргументы последнего запуска:\n```\n%s\n```"
-                    % " ".join(str(a) for a in args))
+                    % _free_text(" ".join(str(a) for a in args)))
     return rows
 
 
@@ -98,36 +124,37 @@ def _lists() -> list:
     from core.hostlist_manager import get_hostlist_manager
     from core import list_lint
     hm = get_hostlist_manager()
-    usage = _safe(lambda: list_lint.strategy_list_usage(
-        list_lint._current_argv()), {}) or {}
-    stats = _safe(hm.get_stats, {}) or {}
+    try:
+        usage = list_lint.strategy_list_usage(list_lint._current_argv())
+        unknown = ""
+    except Exception as e:                          # noqa: BLE001 — граница
+        usage, unknown = {}, "как читает стратегия — неизвестно (%s)" % (
+            type(e).__name__)
+    stats = hm.get_stats()
     rows = []
-    for name in _safe(hm.list_names, []) or []:
+    for name in hm.list_names():
         st = stats.get(name) or {}
-        kind = {"bypass": "обход", "exclude": "исключения"}.get(
+        kind = unknown or {"bypass": "обход", "exclude": "исключения"}.get(
             usage.get(name, ""), "не подключён")
-        rows.append("- %s: %s записей, %s" % (
-            name, st.get("count", "?"), kind))
+        rows.append("- %s: %s записей, %s" % (name, st.get("count", "?"),
+                                              kind))
     return rows
 
 
 def _conflicts() -> list:
     from core import diagnostics
     rows = []
-    known = _safe(diagnostics.check_known_conflicts, {}) or {}
-    for w in known.get("warnings") or []:
+    for w in diagnostics.check_known_conflicts().get("warnings") or []:
         rows.append("- %s: %s" % (w.get("title", ""), w.get("detail", "")))
-    own = _safe(diagnostics.check_nfqws_conflicts, {}) or {}
-    for c in own.get("conflicts") or []:
+    for c in diagnostics.check_nfqws_conflicts().get("conflicts") or []:
         rows.append("- посторонний %s (pid %s)" % (c.get("name"), c.get("pid")))
-    return rows
+    return rows or ["- нет"]
 
 
 def _tunnels() -> list:
     from core import tunnels_overview
-    data = _safe(lambda: tunnels_overview.overview(logs=False), {}) or {}
     rows = []
-    for e in data.get("engines") or []:
+    for e in tunnels_overview.overview(logs=False).get("engines") or []:
         if not e.get("installed"):
             continue
         rows.append("- %s %s: %s, экземпляров %d/%d" % (
@@ -139,7 +166,7 @@ def _tunnels() -> list:
 
 def _healthcheck() -> list:
     from core.healthcheck import get_healthcheck
-    st = _safe(lambda: get_healthcheck().get_status(), {}) or {}
+    st = get_healthcheck().get_status()
     if not st.get("enabled"):
         return ["- мониторинг выключен"]
     rows = ["- мониторинг: каждые %s мин" % st.get("interval_min")]
@@ -157,8 +184,7 @@ def _healthcheck() -> list:
 
 def _log_tail() -> list:
     from core.log_buffer import get_log_buffer
-    entries = _safe(lambda: get_log_buffer().get_filtered(
-        level="WARNING", n=LOG_LINES), []) or []
+    entries = get_log_buffer().get_filtered(level="WARNING", n=LOG_LINES)
     if not entries:
         return []
     lines = ["%s %s [%s] %s" % (e.get("date", ""), e.get("time", ""),
@@ -166,39 +192,51 @@ def _log_tail() -> list:
                                 "%s: %s" % (e["source"], e.get("message", ""))
                                 if e.get("source") else e.get("message", ""))
              for e in entries]
-    return ["```\n%s\n```" % "\n".join(lines)]
+    return ["```\n%s\n```" % _free_text("\n".join(lines))]
 
 
-def build(show_sites: bool = False) -> dict:
-    """Собрать отчёт.
+def collect() -> dict:
+    """Собрать разделы один раз: {"versions": текст, "body": текст}.
 
-    Args:
-        show_sites: не маскировать имена сайтов (адреса — маскируются
-            всегда).
+    Маскировка — отдельно (:func:`render`), чтобы галочка «показать сайты»
+    не пересобирала отчёт заново.
+    """
+    head = "## Отчёт zapret-gui · %s\n" % time.strftime("%Y-%m-%d %H:%M")
+    versions = _section("Версии", _versions)
+    body = "\n".join(p for p in (
+        _section("Обход DPI", _nfqws),
+        _section("Списки", _lists),
+        _section("Конфликты", _conflicts),
+        _section("Туннели", _tunnels),
+        _section("Мониторинг", _healthcheck),
+        _section("Журнал: предупреждения и ошибки", _log_tail),
+    ) if p)
+    return {"versions": head + versions, "body": body}
+
+
+def render(parts: dict, show_sites: bool = False) -> dict:
+    """Отчёт из собранных разделов с нужной маской.
 
     Returns:
         {"text": markdown, "masked": сколько значений замаскировано}
     """
-    from core.mcp import issues
-    from core.mcp.redact import redact_text
+    from core.mcp.issues import mask_text
+    body, masked = mask_text(parts.get("body", ""), sites=not show_sites)
+    return {"text": parts.get("versions", "") + "\n" + body,
+            "masked": masked}
 
-    parts = [
-        "## Отчёт zapret-gui · %s" % time.strftime("%Y-%m-%d %H:%M"),
-        _section("Версии", _safe(_versions, [])),
-        _section("Обход DPI", _safe(_nfqws, [])),
-        _section("Списки", _safe(_lists, [])),
-        _section("Конфликты", _safe(_conflicts, []) or ["- нет"]),
-        _section("Туннели", _safe(_tunnels, [])),
-        _section("Мониторинг", _safe(_healthcheck, [])),
-        _section("Журнал: предупреждения и ошибки", _safe(_log_tail, [])),
-    ]
-    text = "\n".join(p for p in parts if p)
-    text = redact_text(text, force=True)
-    masker = issues._Masker(enabled=True)
-    if show_sites:
-        # Только адреса: сайты нужны тому, кто помогает.
-        text = issues._IPV4_RE.sub(lambda m: masker._ip(m.group(1)), text)
-        text = issues._IPV6_RE.sub(lambda m: masker._ip(m.group(1)), text)
-    else:
-        text = masker(text)
-    return {"text": text, "masked": masker.count}
+
+def build(show_sites: bool = False) -> dict:
+    """Собрать отчёт. См. :func:`collect` и :func:`render`."""
+    return render(collect(), show_sites=show_sites)
+
+
+def build_both() -> dict:
+    """Оба варианта из одного сбора: {"masked": {...}, "sites": {...}}.
+
+    Для UI: переключение галочки не ходит на роутер ещё раз и не может
+    получить ответ «не того» запроса.
+    """
+    parts = collect()
+    return {"masked": render(parts, show_sites=False),
+            "sites": render(parts, show_sites=True)}

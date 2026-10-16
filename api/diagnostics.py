@@ -147,12 +147,12 @@ def register(app):
     @app.route("/api/diagnostics/help-report")
     def api_diagnostics_help_report():
         """«Отчёт для помощи»: версии, состояние, списки, журнал — без
-        секретов и внешнего адреса; сайты скрыты, если не ?show_sites=1."""
+        секретов и внешнего адреса. Оба варианта разом: ``masked`` (сайты
+        скрыты) и ``sites`` (сайты видны, адреса скрыты) — галочка в UI
+        переключает их без нового запроса."""
         response.content_type = "application/json; charset=utf-8"
-        from core.help_report import build
-        show = str(request.query.get("show_sites") or "").lower() in (
-            "1", "true", "yes")
-        return {"ok": True, "result": build(show_sites=show)}
+        from core.help_report import build_both
+        return {"ok": True, "result": build_both()}
 
     @app.route("/api/diagnostics/known-conflicts")
     def api_diagnostics_known_conflicts():

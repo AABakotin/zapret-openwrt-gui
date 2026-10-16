@@ -563,7 +563,7 @@ stdout). Период опроса задаёт сам
 | `update_checker.py` | `/api/updates` | проверка обновлений всех движков разом |
 | `block_detector.py` / `auto_remediation.py` / `geosite.py` | … | фоновой детектор блокировок / авто-починка / импорт geosite |
 | `connectivity.py` / `devices.py` | … | матрица связности / устройства LAN |
-| `diagnostics.py` | `/api/diagnostics` | ping/http/dns/conflicts/**known-conflicts**/firewall/system/**selfcheck** |
+| `diagnostics.py` | `/api/diagnostics` | ping/http/dns/conflicts/**known-conflicts**/firewall/system/**selfcheck**/**help-report** («Отчёт для помощи», `core/help_report.py`: оба варианта маски одним ответом) |
 | `healthcheck.py` | `/api/healthcheck` | autocircular-демон: enable/disable/run/status/config |
 | `backup.py` / `config_api.py` / `autostart.py` / `gui_update.py` / `logs.py` | … | бэкап / настройки / автозапуск / обновление GUI (+`/releases`) / логи (SSE) |
 | `mcp.py` / `mcp_ui.py` | `/api/mcp`, `/api/mcp/ui` | MCP-сервер (JSON-RPC, legacy-SSE, loopback-only `/info`) / панель управления им. **Две разные двери:** в `/api/mcp` пускает Bearer-токен, в `/api/mcp/ui` — только авторизация GUI (панель раздаёт разрешения, и токен модели не должен их расширять — врезка в `app.py`) |

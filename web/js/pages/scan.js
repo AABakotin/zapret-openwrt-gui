@@ -306,6 +306,22 @@ const ScanPage = (() => {
         }
     }
 
+    async function refine(lighter) {
+        try {
+            const res = await API.post('/api/scan/refine', { lighter: !!lighter });
+            if (res.ok) {
+                Toast.success((lighter ? 'Ищем вариант полегче' : 'Уточняем')
+                    + ' «' + res.base + '»: вариантов — ' + res.variants);
+                const section = document.getElementById('scan-results-section');
+                if (section) section.classList.add('hidden');
+                startPolling();
+                fetchStatus();
+            }
+        } catch (err) {
+            Toast.error(err.message);
+        }
+    }
+
     function toggleCustom() {
         const custom = document.getElementById('scan-mode')?.value === 'custom';
         document.getElementById('scan-custom-group')?.classList.toggle('hidden', !custom);
@@ -559,12 +575,17 @@ const ScanPage = (() => {
         if (r.memory_first) chips.push(['muted', 'Из памяти первыми: ' + r.memory_first]);
 
         let cls, icon, title, detail;
+        // «Уточнение»: почти рабочую — параметрами фейка, рабочую — полегче.
+        let refine = '';
         if (working.length) {
             const best = r.best_strategy || working[0];
             cls = 'v-ok'; icon = '✅';
             title = 'Найдено ' + plural(working.length, 'рабочая стратегия', 'рабочие стратегии', 'рабочих стратегий');
             detail = 'Лучшая — «' + (best.strategy_name || best.strategy_id) + '». Нажмите «Применить» — обход запустится с ней и останется после перезагрузки.';
             if (r.stopped_early) detail += ' Перебор остановлен досрочно — можно «Искать дальше».';
+            refine = '<button class="btn btn-ghost btn-sm" onclick="ScanPage.refine(true)" '
+                + 'title="Убрать лишние шаги и повторы у лучшей рабочей: меньше нагрузки, меньше поводов сломаться">'
+                + 'Искать вариант полегче</button>';
         } else if (r.baseline_accessible && !(r.failed_strategies || []).some(f => f.error !== 'BASELINE_OPEN')) {
             cls = 'v-skip'; icon = 'ℹ️';
             title = 'Сайт открывается и без обхода';
@@ -577,6 +598,9 @@ const ScanPage = (() => {
             cls = 'v-bad'; icon = '❌';
             title = 'Рабочих стратегий не нашлось';
             detail = hintForNothing(r);
+            refine = '<button class="btn btn-primary btn-sm" onclick="ScanPage.refine(false)" '
+                + 'title="Взять стратегию, продвинувшуюся дальше всех, и перебрать параметры её фейка: способ обмана DPI, повторы, подставное имя, настоящий ClientHello">'
+                + 'Уточнить лучшую попытку</button>';
         }
         el.innerHTML = `
             <div class="bc-verdict ${cls}">
@@ -586,6 +610,7 @@ const ScanPage = (() => {
                     <div class="bc-verdict-detail">${escapeHtml(detail)}</div>
                     <div class="bc-verdict-chips">${chips.map(([k, t]) =>
                         `<span class="bc-chip bc-chip-${k}">${escapeHtml(t)}</span>`).join('')}</div>
+                    ${refine ? '<div style="margin-top:8px;">' + refine + '</div>' : ''}
                 </div>
             </div>`;
     }
@@ -729,5 +754,5 @@ const ScanPage = (() => {
     /* ───────── public ───────── */
 
     return { render, destroy, start, stop, applyStrategy, pickTarget, refreshHints,
-             toggleCustom, checkCustom };
+             toggleCustom, checkCustom, refine };
 })();

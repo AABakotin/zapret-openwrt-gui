@@ -122,6 +122,16 @@ def _sid(desync: list) -> str:
     return "custom_" + digest[:10]
 
 
+def lint_reject(args: list, known_functions=None, known_blobs=None) -> str:
+    """Почему кандидата нельзя пускать в подбор ("" — можно): функция или
+    blob, которых на устройстве нет, — в движке это молчаливый ноль."""
+    from core import strategy_lint
+    findings = [f for f in strategy_lint.lint(
+        args, known_functions=known_functions, known_blobs=known_blobs)
+        if f.get("code") in _REJECT_CODES]
+    return findings[0]["message"] if findings else ""
+
+
 def check(text: str, protocol: str = "tcp", known_functions=None,
           known_blobs=None) -> dict:
     """Разобрать текст: что пойдёт в подбор, что нет и почему.
@@ -131,8 +141,6 @@ def check(text: str, protocol: str = "tcp", known_functions=None,
          "rejected": [{"index", "args", "reason"}], "dropped": int,
          "error"?}
     """
-    from core import strategy_lint
-
     protocol = "udp" if str(protocol).lower() == "udp" else "tcp"
     if len(str(text or "")) > MAX_TEXT:
         return {"ok": False, "candidates": [], "rejected": [], "dropped": 0,
@@ -172,12 +180,9 @@ def check(text: str, protocol: str = "tcp", known_functions=None,
             continue
         # Инлайновый blob (``--blob=имя:0x…``) переносим вместе с частью.
         args = [blobs[n] for n in sorted(refs) if blobs.get(n)] + args
-        findings = [f for f in strategy_lint.lint(
-            args, known_functions=known_functions, known_blobs=known_blobs)
-            if f.get("code") in _REJECT_CODES]
-        if findings:
-            rejected.append({"index": index, "args": args,
-                             "reason": findings[0]["message"]})
+        reason = lint_reject(args, known_functions, known_blobs)
+        if reason:
+            rejected.append({"index": index, "args": args, "reason": reason})
             continue
         if len(candidates) >= MAX_CANDIDATES:
             dropped += 1
@@ -200,7 +205,7 @@ def entries(candidates: list, protocol: str = "tcp") -> list:
     for n, c in enumerate(candidates, 1):
         out.append(CatalogEntry(
             section_id=c["id"],
-            name="Своя стратегия %d" % n,
+            name=c.get("name") or "Своя стратегия %d" % n,
             description="вставлена пользователем",
             author="user",
             label="custom",

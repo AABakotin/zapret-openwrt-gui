@@ -186,6 +186,8 @@ _BLOB_REF_RE = re.compile(r"(?<!-)blob=([A-Za-z0-9_]+)")
 
 # Декларация blob'а: `--blob=NAME:@файл` или `--blob=NAME:0xHEX`.
 _BLOB_DECL_RE = re.compile(r"^--blob=([^:]+):")
+_CLONE_BLOB_RE = re.compile(
+    r"^--lua-desync=tls_client_hello_clone:(?:.*:)?blob=([A-Za-z0-9_]+)")
 
 # Фильтры, которые реально сужают поток. `--filter-l3` (версия IP) и
 # `--hostlist` сюда не входят намеренно: первый не ограничивает ни порт,
@@ -301,6 +303,11 @@ def _check_blobs(profiles, known_blobs) -> list:
             match = _BLOB_DECL_RE.match(arg)
             if match:
                 declared.add(match.group(1).strip())
+            # tls_client_hello_clone:blob=X сам готовит blob X (в desync
+            # соединения) — ссылки на X дальше по профилю законны.
+            match = _CLONE_BLOB_RE.match(arg)
+            if match:
+                declared.add(match.group(1))
 
     out = []
     seen = set()

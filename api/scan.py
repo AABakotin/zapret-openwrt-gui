@@ -9,6 +9,7 @@ API подбора стратегий (Strategy Scanner).
   GET  /api/scan/results        — результаты подбора
   POST /api/scan/apply/<idx>    — применить найденную стратегию по индексу
   POST /api/scan/custom/check   — разобрать «свою стратегию» до запуска
+  POST /api/scan/refine         — «уточнение» лучшей попытки / вариант полегче
 """
 
 from bottle import request, response
@@ -146,6 +147,25 @@ def register(app):
             result["resumed_from"] = start_index
 
         return result
+
+    @app.post("/api/scan/refine")
+    def api_scan_refine():
+        """«Уточнение» по итогам последнего подбора.
+
+        Body: {"lighter": false} — уточнить почти рабочую (параметры
+        фейка); true — искать вариант полегче для рабочей.
+        """
+        response.content_type = "application/json; charset=utf-8"
+        try:
+            body = request.json or {}
+        except Exception:
+            body = {}
+        from core import strategy_refine
+        res = strategy_refine.start(lighter=bool(body.get("lighter")))
+        if not res.get("ok"):
+            response.status = 409 if "выполняется" in res.get("error", "") \
+                else 400
+        return res
 
     @app.post("/api/scan/custom/check")
     def api_scan_custom_check():

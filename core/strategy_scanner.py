@@ -443,6 +443,30 @@ class StrategyScanner:
         """Получить результаты последнего сканирования."""
         return self._report
 
+    def refine_base(self, lighter: bool = False) -> Optional[dict]:
+        """База для «уточнения» (core/strategy_refine.py) из этого прогона.
+
+        ``lighter`` — лучшая рабочая (искать вариант полегче), иначе —
+        продвинувшаяся дальше всех неудачная (наибольший ``score``).
+        """
+        with self._lock:
+            if self._status == STATUS_RUNNING:
+                return None
+            results = list(self._results)
+            entries = dict(self._entries_by_id)
+        pool = [r for r in results if r.success] if lighter \
+            else [r for r in results if not r.success and r.score > 0]
+        if not pool:
+            return None
+        best = max(pool, key=lambda r: (r.confirmed, r.score))
+        entry = entries.get(best.strategy_id) or \
+            self._catalog_entry(best.strategy_id)
+        if entry is None:
+            return None
+        return {"strategy_id": best.strategy_id, "name": best.strategy_name,
+                "args": entry.get_args_list(), "score": best.score,
+                "target": self._target, "protocol": self._protocol}
+
     def get_working_strategies(self) -> list[dict[str, Any]]:
         """Получить список работающих стратегий."""
         with self._lock:

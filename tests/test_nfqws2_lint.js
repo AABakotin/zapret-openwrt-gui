@@ -403,3 +403,11 @@ test('lint: tcp_ts — единственная маскировка → tcp_ts_
 });
 
 console.log('nfqws2 lint/spec: ' + passed + ' тест(ов) пройдено');
+
+test('lint: tcp_ack без tcp_ts_up у фейка → badack_without_ts_up', () => {
+    const has = t => Lint.analyze(t).diagnostics.some(d => d.code === 'badack_without_ts_up');
+    assert.ok(has('--filter-tcp=443 --lua-desync=fake:blob=x:tcp_ack=-66000'));
+    assert.ok(!has('--filter-tcp=443 --lua-desync=fake:blob=x:tcp_ack=-66000:tcp_ts_up'));
+    assert.ok(!has('--filter-tcp=443 --lua-desync=fake:blob=x:tcp_ack=-66000:tcp_md5'));
+    assert.ok(!has('--filter-tcp=443 --lua-desync=multidisorder:pos=1:tcp_ack=-66000'));
+});

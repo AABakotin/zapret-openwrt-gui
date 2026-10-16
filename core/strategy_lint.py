@@ -60,6 +60,7 @@ CODE_NO_DESYNC = "no_desync_action"
 CODE_ENGINE_OPTION = "engine_owned_option"
 CODE_TTL_FAKE_UDP = "ttl_fake_on_udp"
 CODE_TCP_TS_ONLY = "tcp_ts_only_fooling"
+CODE_BADACK_NO_TS_UP = "badack_without_ts_up"
 
 # Опции nfqws2, которыми владеет GUI, а не стратегия. Первые четыре —
 # базовые аргументы (``NFQWSManager._build_base_args``): стратегия идёт
@@ -166,6 +167,12 @@ RULES = (
         "title": "единственная маскировка фейка — tcp_ts (нужны метки TCP)",
         "section": "скил nfqws2-strategies §8 (fooling) и README, "
                    "«Вопросы» (Windows и временные метки TCP)",
+    },
+    {
+        "code": CODE_BADACK_NO_TS_UP,
+        "severity": SEVERITY_WARNING,
+        "title": "фейк маскируется только через tcp_ack, без tcp_ts_up",
+        "section": "скил nfqws2-strategies §8.8 (fooling, tcp_ts_up)",
     },
 )
 
@@ -524,6 +531,54 @@ def _check_tcp_ts_only(profiles) -> list:
     return out
 
 
+# badack (tcp_ack=N) без badseq: Linux отбрасывает сегмент с верным seq и
+# неверным ack стабильно, только если опция timestamp в заголовке TCP
+# идёт первой. nfqws1 ставил её первой всегда, nfqws2 сохраняет порядок
+# клиента — и та же стратегия на nfqws2 работает через раз. tcp_ts_up
+# (zapret-lib.lua, apply_fooling) поднимает метку наверх, как в nfqws1.
+# Только функции, где маскировка ложится на фейки, а не на настоящие
+# части: у multisplit/multidisorder tcp_ack — на самих данных.
+_BADACK_FAKE_FNS = ("fake", "fakedsplit", "fakeddisorder", "hostfakesplit",
+                    "fakemultisplit", "fakemultidisorder")
+_BADACK_RE = re.compile(r"(?:^|:)tcp_ack=")
+_TS_UP_RE = re.compile(r"(?:^|:)tcp_ts_up(?::|$)")
+# Маскировки, при которых фейк до сервера и так не доходит или отброшен
+# по другой причине — badack тогда не единственная защита.
+_NON_ACK_FOOLING_RE = re.compile(
+    r"(?:^|:)(?:ip_(?:auto)?ttl=|tcp_seq=|tcp_ts=|tcp_md5(?:=|:|$)|"
+    r"badsum(?::|$)|badseq(?::|$)|fool=)")
+
+
+def _badack_only_step(arg: str) -> bool:
+    """Фейк-шаг, у которого tcp_ack — единственная маскировка, без tcp_ts_up."""
+    m = _LUA_DESYNC_RE.match(arg)
+    return bool(m and m.group(1) in _BADACK_FAKE_FNS
+                and _BADACK_RE.search(arg) and not _TS_UP_RE.search(arg)
+                and not _NON_ACK_FOOLING_RE.search(arg))
+
+
+def _check_badack_ts_up(profiles) -> list:
+    """badack без tcp_ts_up (см. выше)."""
+    out = []
+    for index, args in enumerate(profiles):
+        if _udp_only_profile(args):
+            continue
+        for arg in args:
+            if not _badack_only_step(arg):
+                continue
+            out.append(_finding(
+                CODE_BADACK_NO_TS_UP,
+                "профиль %d маскирует фейк только через tcp_ack без "
+                "tcp_ts_up: Linux-сервер стабильно отбрасывает такой фейк, "
+                "лишь когда метка TCP идёт первой опцией. nfqws1 ставил её "
+                "первой всегда, nfqws2 — нет, и стратегия работает через "
+                "раз. Добавьте tcp_ts_up (или вторую маскировку: tcp_seq, "
+                "tcp_md5)" % index,
+                where=arg, profile=index))
+            break
+    return out
+
+
 def engine_owned(argv) -> list:
     """Аргументы стратегии, которые движку от неё передавать нельзя.
 
@@ -606,6 +661,7 @@ def lint(argv, known_functions=None, known_blobs=None) -> list:
     findings.extend(_check_l7_without_ports(profiles))
     findings.extend(_check_ttl_fake_udp(profiles))
     findings.extend(_check_tcp_ts_only(profiles))
+    findings.extend(_check_badack_ts_up(profiles))
 
     # Ошибки первыми: окно ответа у модели конечное, и обрезать надо
     # предупреждения, а не то, из-за чего стратегия не работает.

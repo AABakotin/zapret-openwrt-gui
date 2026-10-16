@@ -89,7 +89,7 @@ const Nfqws2Spec = (() => {
                 tcp_md5:         { type: 'flag', optval: true, desc: 'TCP MD5 signature (можно =16byte_hex)' },
                 tcp_flags_set:   { type: 'string', desc: 'Установить флаги: FIN,SYN,…', ex: ['fin,syn'] },
                 tcp_flags_unset: { type: 'string', desc: 'Снять флаги', ex: ['ack'] },
-                tcp_ts_up:       { type: 'flag', desc: 'Увеличить TCP timestamp' },
+                tcp_ts_up:       { type: 'flag', desc: 'Поднять опцию TCP timestamp первой (как nfqws1) — нужно для tcp_ack без tcp_seq' },
                 tcp_nop_del:     { type: 'flag', desc: 'Удалить NOP-опции TCP' },
                 fool:            { type: 'lua-fool', desc: 'Кастомная Lua fool-функция', ex: ['z2k_dynamic_ttl'] },
                 badsum:          { type: 'flag', desc: 'Неверная контрольная сумма' },

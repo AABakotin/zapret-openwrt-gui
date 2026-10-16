@@ -351,14 +351,26 @@ const Nfqws2Lint = (() => {
             const tsOnly = prof.find(ct => ct.kind === 'flag'
                 && ct.flag === '--lua-desync' && ct.hasEq
                 && tsOnlyStep(ct.value || ''));
-            if (!tsOnly) return;
-            diagnostics.push({ start: tsOnly.tok.start, end: tsOnly.tok.end,
-                severity: SEV.WARN, code: 'tcp_ts_only_fooling',
-                message: 'Фейк маскируется только через tcp_ts: Windows по умолчанию '
-                    + 'не шлёт метки TCP, и фейк уйдёт серверу настоящим пакетом. '
-                    + 'Добавьте вторую маскировку (tcp_md5, ip_autottl, tcp_seq) или '
-                    + 'включите метки: netsh interface tcp set global timestamps=enabled' });
-            if (!tsOnly.diag) tsOnly.diag = SEV.WARN;
+            if (tsOnly) {
+                diagnostics.push({ start: tsOnly.tok.start, end: tsOnly.tok.end,
+                    severity: SEV.WARN, code: 'tcp_ts_only_fooling',
+                    message: 'Фейк маскируется только через tcp_ts: Windows по умолчанию '
+                        + 'не шлёт метки TCP, и фейк уйдёт серверу настоящим пакетом. '
+                        + 'Добавьте вторую маскировку (tcp_md5, ip_autottl, tcp_seq) или '
+                        + 'включите метки: netsh interface tcp set global timestamps=enabled' });
+                if (!tsOnly.diag) tsOnly.diag = SEV.WARN;
+            }
+            // badack без tcp_ts_up — зеркало badack_without_ts_up.
+            const badack = prof.find(ct => ct.kind === 'flag'
+                && ct.flag === '--lua-desync' && ct.hasEq
+                && badackOnlyStep(ct.value || ''));
+            if (!badack) return;
+            diagnostics.push({ start: badack.tok.start, end: badack.tok.end,
+                severity: SEV.WARN, code: 'badack_without_ts_up',
+                message: 'Фейк маскируется только через tcp_ack без tcp_ts_up: Linux-сервер '
+                    + 'стабильно отбрасывает его, лишь когда метка TCP идёт первой опцией '
+                    + '(так всегда делал nfqws1, nfqws2 — нет). Добавьте tcp_ts_up.' });
+            if (!badack.diag) badack.diag = SEV.WARN;
         });
         // порядок: desync должен идти после filter (мягко).
         const di = order.indexOf('desync');
@@ -378,6 +390,17 @@ const Nfqws2Lint = (() => {
         + '|tcp_md5(?:=|:|$)|tcp_flags_(?:set|unset)=|badsum(?::|$)|badseq(?::|$)|fool=)');
     function tsOnlyStep(value) {
         return TS_FOOLING_RE.test(value) && !OTHER_FOOLING_RE.test(value);
+    }
+    // Фейк-шаг: tcp_ack — единственная маскировка, tcp_ts_up нет.
+    // Зеркало core/strategy_lint._badack_only_step.
+    const BADACK_FAKE_FNS = ['fake', 'fakedsplit', 'fakeddisorder', 'hostfakesplit',
+        'fakemultisplit', 'fakemultidisorder'];
+    const NON_ACK_FOOLING_RE = new RegExp('(?:^|:)(?:ip_(?:auto)?ttl=|tcp_seq=|tcp_ts='
+        + '|tcp_md5(?:=|:|$)|badsum(?::|$)|badseq(?::|$)|fool=)');
+    function badackOnlyStep(value) {
+        const fn = String(value).split(':', 1)[0];
+        return BADACK_FAKE_FNS.includes(fn) && /(?:^|:)tcp_ack=/.test(value)
+            && !/(?:^|:)tcp_ts_up(?::|$)/.test(value) && !NON_ACK_FOOLING_RE.test(value);
     }
     // vals — опции профиля вида '--flag=value'.
     function udpOnlyProfile(vals) {

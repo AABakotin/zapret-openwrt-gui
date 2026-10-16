@@ -1,8 +1,29 @@
-# Zapret Web-GUI
+# Zapret Web-GUI — OpenWrt Fork
 
-[![Release](https://img.shields.io/github/v/release/avatarDD/zapret-gui?style=flat-square)](https://github.com/avatarDD/zapret-gui/releases/latest)
-[![Build](https://img.shields.io/github/actions/workflow/status/avatarDD/zapret-gui/release.yml?style=flat-square&label=build)](https://github.com/avatarDD/zapret-gui/actions)
-[![License](https://img.shields.io/github/license/avatarDD/zapret-gui?style=flat-square)](LICENSE)
+[![Fork](https://img.shields.io/badge/fork%20of-avatarDD%2Fzapret--gui-blue?style=flat-square)](https://github.com/avatarDD/zapret-gui)
+[![Release](https://img.shields.io/github/v/release/AABakotin/zapret-openwrt-gui?style=flat-square)](https://github.com/AABakotin/zapret-openwrt-gui/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/AABakotin/zapret-openwrt-gui/release.yml?style=flat-square&label=build)](https://github.com/AABakotin/zapret-openwrt-gui/actions)
+[![License](https://img.shields.io/github/license/AABakotin/zapret-openwrt-gui?style=flat-square)](LICENSE)
+
+**Форк [avatarDD/zapret-gui](https://github.com/avatarDD/zapret-gui) с исправлениями для OpenWrt 25.12+.**
+
+## 🔧 Что отличается от upstream
+
+Этот форк содержит три исправления для OpenWrt 25.12+, которых нет в оригинале:
+
+1. **`--user=root`** — `nfqws2` от `nobody` не может создать очередь `NFQUEUE`.
+2. **Убран `--pidfile`** — заставляет `nfqws2` форкаться, GUI теряет процесс.
+3. **Правила для LAN** — отдельная таблица `zapret_lan` + цепочка `output_hook`.
+
+Все остальные функции (стратегии, подбор, туннели, MCP, CLI) **идентичны upstream**.
+
+## 🚀 Установка одной командой (OpenWrt 25.12+)
+
+```bash
+curl -L -o /tmp/zapret-gui.apk https://github.com/AABakotin/zapret-openwrt-gui/releases/latest/download/zapret-gui-openwrt.apk
+apk add --allow-untrusted /tmp/zapret-gui.apk
+/etc/init.d/zapret-gui enable
+/etc/init.d/zapret-gui start
 
 > [!IMPORTANT]
 > Данный материал подготовлен в научно-технических целях.

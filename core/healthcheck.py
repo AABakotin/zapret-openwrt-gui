@@ -49,6 +49,21 @@ def _notify(kind: str, text: str) -> None:
     notify.event(kind, text, dedup=False)
 
 
+def _autopick_status() -> dict:
+    try:
+        from core import autopick
+        st = autopick.status()
+        return {"mode": st["settings"]["mode"], "running": st["running"],
+                "suggestion": st["suggestion"]}
+    except Exception:                               # noqa: BLE001
+        return {"mode": "off", "running": None, "suggestion": None}
+
+
+def _autopick(display: str, hosts) -> None:
+    from core import autopick
+    autopick.trigger(display, hosts)
+
+
 def get_healthcheck():
     """Singleton-аксессор."""
     global _instance
@@ -173,6 +188,7 @@ class HealthcheckDaemon:
             "next_check_at": self._next_check_at,
             "last_summary": self._last_check_summary,
             "fail_streak": dict(self._fail_streak),
+            "autopick": _autopick_status(),
             "checking": self._checking,
             "history": history,
         }
@@ -404,6 +420,7 @@ class HealthcheckDaemon:
             if (self._fail_streak[name] >= threshold
                     and name not in self._notified_down):
                 self._notified_down.add(name)
+                _autopick(entry["display"], entry["hosts"])
                 _notify("site_down", "⚠️ %s не открывается (%d проверки "
                         "подряд)%s" % (entry["display"], threshold,
                                        ": %s" % entry["error"]

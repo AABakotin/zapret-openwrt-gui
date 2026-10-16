@@ -2585,18 +2585,10 @@ class StrategyScanner:
 
     # ─────────────────── Apply strategy ───────────────────
 
-    def _apply_probe_result(self, probe_result: StrategyProbeResult) -> bool:
+    def _save_probe_result(self, probe_result: StrategyProbeResult):
         """
-        Применить стратегию из результата пробы.
-
-        Создаёт user-стратегию в JSON-формате через StrategyManager
-        и применяет её через ``nfqws_control.apply_strategy``.
-
-        Args:
-            probe_result: Результат успешной пробы.
-
-        Returns:
-            True если стратегия применена.
+        Сохранить находку пользовательской стратегией (JSON) через
+        StrategyManager. Возвращает сохранённую стратегию или ``None``.
         """
         from core.catalog_loader import get_catalog_manager
         from core.strategy_builder import get_strategy_manager
@@ -2613,7 +2605,7 @@ class StrategyScanner:
                 "Запись каталога не найдена: %s" % probe_result.strategy_id,
                 source="scanner",
             )
-            return False
+            return None
 
         # Собираем аргументы
         args = self._build_strategy_args(entry)
@@ -2623,7 +2615,7 @@ class StrategyScanner:
                 % probe_result.strategy_name,
                 source="scanner",
             )
-            return False
+            return None
 
         # Если в args есть ссылка на TMP_HOSTLIST_PATH (это означает,
         # что стратегия была trick-обёрткой), переписываем её в постоянный
@@ -2655,7 +2647,35 @@ class StrategyScanner:
                 "Не удалось сохранить стратегию: %s" % entry.name,
                 source="scanner",
             )
+            return None
+        return saved
+
+    def save_working_by_id(self, strategy_id: str):
+        """Сохранить находку своей стратегией, НЕ применяя её.
+
+        Для автоподбора (core/autopick.py): применять он будет через
+        «Применить с проверкой», а не напрямую.
+
+        Returns:
+            dict сохранённой стратегии (``id``, ``name``…) или ``None``.
+        """
+        with self._lock:
+            probe_result = next((r for r in self._results
+                                 if r.success and r.strategy_id == strategy_id),
+                                None)
+        if probe_result is None:
+            return None
+        return self._save_probe_result(probe_result)
+
+    def _apply_probe_result(self, probe_result: StrategyProbeResult) -> bool:
+        """
+        Применить стратегию из результата пробы: сохранить своей
+        (:meth:`_save_probe_result`) и применить.
+        """
+        saved = self._save_probe_result(probe_result)
+        if not saved:
             return False
+        entry_name = probe_result.strategy_name
 
         # Применяем тем же путём, что кнопка «Применить» и MCP
         # (`nfqws_control.apply_strategy`): общий мьютекс на движок (не
@@ -2668,13 +2688,13 @@ class StrategyScanner:
         if not result.get("ok"):
             log.error(
                 "Не удалось применить стратегию %s: %s"
-                % (entry.name, result.get("error") or "?"),
+                % (entry_name, result.get("error") or "?"),
                 source="scanner",
             )
             return False
 
         log.success(
-            "Стратегия применена: %s" % entry.name,
+            "Стратегия применена: %s" % entry_name,
             source="scanner",
         )
         return True

@@ -174,8 +174,15 @@ def _engine():
     return get_nfqws_manager()
 
 
-def start(strategy_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
-    """Начать применение с проверкой (фоном). Ответ — сразу."""
+def start(strategy_id: str, timeout: int = DEFAULT_TIMEOUT,
+          auto_target: str = "") -> dict:
+    """Начать применение с проверкой (фоном). Ответ — сразу.
+
+    ``auto_target`` — режим без человека (автоподбор, core/autopick.py):
+    подтверждать некому, поэтому решает замер «после». Стратегия
+    остаётся, если ``auto_target`` (имя сайта мониторинга) открылся и
+    ничего из открывавшегося не перестало; иначе — откат сразу.
+    """
     global _thread
     from core.strategy_builder import get_strategy_manager
     strategy = get_strategy_manager().get_strategy(strategy_id)
@@ -214,6 +221,7 @@ def start(strategy_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
             "deadline": 0,
             "before": None, "after": None, "verdict": None,
             "op": None, "paths": [], "result": "", "reason": "",
+            "auto_target": str(auto_target or ""),
         }
         data = _read()
         data["session"] = session
@@ -266,8 +274,30 @@ def _run_inner() -> None:
         _rollback("перестало открываться всё, что открывалось до: %s"
                   % ", ".join(verdict["lost"]))
         return
+    target = s.get("auto_target")
+    if target:
+        reason = auto_verdict(target, after, verdict)
+        if reason:
+            _rollback(reason)
+        else:
+            _finish("confirmed", "автоподбор: %s открывается" % target)
+            mark_working("автоподбор для %s" % target)
+            from core import notify
+            notify.event("autopick", "✅ «%s» применена: %s открывается"
+                         % (s.get("strategy_name", ""), target))
+        return
     _update(phase="waiting", deadline=time.time() + int(s["timeout"]))
     _wait()
+
+
+def auto_verdict(target: str, after: dict, verdict: dict) -> str:
+    """Чистая функция: почему автоприменение не оставлять ("" — оставить)."""
+    if verdict.get("lost"):
+        return "автоподбор: перестали открываться %s" % ", ".join(
+            verdict["lost"])
+    if not (after.get("sites") or {}).get(target):
+        return "автоподбор: %s так и не открылся" % target
+    return ""
 
 
 def _op_paths(op_id: str) -> list:

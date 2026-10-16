@@ -408,6 +408,33 @@ class TestSafeApplyFlow(HistoryCase):
         self.assertEqual(r.get("already"), "rolling_back")
         self.assertEqual(self.calls, [])
 
+    def _run_auto(self, before, after):
+        probes = iter([before, after])
+        from core import nfqws_control
+        from core.strategy_builder import get_strategy_manager
+        with mock.patch.object(sa, "probe", lambda: next(probes)), \
+                mock.patch.object(nfqws_control, "apply_strategy",
+                                  self._fake_apply), \
+                mock.patch.object(get_strategy_manager(), "get_strategy",
+                                  lambda sid: {"id": sid, "name": "New"}):
+            r = sa.start("new", 60, auto_target="a")
+            self.assertTrue(r["ok"], r)
+            sa._thread.join(5)
+
+    def test_auto_target_opened_keeps(self):
+        self._run_auto({"sites": {"a": False, "b": True}},
+                       {"sites": {"a": True, "b": True}})
+        st = sa.status()
+        self.assertEqual(st["session"]["phase"], "confirmed")
+        self.assertEqual(st["working"]["strategy_id"], "new")
+
+    def test_auto_regression_rolls_back(self):
+        self._run_auto({"sites": {"a": False, "b": True}},
+                       {"sites": {"a": True, "b": False}})
+        self.assertEqual(self._session()["phase"], "rolled_back")
+        self.cfg.load()
+        self.assertEqual(self.cfg.get("strategy", "current_id"), "old")
+
     def test_manual_rollback(self):
         self._run({"sites": {"a": True}}, {"sites": {"a": True}})
         r = sa.cancel()

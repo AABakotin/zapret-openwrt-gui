@@ -447,28 +447,43 @@ def _check_ttl_fake_udp(profiles) -> list:
 # Маскировки (fooling) шагов --lua-desync. tcp_ts правит опцию TCP
 # timestamp — если клиент её не шлёт (Windows по умолчанию), править
 # нечего, и фейк уходит серверу настоящим пакетом. Остальные маскировки
-# от клиента не зависят.
+# от клиента не зависят. Только IPv4-годные: ip6_* на IPv4-пакет не
+# действуют, и с ними IPv4 остаётся замаскированным одним tcp_ts.
+# badseq — не из zapret-lib (apply_fooling его не знает), но его понимают
+# наши функции (custom_funcs.lua, fakemultidisorder.lua): считаем, чтобы
+# не ругаться на рабочую стратегию, но в совет не включаем.
 _TS_FOOLING_RE = re.compile(r"(?:^|:)tcp_ts=")
 _OTHER_FOOLING_RE = re.compile(
-    r"(?:^|:)(?:ip6?_(?:auto)?ttl=|tcp_seq=|tcp_ack=|tcp_md5(?:=|:|$)|"
-    r"tcp_flags_(?:set|unset)=|badsum(?::|$)|badseq(?::|$)|fool=|"
-    r"ip6_(?:hopbyhop|hopbyhop2|destopt|destopt2|routing|ah)(?::|$))")
+    r"(?:^|:)(?:ip_(?:auto)?ttl=|tcp_seq=|tcp_ack=|tcp_md5(?:=|:|$)|"
+    r"tcp_flags_(?:set|unset)=|badsum(?::|$)|badseq(?::|$)|fool=)")
+
+
+def _ts_only_step(arg: str) -> bool:
+    """Шаг --lua-desync, у которого tcp_ts — единственная маскировка."""
+    return bool(_LUA_DESYNC_RE.match(arg) and _TS_FOOLING_RE.search(arg)
+                and not _OTHER_FOOLING_RE.search(arg))
+
+
+def _udp_only_profile(args) -> bool:
+    """Профиль только про UDP/QUIC — меток TCP он не касается."""
+    udp = any(_FILTER_UDP_RE.match(a) or _QUIC_MARK_RE.match(a)
+              for a in args)
+    return udp and not any(a.startswith("--filter-tcp=") for a in args)
 
 
 def needs_tcp_timestamps(argv) -> bool:
-    """Есть ли шаг, у которого tcp_ts — единственная маскировка.
+    """Есть ли в TCP-профиле шаг, у которого tcp_ts — единственная маскировка.
 
     Такая стратегия работает с роутера и с Linux/Android/macOS/iOS (метки
     TCP включены), а с Windows — нет: Windows по умолчанию меток не шлёт
     (``netsh interface tcp set global timestamps=enabled``). Сканер и
     подбор идут с роутера и этого не видят — отсюда «с роутера
-    открывается, с ПК нет».
+    открывается, с ПК нет». Зеркало — ``Nfqws2Lint.needsTcpTimestamps``.
     """
-    for arg in argv or ():
-        arg = str(arg)
-        if not _LUA_DESYNC_RE.match(arg):
+    for args in split_profiles([str(a) for a in (argv or ())]):
+        if _udp_only_profile(args):
             continue
-        if _TS_FOOLING_RE.search(arg) and not _OTHER_FOOLING_RE.search(arg):
+        if any(_ts_only_step(a) for a in args):
             return True
     return False
 
@@ -477,12 +492,10 @@ def _check_tcp_ts_only(profiles) -> list:
     """Шаг, у которого tcp_ts — единственная маскировка (см. выше)."""
     out = []
     for index, args in enumerate(profiles):
-        # UDP-профиль меток TCP не касается.
-        if any(_FILTER_UDP_RE.match(a) for a in args) and not any(
-                a.startswith("--filter-tcp=") for a in args):
+        if _udp_only_profile(args):
             continue
         for arg in args:
-            if not _LUA_DESYNC_RE.match(arg) or not needs_tcp_timestamps([arg]):
+            if not _ts_only_step(arg):
                 continue
             out.append(_finding(
                 CODE_TCP_TS_ONLY,
@@ -490,7 +503,7 @@ def _check_tcp_ts_only(profiles) -> list:
                 "временной метки TCP, а Windows по умолчанию меток не шлёт — "
                 "там фейк уйдёт серверу настоящим пакетом. С роутера и с "
                 "Linux/Android/macOS/iOS работает, с Windows — нет. Добавьте "
-                "вторую маскировку (tcp_md5, badseq, ip_autottl) или включите "
+                "вторую маскировку (tcp_md5, ip_autottl, tcp_seq) или включите "
                 "метки в Windows: netsh interface tcp set global "
                 "timestamps=enabled" % index,
                 where=arg, profile=index))

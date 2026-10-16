@@ -332,21 +332,34 @@ const Nfqws2Lint = (() => {
         }
         // tcp_ts — единственная маскировка фейка: Windows по умолчанию
         // меток TCP не шлёт, и фейк уходит серверу настоящим пакетом.
-        // Тот же код, что у серверного линтера (tcp_ts_only_fooling).
-        const isUdpOnly = isUdp && !tokens.some(ct => ct.kind === 'flag'
-            && ct.flag === '--filter-tcp');
-        const tsOnly = isUdpOnly ? null : tokens.find(ct => ct.kind === 'flag'
-            && ct.flag === '--lua-desync' && ct.hasEq
-            && needsTcpTimestamps(ct.value || ''));
-        if (tsOnly) {
+        // По профилям (--new), UDP/QUIC-профили пропускаются — как у
+        // серверного линтера (core/strategy_lint.py, tcp_ts_only_fooling).
+        let profile = [];
+        const profiles = [profile];
+        tokens.forEach(ct => {
+            if (ct.kind === 'flag' && ct.flag === '--new') {
+                profile = [];
+                profiles.push(profile);
+            } else {
+                profile.push(ct);
+            }
+        });
+        profiles.forEach(prof => {
+            const vals = prof.filter(ct => ct.kind === 'flag' && ct.hasEq)
+                .map(ct => ct.flag + '=' + (ct.value || ''));
+            if (udpOnlyProfile(vals)) return;
+            const tsOnly = prof.find(ct => ct.kind === 'flag'
+                && ct.flag === '--lua-desync' && ct.hasEq
+                && tsOnlyStep(ct.value || ''));
+            if (!tsOnly) return;
             diagnostics.push({ start: tsOnly.tok.start, end: tsOnly.tok.end,
                 severity: SEV.WARN, code: 'tcp_ts_only_fooling',
                 message: 'Фейк маскируется только через tcp_ts: Windows по умолчанию '
                     + 'не шлёт метки TCP, и фейк уйдёт серверу настоящим пакетом. '
-                    + 'Добавьте вторую маскировку (tcp_md5, badseq, ip_autottl) или '
+                    + 'Добавьте вторую маскировку (tcp_md5, ip_autottl, tcp_seq) или '
                     + 'включите метки: netsh interface tcp set global timestamps=enabled' });
             if (!tsOnly.diag) tsOnly.diag = SEV.WARN;
-        }
+        });
         // порядок: desync должен идти после filter (мягко).
         const di = order.indexOf('desync');
         const fi = order.indexOf('filter');
@@ -358,20 +371,34 @@ const Nfqws2Lint = (() => {
         return { tokens, diagnostics, slots, order, funcs, sawNew };
     }
 
-    // Есть ли в тексте шаг --lua-desync, у которого tcp_ts= — единственная
-    // маскировка. Зеркало core/strategy_lint.needs_tcp_timestamps: принимает
-    // и значение одного --lua-desync, и строку стратегии целиком.
+    // tcp_ts= — единственная маскировка шага. Зеркало core/strategy_lint.py:
+    // ip6_* на IPv4 не действуют, badseq понимают наши lua-функции.
     const TS_FOOLING_RE = /(?:^|:)tcp_ts=/;
-    const OTHER_FOOLING_RE = new RegExp('(?:^|:)(?:ip6?_(?:auto)?ttl=|tcp_seq=|tcp_ack='
-        + '|tcp_md5(?:=|:|$)|tcp_flags_(?:set|unset)=|badsum(?::|$)|badseq(?::|$)|fool='
-        + '|ip6_(?:hopbyhop|hopbyhop2|destopt|destopt2|routing|ah)(?::|$))');
+    const OTHER_FOOLING_RE = new RegExp('(?:^|:)(?:ip_(?:auto)?ttl=|tcp_seq=|tcp_ack='
+        + '|tcp_md5(?:=|:|$)|tcp_flags_(?:set|unset)=|badsum(?::|$)|badseq(?::|$)|fool=)');
+    function tsOnlyStep(value) {
+        return TS_FOOLING_RE.test(value) && !OTHER_FOOLING_RE.test(value);
+    }
+    // vals — опции профиля вида '--flag=value'.
+    function udpOnlyProfile(vals) {
+        const udp = vals.some(v => v.startsWith('--filter-udp=')
+            || /^--(?:filter-l7|payload)=.*\bquic/.test(v));
+        return udp && !vals.some(v => v.startsWith('--filter-tcp='));
+    }
+    // Строка стратегии целиком (как args_preview сканера): есть ли TCP-профиль
+    // с шагом, у которого tcp_ts — единственная маскировка.
+    // Зеркало core/strategy_lint.needs_tcp_timestamps.
     function needsTcpTimestamps(text) {
-        const steps = String(text || '').split(/\s+/).filter(Boolean)
-            .map(t => t.replace(/^["']|["']$/g, ''))
-            .map(t => t.startsWith('--lua-desync=') ? t.slice('--lua-desync='.length)
-                : (t.startsWith('--') ? null : t))
-            .filter(Boolean);
-        return steps.some(v => TS_FOOLING_RE.test(v) && !OTHER_FOOLING_RE.test(v));
+        const words = String(text || '').split(/\s+/).filter(Boolean)
+            .map(t => t.replace(/^["']|["']$/g, ''));
+        let prof = [];
+        const profiles = [prof];
+        words.forEach(w => {
+            if (w === '--new' || w.startsWith('--new=')) { prof = []; profiles.push(prof); }
+            else prof.push(w);
+        });
+        return profiles.some(p => !udpOnlyProfile(p) && p.some(w =>
+            w.startsWith('--lua-desync=') && tsOnlyStep(w.slice('--lua-desync='.length))));
     }
 
     // ──────────────── Документация по токену под курсором ────────────────

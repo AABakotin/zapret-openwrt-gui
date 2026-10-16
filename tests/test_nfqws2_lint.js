@@ -385,9 +385,21 @@ test('lint: tcp_ts — единственная маскировка → tcp_ts_
         + '--lua-desync=fake:blob=fake_default_quic:tcp_ts=-1000');
     assert.ok(!udp.diagnostics.some(d => d.code === 'tcp_ts_only_fooling'));
     assert.ok(Lint.needsTcpTimestamps('--filter-tcp=443 --lua-desync=fake:tcp_ts=-5'));
-    assert.ok(Lint.needsTcpTimestamps('fake:blob=x:tcp_ts=-5'));
-    assert.ok(!Lint.needsTcpTimestamps('--lua-desync=fake:tcp_ts=-5:badseq'));
+    assert.ok(!Lint.needsTcpTimestamps('--lua-desync=fake:tcp_ts=-5:tcp_md5'));
     assert.ok(!Lint.needsTcpTimestamps('--lua-desync=multisplit:pos=1'));
+    // ip6_* на IPv4 не действует — IPv4 остаётся на одном tcp_ts.
+    assert.ok(Lint.needsTcpTimestamps('--lua-desync=fake:tcp_ts=-5:ip6_autottl=-2,3-20'));
+    // QUIC-профиль меток TCP не касается.
+    assert.ok(!Lint.needsTcpTimestamps('--filter-l7=quic --lua-desync=fake:tcp_ts=-5'));
+    // по профилям: TCP-профиль с tcp_ts и отдельный UDP-профиль.
+    const multi = '--filter-l7=tls --lua-desync=fake:tcp_ts=-1000 '
+        + '--new --filter-udp=443 --lua-desync=fake:blob=fake_default_quic';
+    assert.ok(Lint.needsTcpTimestamps(multi));
+    assert.ok(Lint.analyze(multi).diagnostics.some(d => d.code === 'tcp_ts_only_fooling'));
+    const reverse = '--filter-tcp=443 --lua-desync=multisplit:pos=1 '
+        + '--new --filter-udp=443 --lua-desync=fake:tcp_ts=-1000';
+    assert.ok(!Lint.needsTcpTimestamps(reverse));
+    assert.ok(!Lint.analyze(reverse).diagnostics.some(d => d.code === 'tcp_ts_only_fooling'));
 });
 
 console.log('nfqws2 lint/spec: ' + passed + ' тест(ов) пройдено');

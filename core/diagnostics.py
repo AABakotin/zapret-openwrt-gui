@@ -1138,16 +1138,21 @@ def _loaded_kernel_modules(wanted):
     return found
 
 
-def check_rival_bypassers():
+def check_rival_bypassers(running=None):
     """
     Другие обходчики DPI, работающие одновременно с нашим nfqws2
     (youtubeUnblock, b4, byedpi, DPITunnel, SpoofDPI).
+
+    Args:
+        running: уже собранные имена процессов (чтобы вызывающий обошёл
+            /proc один раз на все таблицы); None — обойти самому.
 
     Returns:
         dict: { rivals: [{id, severity, name, title, detail, hint}],
                 has_rivals }
     """
-    running = _running_process_names(set(_KNOWN_DPI_BYPASSERS))
+    if running is None:
+        running = _running_process_names(set(_KNOWN_DPI_BYPASSERS))
     kmods = _loaded_kernel_modules(_KNOWN_DPI_KMODS)
     rivals = evaluate_rival_bypassers(running, kmods)
     return {"rivals": rivals, "has_rivals": bool(rivals)}
@@ -1234,7 +1239,9 @@ def check_known_conflicts():
                     existing.add(p)
             except OSError:
                 continue
-    running = _running_process_names(set(_KNOWN_FOREIGN_DAEMONS.keys()))
+    # Один обход /proc на обе таблицы процессов.
+    running = _running_process_names(
+        set(_KNOWN_FOREIGN_DAEMONS) | set(_KNOWN_DPI_BYPASSERS))
     warnings = evaluate_conflicts(existing, running)
     # Сторонние сборки самого zapret — отдельным проходом: они спорят не
     # за маршруты, а за очередь NFQUEUE, и остаются после «я его удалил».
@@ -1242,7 +1249,7 @@ def check_known_conflicts():
         _existing_foreign_markers(), _foreign_autostart_script()
     )
     # Другие обходчики DPI — первыми: это прямой конфликт за пакеты.
-    warnings = check_rival_bypassers()["rivals"] + warnings
+    warnings = check_rival_bypassers(running)["rivals"] + warnings
     return {
         "ok": True,
         "warnings": warnings,

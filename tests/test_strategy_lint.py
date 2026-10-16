@@ -326,7 +326,7 @@ class TestTcpTsOnly(unittest.TestCase):
 
     def test_second_fooling_is_fine(self):
         for extra in ("tcp_md5", "badseq", "ip_autottl=-2,3-20",
-                      "tcp_seq=-3000", "badsum"):
+                      "tcp_seq=-3000", "badsum", "ip_ttl=4"):
             self.assertNotIn(lint.CODE_TCP_TS_ONLY, codes([
                 "--filter-tcp=443",
                 "--lua-desync=fake:blob=x:tcp_ts=-1000:" + extra]), extra)
@@ -334,6 +334,26 @@ class TestTcpTsOnly(unittest.TestCase):
     def test_udp_profile_is_skipped(self):
         self.assertNotIn(lint.CODE_TCP_TS_ONLY, codes([
             "--filter-udp=443", "--lua-desync=fake:blob=x:tcp_ts=-1000"]))
+        self.assertNotIn(lint.CODE_TCP_TS_ONLY, codes([
+            "--filter-l7=quic", "--lua-desync=fake:blob=x:tcp_ts=-1000"]))
+
+    def test_ipv6_fooling_does_not_mask_ipv4(self):
+        self.assertIn(lint.CODE_TCP_TS_ONLY, codes([
+            "--filter-tcp=443",
+            "--lua-desync=fake:blob=x:tcp_ts=-1000:ip6_autottl=-2,3-20"]))
+
+    def test_advice_names_real_foolings(self):
+        msg = [f for f in lint.lint(["--filter-tcp=443",
+                                     "--lua-desync=fake:blob=x:tcp_ts=-5"])
+               if f["code"] == lint.CODE_TCP_TS_ONLY][0]["message"]
+        self.assertNotIn("badseq", msg)
+
+    def test_per_profile(self):
+        argv = ["--filter-tcp=443", "--lua-desync=multisplit:pos=1",
+                "--new", "--filter-udp=443",
+                "--lua-desync=fake:blob=x:tcp_ts=-1000"]
+        self.assertFalse(lint.needs_tcp_timestamps(argv))
+        self.assertNotIn(lint.CODE_TCP_TS_ONLY, codes(argv))
 
     def test_needs_tcp_timestamps(self):
         self.assertTrue(lint.needs_tcp_timestamps(

@@ -24,20 +24,24 @@ def _run_cmd(args, timeout=5):
         return -1, ""
 
 
-_RIVALS_TTL = 30.0
+_RIVALS_TTL = 10.0
 _rivals_cache = {"ts": 0.0, "value": []}
 
 
 def _cached_rivals():
-    """Другие обходчики DPI для дашборда, с кешем на _RIVALS_TTL секунд."""
-    now = time.time()
-    if now - _rivals_cache["ts"] < _RIVALS_TTL:
+    """Другие обходчики DPI для дашборда, с кешем на _RIVALS_TTL секунд.
+
+    Ошибку не кешируем: разовый сбой чтения /proc не должен на весь срок
+    кеша прятать конфликт — отдаём прошлое значение и пробуем снова.
+    """
+    now = time.monotonic()
+    if _rivals_cache["ts"] and now - _rivals_cache["ts"] < _RIVALS_TTL:
         return _rivals_cache["value"]
     try:
         from core.diagnostics import check_rival_bypassers
         value = check_rival_bypassers()["rivals"]
     except Exception:
-        value = []
+        return _rivals_cache["value"]
     _rivals_cache.update(ts=now, value=value)
     return value
 

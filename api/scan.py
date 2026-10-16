@@ -141,7 +141,8 @@ def register(app):
             response.status = 409
             return {
                 "ok": False,
-                "error": "Подбор стратегий уже выполняется",
+                "error": getattr(scanner, "refusal", "")
+                or "Подбор стратегий уже выполняется",
             }
 
         result = {

@@ -232,6 +232,8 @@ class TestApply(unittest.TestCase):
                                         "profiles": []}
         sm.save_user_strategy.side_effect = lambda d: d
         sm._autowrap_scope.return_value = {}
+        sm._user_dir = "/u"
+        ipm._file_path.return_value = "/l/asn24940.txt"
         cfg = mock.Mock()
         cfg.get.return_value = "cur"
         with mock.patch.object(fp, "load", return_value=state), \
@@ -247,7 +249,12 @@ class TestApply(unittest.TestCase):
                            return_value={"ok": True}) as start:
             res = fp.apply_network("AS24940")
         self.assertTrue(res["ok"])
-        start.assert_called_once_with("net16k-cur")
+        start.assert_called_once()
+        self.assertEqual(start.call_args[0], ("net16k-cur",))
+        # Откат вернёт и записанные до старта список со стратегией.
+        self.assertEqual(start.call_args[1]["paths"],
+                         ["/l/asn24940.txt", "/u/net16k-cur.json"])
+        self.assertGreater(start.call_args[1]["since"], 0)
         ipm.save_ipset.assert_called_once_with("asn24940", ["5.9.0.0/16"])
         saved = sm.save_user_strategy.call_args[0][0]
         self.assertIn("--ipset=lists/asn24940.txt",

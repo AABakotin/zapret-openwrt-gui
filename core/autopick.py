@@ -69,6 +69,14 @@ SOURCE = "autopick"
 
 _lock = threading.Lock()
 _running = {"key": ""}
+# Сайты, чей подбор отложен из-за занятости (идёт другой подбор, проверка
+# стратегии, сканер): мониторинг повторит запуск на следующей неудачной
+# проверке, а не только на новом переходе «открывается → нет».
+_pending = set()
+
+
+class _Busy(RuntimeError):
+    """Сканер занят: подбор не начался, повторить позже."""
 
 
 def _cfg():
@@ -168,6 +176,11 @@ def _busy() -> str:
     return ""
 
 
+def pending(display: str) -> bool:
+    """Отложен ли подбор для ``display`` из-за занятости."""
+    return display in _pending
+
+
 def trigger(display: str, hosts) -> dict:
     """Сайт ``display`` перестал открываться: подобрать стратегию в фоне.
 
@@ -183,8 +196,11 @@ def trigger(display: str, hosts) -> dict:
             return {"ok": False, "reason": "нет хоста"}
         last = float(((_read().get("runs") or {}).get(display) or {})
                      .get("ts") or 0)
+        busy = _busy()
         why = should_run(display, time.time(), last, st["mode"],
-                         st["min_interval_h"], _busy())
+                         st["min_interval_h"], busy)
+        if why and busy and why.startswith("занято"):
+            _pending.add(display)
         if why:
             if st["mode"] != "off":
                 log.info("автоподбор для %s пропущен: %s" % (display, why),
@@ -202,9 +218,11 @@ def trigger(display: str, hosts) -> dict:
             return {"ok": False, "reason": reason}
         with _lock:
             if _running["key"]:
+                _pending.add(display)
                 return {"ok": False, "reason": "уже идёт"}
             _running["key"] = display
-        threading.Thread(target=_run, args=(display, host, st["mode"]),
+            _pending.discard(display)
+        threading.Thread(target=_run, args=(display, host, st["mode"], last),
                          name="autopick", daemon=True).start()
         return {"ok": True}
     except Exception as e:                          # noqa: BLE001 — граница
@@ -231,7 +249,7 @@ def _scan(host: str) -> list:
     if not sc.start(target=host, protocol="tcp", mode=SCAN_MODE,
                     stop_after=STOP_AFTER, confirm=True,
                     require_isolation=True):
-        raise RuntimeError("сканер занят")
+        raise _Busy(getattr(sc, "refusal", "") or "сканер занят")
     deadline = time.time() + SCAN_TIMEOUT
     while sc.get_status().get("status") == STATUS_RUNNING:
         if time.time() > deadline:
@@ -277,7 +295,7 @@ def _wait_safe_apply(display: str, name: str) -> None:
                 % (display, name, s.get("reason") or "?"))
 
 
-def _run(display: str, host: str, mode: str) -> None:
+def _run(display: str, host: str, mode: str, last: float = 0) -> None:
     started = time.time()
     _set_run(display, ts=started, host=host, result="running", reason="")
     log.info("автоподбор: %s не открывается — подбираю стратегию для %s"
@@ -324,6 +342,13 @@ def _run(display: str, host: str, mode: str) -> None:
                  strategy_name=name, reason=note.strip())
         _notify("🔎 Для %s нашлась стратегия «%s». Применить: «Стратегии» "
                 "→ «Применить с проверкой».%s" % (display, name, note))
+    except _Busy as e:
+        # Подбор не начался — интервал не тратится: время прошлого
+        # прогона возвращается, мониторинг повторит запуск.
+        _pending.add(display)
+        _set_run(display, ts=last, result="deferred", reason=str(e))
+        log.info("автоподбор для %s отложен: %s" % (display, e),
+                 source=SOURCE)
     except Exception as e:                          # noqa: BLE001 — граница
         _set_run(display, result="error", reason=str(e))
         log.warning("автоподбор для %s: %s" % (display, e), source=SOURCE)

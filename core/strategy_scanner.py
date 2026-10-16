@@ -318,6 +318,21 @@ class StrategyScanner:
         if custom:
             mode = "custom"
 
+        # Пока ждёт подтверждения «Применить с проверкой», движок — её:
+        # подбор занял бы его, и откат по сроку не смог бы перезапустить
+        # nfqws2 (core/safe_apply.py).
+        self.refusal = "Подбор стратегий уже выполняется"
+        try:
+            from core import safe_apply
+            if safe_apply.active():
+                self.refusal = ("идёт «Применить с проверкой» — сначала "
+                                "подтвердите или откатите стратегию")
+                log.warning("Подбор не запущен: %s" % self.refusal,
+                            source="scanner")
+                return False
+        except Exception:                       # noqa: BLE001 — граница
+            pass
+
         with self._lock:
             if self._status == STATUS_RUNNING:
                 log.warning(
@@ -1668,12 +1683,18 @@ class StrategyScanner:
                             % self._parallel_note, source="scanner")
             return {}, end
         self._batch_fails = 0
+        # Перепроверять по одной — не больше, чем нужно до stop_after:
+        # остальные находки пачки цикл проверит сам, если дойдёт.
+        with self._lock:
+            have = len([r for r in self._results if r.success])
+        need = (self._stop_after - have) if self._stop_after else len(packed)
         out = {}
         for i, result in zip(packed, results):
-            if result.success and self._cancelled:
+            if result.success and (self._cancelled or need <= 0):
                 # Неперепроверенная находка в итог не идёт.
                 continue
             if result.success:
+                need -= 1
                 with self._lock:
                     self._current_strategy_name = chunk[i].name
                 solo = self._probe_one_strategy(
@@ -2856,8 +2877,11 @@ class StrategyScanner:
     def _save_resume_state(self, next_index: int) -> None:
         """Сохранить позицию для resume."""
         # Свой текст не продолжить (его нет в каталоге), а файл один:
-        # не затираем позицию прерванного прогона по каталогу.
-        if self._mode == "custom":
+        # не затираем позицию прерванного прогона по каталогу. Так же и
+        # фоновый автоподбор (он один ходит с require_isolation): его
+        # прогон не должен стирать «Продолжить» пользователя.
+        if self._mode == "custom" or getattr(self, "_require_isolation",
+                                             False):
             return
         resume_file = self._resume_file_path()
         with self._lock:

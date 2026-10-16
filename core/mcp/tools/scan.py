@@ -144,7 +144,8 @@ def scan_start(args: dict) -> dict:
         # Сканер отказался сам: он уже работает, а `busy()` этого не
         # увидела (гонка между проверкой и стартом).
         return {"ok": False,
-                "error": "подбор уже выполняется",
+                "error": getattr(scanner, "refusal", "")
+                or "подбор уже выполняется",
                 "job_id": _jobs.running_id(_jobs.KIND_SCAN),
                 "hint": "состояние — scan_status(), остановка — scan_stop()"}
 

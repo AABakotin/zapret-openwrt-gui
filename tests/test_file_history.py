@@ -339,6 +339,7 @@ class TestSafeApplyFlow(HistoryCase):
         self.cfg.set("strategy", "current_id", "old")
         self.cfg.set("strategy", "current_name", "Old")
         self.cfg.save()
+        sa._changed_cache["key"] = None
 
     def _restart(self, was_running, args):
         self.calls.append(("restart", was_running, args))
@@ -353,7 +354,7 @@ class TestSafeApplyFlow(HistoryCase):
     def _session(self):
         return sa._read().get("session") or {}
 
-    def _run(self, before, after):
+    def _run(self, before, after, **kw):
         probes = iter([before, after])
         from core import nfqws_control
         from core.strategy_builder import get_strategy_manager
@@ -363,7 +364,7 @@ class TestSafeApplyFlow(HistoryCase):
                 mock.patch.object(get_strategy_manager(), "get_strategy",
                                   lambda sid: {"id": sid, "name": "New"}), \
                 mock.patch.object(sa, "_wait", lambda: None):
-            r = sa.start("new", 60)
+            r = sa.start("new", 60, **kw)
             self.assertTrue(r["ok"], r)
             sa._thread.join(5)
 
@@ -465,6 +466,70 @@ class TestSafeApplyFlow(HistoryCase):
         r = sa.restore_working()
         self.assertTrue(r["ok"], r)
         self.assertFalse(os.path.exists(self.path("a.txt")))
+
+
+    def test_rollback_returns_files_written_before_start(self):
+        # Вызывающий (замер по сетям) пишет список ДО старта проверки:
+        # откат возвращает его к моменту since, а не к началу проверки.
+        with fh.operation("было"):
+            self.write("a.txt", "v1\n")
+        fh.checkpoint()
+        since = time.time()
+        time.sleep(0.01)
+        with fh.operation("замер"):
+            self.write("a.txt", "v2\n")
+        self._run({"sites": {"a": True}}, {"sites": {"a": False}},
+                  since=since, paths=[self.path("a.txt")])
+        self.assertEqual(self._session()["phase"], "rolled_back")
+        self.assertEqual(self.read("a.txt"), "v1\n")
+
+    def test_restore_working_keeps_other_settings(self):
+        sa.mark_working("тест")
+        time.sleep(0.01)
+        self.cfg.set("strategy", "current_id", "other")
+        self.cfg.set("history", "max_mb", 3)
+        self.cfg.save()
+        r = sa.restore_working()
+        self.assertTrue(r["ok"], r)
+        self.cfg.load()
+        # Выбор стратегии вернулся, чужая правка настроек — осталась.
+        self.assertEqual(self.cfg.get("strategy", "current_id"), "old")
+        self.assertEqual(self.cfg.get("history", "max_mb"), 3)
+
+
+class TestIncomplete(HistoryCase):
+
+    def test_trimmed_history_is_reported(self):
+        ts = time.time()
+        for i in range(fh.PER_FILE + 2):
+            with fh.operation("v%d" % i):
+                self.write("a.txt", "v%d\n" % i)
+            fh.checkpoint()
+        self.assertTrue(fh.incomplete_since(ts - 60))
+        self.assertTrue(fh.incomplete_since(ts - 60, {self.path("a.txt")}))
+        self.assertEqual(fh.incomplete_since(ts - 60, {"/nope"}), [])
+        self.assertEqual(fh.incomplete_since(time.time() + 60), [])
+
+    def test_scan_rereads_under_lock(self):
+        # Содержимое, прочитанное до замка, устарело: GUI успел записать.
+        fh.scan()
+        with fh.operation("gui"):
+            self.write("a.txt", "v1\n")
+        before = len(self.entries())
+        real = fh._read
+        first = {"done": False}
+
+        def stale(p):
+            if p == self.path("a.txt") and not first["done"]:
+                first["done"] = True
+                return b"v0\n"
+            return real(p)
+
+        with mock.patch.object(fh, "_read", stale):
+            r = fh.scan()
+        self.assertTrue(first["done"])
+        self.assertEqual(r["changed"], 0, r)
+        self.assertEqual(len(self.entries()), before)
 
 
 if __name__ == "__main__":

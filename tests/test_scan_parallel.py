@@ -153,7 +153,7 @@ class TestFirewallSlots(unittest.TestCase):
                  and "CONNMARK" not in c]
         self.assertEqual(len(marks), 8)     # 2 дорожки × tcp/udp × туда/обратно
         first = marks[0]
-        self.assertIn("20000:20063", first)
+        self.assertIn("20000:20255", first)
         self.assertIn("0x1000000/0xf000000", first)
         # Метка дорожки — раньше постановки в очередь.
         idx_mark = cmds.index(first)
@@ -292,6 +292,35 @@ class TestBatch(unittest.TestCase):
                 mock.patch.object(sc, "_run_batch", return_value=[ok, bad]):
             out, _ = sc._probe_batch(entries, 0)
         self.assertEqual(out, {1: bad})
+
+
+    def test_recheck_bounded_by_stop_after(self):
+        # stop_after=1 — перепроверяется одна находка пачки, не все.
+        sc = self._scanner()
+        sc._stop_after = 1
+        entries = [FakeEntry("s%d" % i) for i in range(3)]
+        hits = [mock.Mock(success=True, raw_data={}) for _ in entries]
+        solo = mock.Mock(side_effect=lambda e, i: mock.Mock(
+            success=True, raw_data={}, strategy_id=e.section_id))
+        with mock.patch.object(sc, "_build_strategy_args",
+                               side_effect=lambda e: e.get_args_list()), \
+                mock.patch.object(sc, "_meminfo",
+                                  return_value=meminfo(512, 400)), \
+                mock.patch.object(sc, "_run_batch", return_value=hits), \
+                mock.patch.object(sc, "_probe_one_strategy", solo):
+            out, _ = sc._probe_batch(entries, 0)
+        self.assertEqual(solo.call_count, 1)
+        self.assertEqual(list(out), [0])
+
+
+class TestStartRefusal(unittest.TestCase):
+
+    def test_refused_while_safe_apply_waits(self):
+        from core.strategy_scanner import StrategyScanner
+        sc = StrategyScanner()
+        with mock.patch("core.safe_apply.active", return_value=True):
+            self.assertFalse(sc.start(target="example.com"))
+        self.assertIn("проверкой", sc.refusal)
 
 
 if __name__ == "__main__":

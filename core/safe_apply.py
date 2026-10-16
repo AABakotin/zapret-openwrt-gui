@@ -117,13 +117,29 @@ def status() -> dict:
     out = {"ok": True, "session": session, "working": working,
            "changed_since_working": []}
     if working:
-        try:
-            from core import file_history
-            out["changed_since_working"] = file_history.changed_since(
-                float(working.get("ts") or 0))
-        except Exception:                           # noqa: BLE001
-            pass
+        out["changed_since_working"] = _changed_since_cached(
+            float(working.get("ts") or 0))
     return out
+
+
+# Баннер опрашивает статус каждые 2 с, а сверка читает и хеширует все
+# изменённые с рабочей точки файлы (ipset'ы — мегабайты с флеша).
+CHANGED_TTL = 30
+_changed_cache = {"key": None, "at": 0.0, "value": []}
+
+
+def _changed_since_cached(ts: float) -> list:
+    now = time.time()
+    if _changed_cache["key"] == ts and now - _changed_cache["at"] \
+            < CHANGED_TTL:
+        return list(_changed_cache["value"])
+    try:
+        from core import file_history
+        value = file_history.changed_since(ts)
+    except Exception:                               # noqa: BLE001
+        value = []
+    _changed_cache.update(key=ts, at=now, value=value)
+    return list(value)
 
 
 def active() -> bool:
@@ -175,13 +191,18 @@ def _engine():
 
 
 def start(strategy_id: str, timeout: int = DEFAULT_TIMEOUT,
-          auto_target: str = "") -> dict:
+          auto_target: str = "", since: float = 0.0,
+          paths: list = None) -> dict:
     """Начать применение с проверкой (фоном). Ответ — сразу.
 
     ``auto_target`` — режим без человека (автоподбор, core/autopick.py):
     подтверждать некому, поэтому решает замер «после». Стратегия
     остаётся, если ``auto_target`` (имя сайта мониторинга) открылся и
     ничего из открывавшегося не перестало; иначе — откат сразу.
+
+    ``since``/``paths`` — файлы, записанные вызывающим ДО старта (своя
+    стратегия, список): откат вернёт их к моменту ``since``
+    (``file_history.checkpoint()`` перед записью — на вызывающем).
     """
     global _thread
     from core.strategy_builder import get_strategy_manager
@@ -222,6 +243,8 @@ def start(strategy_id: str, timeout: int = DEFAULT_TIMEOUT,
             "before": None, "after": None, "verdict": None,
             "op": None, "paths": [], "result": "", "reason": "",
             "auto_target": str(auto_target or ""),
+            "since": float(since or 0),
+            "pre_paths": [str(p) for p in (paths or [])],
         }
         data = _read()
         data["session"] = session
@@ -375,13 +398,29 @@ def cancel() -> dict:
     return res
 
 
+# Сколько откат ждёт движок, занятый другим (подбор, проба).
+ENGINE_WAIT_SEC = 120
+
+
 def _restart_engine(was_running: bool, args: list) -> dict:
+    """Вернуть движок; занят — подождать, а не сдаться сразу: иначе
+    выбор в настройках уже прежний, а nfqws2 работает с отвергнутой."""
     from core import nfqws_control
-    if was_running and args:
-        return nfqws_control.restart(args, source=SOURCE)
-    if was_running:
-        return nfqws_control.restart(None, source=SOURCE)
-    return nfqws_control.stop(source=SOURCE)
+    from core.nfqws_session import (OWNER_UI, SessionBusy,
+                                    get_nfqws_session)
+    try:
+        with get_nfqws_session().acquire(owner=OWNER_UI,
+                                         timeout=ENGINE_WAIT_SEC,
+                                         reason="откат стратегии"):
+            if was_running and args:
+                return nfqws_control.restart(args, source=SOURCE)
+            if was_running:
+                return nfqws_control.restart(None, source=SOURCE)
+            return nfqws_control.stop(source=SOURCE)
+    except SessionBusy as busy:
+        return {"ok": False, "error_code": "busy",
+                "error": "движок занят (%s) — стратегия в настройках "
+                         "возвращена, nfqws2 перезапустите сами" % busy}
 
 
 def _regen_autostart() -> None:
@@ -438,9 +477,11 @@ def _rollback(reason: str, resume: bool = False) -> dict:
     paths = [p for p in (s.get("paths") or (_op_paths(s["op"])
                                             if s.get("op") else []))
              if os.path.abspath(p) != cfg_path]
+    paths += [p for p in s.get("pre_paths") or [] if p not in paths]
     if paths and restored.get("ok"):
-        targets = file_history.versions_at(float(s.get("started") or 0),
-                                           paths=set(paths))
+        targets = file_history.versions_at(
+            float(s.get("since") or s.get("started") or 0),
+            paths=set(paths))
         restored = file_history.restore_to_targets(
             targets, "Откат: %s" % s.get("strategy_name", ""))
     eng = _restart_engine(bool(s.get("was_running")),
@@ -509,9 +550,25 @@ def restore_working() -> dict:
     point = _read().get("working") or {}
     if not point.get("ts"):
         return {"ok": False, "error": "рабочее состояние ещё не отмечено"}
-    res = file_history.restore_to(
-        float(point["ts"]), "Возврат рабочего состояния (%s)" %
-        time.strftime("%d.%m %H:%M", time.localtime(point["ts"])))
+    # settings.json — не целиком: в нём и разрешения MCP, и пароли, и
+    # токены, и их правки после рабочей точки возврат стратегии стирать
+    # не должен. Из него возвращается только выбор стратегии.
+    label = "Возврат рабочего состояния (%s)" % time.strftime(
+        "%d.%m %H:%M", time.localtime(point["ts"]))
+    cfg_path = os.path.abspath(_cfg().path)
+    targets = {p: sha for p, sha in file_history.versions_at(
+        float(point["ts"])).items() if os.path.abspath(p) != cfg_path}
+    res = file_history.restore_to_targets(targets, label)
+    try:
+        _restore_strategy_choice({
+            "strategy_name": point.get("strategy_name", ""),
+            "previous_id": point.get("strategy_id"),
+            "previous_name": point.get("strategy_name")})
+    except Exception as e:                          # noqa: BLE001 — граница
+        res = {"ok": False, "error": "выбор стратегии не вернулся: %s" % e}
+    notes = list(res.get("notes") or []) + file_history.incomplete_since(
+        float(point["ts"]), set(targets))
+    res["notes"] = notes
     eng = _restart_engine(bool(point.get("running")),
                           list(point.get("args") or []))
     _regen_autostart()

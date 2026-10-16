@@ -290,6 +290,13 @@ def _reset_for_tests() -> None:
         _state = None
 
 
+def _note_trimmed(st: dict, entry: dict) -> None:
+    """Запомнить, до какого момента история файла уже обрезана."""
+    trimmed = st.setdefault("trimmed", {})
+    trimmed[entry["path"]] = max(float(trimmed.get(entry["path"]) or 0),
+                                 float(entry.get("ts") or 0))
+
+
 def _gc(st: dict, sweep: bool = False) -> None:
     """Пределы: PER_FILE версий на файл, бюджет на старые версии.
 
@@ -307,6 +314,7 @@ def _gc(st: dict, sweep: bool = False) -> None:
     for items in by_path.values():
         for e in items[:-PER_FILE]:
             drop.add(e["id"])
+            _note_trimmed(st, e)
     if drop:
         st["entries"] = [e for e in st["entries"] if e["id"] not in drop]
 
@@ -324,7 +332,7 @@ def _gc(st: dict, sweep: bool = False) -> None:
     # Самые старые версии уходят первыми; пересчёт — только по мере
     # удаления (сумма — по словарю размеров, без обращений к диску).
     while st["entries"] and sum(sizes.get(x, 0) for x in past) > budget:
-        st["entries"].pop(0)
+        _note_trimmed(st, st["entries"].pop(0))
         past = _past()
     if not sweep:
         return
@@ -593,6 +601,17 @@ def scan() -> dict:
         for p in sorted(paths):
             sha_new = _sha(current.get(p))
             known = st["known"].get(p)
+            if sha_new == known:
+                continue
+            # Прочитано до замка — между чтением и замком GUI мог записать
+            # файл (record() уже сменил known). Перечитываем под замком,
+            # иначе старое содержимое записалось бы «правкой вне GUI».
+            data = _read(p)
+            if data is None:
+                current.pop(p, None)
+            else:
+                current[p] = data
+            sha_new = _sha(current.get(p))
             if sha_new == known:
                 continue
             if p not in current and (not is_tracked(p) or _too_big(p)):
@@ -924,6 +943,17 @@ def versions_at(ts: float, paths=None) -> dict:
             continue
         out[path] = later[0]["before"]
     return out
+
+
+def incomplete_since(ts: float, paths=None) -> list:
+    """Заметки о файлах, чья история после ``ts`` уже обрезана пределами:
+    их «состояние на момент» — самая ранняя сохранённая версия, а не та."""
+    with _lock:
+        trimmed = dict(_load().get("trimmed") or {})
+    return ["история %s обрезана — возвращена самая ранняя сохранённая "
+            "версия, а не та, что была на момент" % display_name(p)
+            for p, cut in sorted(trimmed.items())
+            if cut > ts and (paths is None or p in paths)]
 
 
 def changed_since(ts: float) -> list:

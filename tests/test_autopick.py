@@ -23,6 +23,8 @@ class Case(unittest.TestCase):
         cm._config_manager.load()
         self.cfg = cm._config_manager
         ap._running["key"] = ""
+        ap._pending.clear()
+        self.addCleanup(ap._pending.clear)
         self.notes = []
         p = mock.patch.object(ap, "_notify", self.notes.append)
         p.start()
@@ -89,6 +91,27 @@ class TestRun(Case):
     def test_trigger_off_does_nothing(self):
         self.cfg.set("healthcheck", "autopick", {"mode": "off"})
         self.assertFalse(ap.trigger("YouTube", ["youtube.com"])["ok"])
+
+    def test_busy_trigger_is_deferred(self):
+        self.cfg.set("healthcheck", "autopick", {"mode": "suggest"})
+        with mock.patch.object(ap, "_busy", lambda: "идёт подбор"):
+            r = ap.trigger("YouTube", ["youtube.com"])
+        self.assertFalse(r["ok"])
+        self.assertTrue(ap.pending("YouTube"))
+
+    def test_scanner_refusal_keeps_interval(self):
+        ap._set_run("YouTube", ts=123.0, result="nothing")
+        sc = FakeScanner([])
+        sc.start = lambda **kw: False
+        sc.refusal = "занят другим"
+        with mock.patch("core.strategy_scanner.get_strategy_scanner",
+                        lambda: sc):
+            ap._running["key"] = "YouTube"
+            ap._run("YouTube", "youtube.com", "suggest", 123.0)
+        run = ap.status()["runs"]["YouTube"]
+        self.assertEqual(run["result"], "deferred")
+        self.assertEqual(run["ts"], 123.0)
+        self.assertTrue(ap.pending("YouTube"))
 
     def test_trigger_needs_sandbox(self):
         self.cfg.set("healthcheck", "autopick", {"mode": "suggest"})

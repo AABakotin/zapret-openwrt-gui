@@ -306,6 +306,11 @@ def start() -> dict:
     if busy:
         return {"ok": False, "error": "движок занят: %s"
                 % (busy.get("reason") or busy.get("who"))}
+    from core import safe_apply
+    if safe_apply.active():
+        return {"ok": False, "error": "идёт «Применить с проверкой» — "
+                                      "сначала подтвердите или откатите "
+                                      "стратегию"}
     pre = _preflight()
     if not pre["ok"]:
         return pre
@@ -529,15 +534,25 @@ def apply_network(asn: str, timeout: int = 0) -> dict:
     if not prefixes:
         return {"ok": False, "error": "не удалось получить адреса AS%s у "
                                       "RIPEstat" % asn}
+    # Список и стратегия пишутся ДО «Применить с проверкой» — откат
+    # должен вернуть и их: момент до записи и их пути уходят в сессию.
+    from core import file_history
+    since = time.time()
+    file_history.checkpoint()
+    ipm = get_ipset_manager()
     ipset_name = "asn%s" % asn
-    if not get_ipset_manager().save_ipset(ipset_name, prefixes):
+    if not ipm.save_ipset(ipset_name, prefixes):
         return {"ok": False, "error": "IP-список %s не записан" % ipset_name}
-    saved = sm.save_user_strategy(with_profile(
-        base, network_profile(net, ipset_name), sm._autowrap_scope(base)))
+    data = with_profile(base, network_profile(net, ipset_name),
+                        sm._autowrap_scope(base))
+    saved = sm.save_user_strategy(data)
     if not saved:
         return {"ok": False, "error": "стратегия не сохранена"}
+    written = [ipm._file_path(ipset_name),
+               os.path.join(sm._user_dir, "%s.json" % saved["id"])]
     kwargs = {"timeout": timeout} if timeout else {}
-    res = safe_apply.start(saved["id"], **kwargs)
+    res = safe_apply.start(saved["id"], since=since, paths=written,
+                           **kwargs)
     res.update({"strategy_id": saved["id"], "ipset": ipset_name,
                 "prefixes": len(prefixes)})
     return res

@@ -1095,7 +1095,7 @@ API: `GET /api/diagnostics/prerequisites`. Проверяет:
   в ОДНОМ nfqws2 песочницы, профиль каждого начинается с
   `--filter-mark=0x0k000000/0x0f000000` (nfqws2 1.0.5+, проверяется
   `supports_option("filter-mark")`); пробы дорожки `k` открывают сокеты с
-  исходных портов `20000+64k…+63` (`probe_mark.marking(ports=…)`), а правила
+  исходных портов `20000+256k…+255` (`probe_mark.marking(ports=…)`), а правила
   песочницы (`apply_sandbox_rules(slots=15)`) ставят по этому порту метку
   дорожки — в POSTROUTING (sport, после маршрутизации) и PREROUTING (dport:
   ответы адресованы самому роутеру).

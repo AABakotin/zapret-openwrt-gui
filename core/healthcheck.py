@@ -61,6 +61,14 @@ def _autopick_status() -> dict:
         return {"mode": "off", "running": None, "suggestions": []}
 
 
+def _autopick_pending(display: str) -> bool:
+    try:
+        from core import autopick
+        return autopick.pending(display)
+    except Exception:                               # noqa: BLE001
+        return False
+
+
 def _autopick(display: str, hosts) -> None:
     """Запустить автоподбор, не задерживая проверку остальных сайтов:
     решение (песочница, firewall) — в своём потоке."""
@@ -435,6 +443,11 @@ class HealthcheckDaemon:
                         "подряд)%s" % (entry["display"], threshold,
                                        ": %s" % entry["error"]
                                        if entry.get("error") else ""))
+            elif (name in self._notified_down
+                    and _autopick_pending(entry["display"])):
+                # Подбор откладывался из-за занятости — пробуем снова,
+                # пока сайт не открывается.
+                _autopick(entry["display"], entry["hosts"])
 
             if auto_reset and self._fail_streak[name] >= threshold:
                 for host in entry["hosts"]:

@@ -289,11 +289,13 @@ def start(lighter: bool = False, stop_after: int = 3) -> dict:
     if not kept:
         return {"ok": False, "error": "варианты не прошли проверку функций "
                                       "и blob'ов этого устройства"}
-    started = get_strategy_scanner().start(
+    scanner = get_strategy_scanner()
+    started = scanner.start(
         target=base["target"], protocol=base["protocol"],
         stop_after=0 if lighter else stop_after,
         confirm=True, custom=kept)
     if not started:
-        return {"ok": False, "error": "подбор уже выполняется"}
+        return {"ok": False, "error": getattr(scanner, "refusal", "")
+                or "подбор уже выполняется"}
     return {"ok": True, "base": base["name"], "variants": len(kept),
             "target": base["target"], "lighter": bool(lighter)}

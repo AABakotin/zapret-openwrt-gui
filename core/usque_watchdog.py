@@ -238,6 +238,9 @@ class UsqueWatchdog:
         if self._rate_limited(iface, now):
             return
 
+        from core import notify
+        notify.event("tunnel", "🔁 WARP/MASQUE %s: перезапускаю (%s)"
+                     % (iface, name))
         log.info("usque-watchdog: рестарт %s (%s)" % (iface, name),
                  source="usque")
 

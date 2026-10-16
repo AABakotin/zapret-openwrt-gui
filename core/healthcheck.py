@@ -42,6 +42,11 @@ _instance = None
 _instance_lock = threading.Lock()
 
 
+def _notify(kind: str, text: str) -> None:
+    from core import notify
+    notify.event(kind, text)
+
+
 def get_healthcheck():
     """Singleton-аксессор."""
     global _instance
@@ -371,6 +376,9 @@ class HealthcheckDaemon:
         for entry in results:
             name = entry["service"]
             if entry["ok"]:
+                if self._fail_streak.get(name, 0) >= threshold:
+                    _notify("site_up", "✅ %s снова открывается"
+                            % entry["display"])
                 self._fail_streak[name] = 0
                 entry["fail_streak"] = 0
                 continue
@@ -383,6 +391,11 @@ class HealthcheckDaemon:
 
             self._fail_streak[name] = self._fail_streak.get(name, 0) + 1
             entry["fail_streak"] = self._fail_streak[name]
+            if self._fail_streak[name] == threshold:
+                _notify("site_down", "⚠️ %s не открывается (%d проверки "
+                        "подряд)%s" % (entry["display"], threshold,
+                                       ": %s" % entry["error"]
+                                       if entry.get("error") else ""))
 
             if auto_reset and self._fail_streak[name] >= threshold:
                 for host in entry["hosts"]:

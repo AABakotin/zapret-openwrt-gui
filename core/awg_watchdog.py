@@ -553,6 +553,9 @@ class AwgWatchdog:
                          source="awg")
                 return
 
+            from core import notify
+            notify.event("tunnel", "🔁 AWG %s: %s — перезапускаю"
+                         % (iface, reason))
             log.warning("awg-watchdog: %s — %s; запускаю рестарт в фоне" % (iface, reason),
                         source="awg")
             history.append(now)

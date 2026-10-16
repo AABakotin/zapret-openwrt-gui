@@ -1039,6 +1039,13 @@ def create_app(config_dir: str = None) -> Bottle:
         except Exception as e:
             log.warning("История файлов при boot: %s" % e, source="history")
 
+        # Уведомления: дослать очередь, не ушедшую до перезапуска.
+        try:
+            from core import notify
+            notify.start()
+        except Exception as e:
+            log.warning("Уведомления при boot: %s" % e, source="notify")
+
         # Применение с проверкой, прерванное перезапуском: продолжить
         # ожидание подтверждения или откатить (core/safe_apply.py).
         try:

@@ -274,6 +274,9 @@ class MihomoWatchdog:
                 source="mihomo")
             return
 
+        from core import notify
+        notify.event("tunnel", "🔁 mihomo %s: %s — перезапускаю"
+                     % (name, reason))
         log.warning("mihomo-watchdog: %s — %s; рестартую" % (name, reason),
                     source="mihomo")
         try:

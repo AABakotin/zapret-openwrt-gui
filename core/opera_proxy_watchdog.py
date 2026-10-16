@@ -171,6 +171,8 @@ class OperaProxyWatchdog:
                         source="opera_proxy")
             return
 
+        from core import notify
+        notify.event("tunnel", "🔁 Opera Proxy не отвечает — перезапускаю")
         log.info("opera-proxy-watchdog: рестарт Opera Proxy", source="opera_proxy")
 
         mgr.stop()

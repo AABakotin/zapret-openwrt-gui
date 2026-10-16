@@ -415,6 +415,9 @@ def _rollback(reason: str, resume: bool = False) -> dict:
                                   or eng.get("error") or ""))
     log.warning("Применение с проверкой откачено: %s" % reason,
                 source=SOURCE)
+    from core import notify
+    notify.event("safe_apply", "↩️ Стратегия «%s» откачена: %s"
+                 % (s.get("strategy_name", ""), reason))
     return {"ok": ok, "reason": reason, "restored": restored.get("restored"),
             "error": "" if ok else (restored.get("error")
                                     or eng.get("error") or "")}

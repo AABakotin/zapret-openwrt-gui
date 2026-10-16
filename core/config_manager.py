@@ -287,6 +287,30 @@ DEFAULT_CONFIG = {
     # nfqws2 переподобрал стратегию автоматически, без участия пользователя.
     # По умолчанию ВЫКЛЮЧЕН: создаёт фоновый трафик роутера наружу. Включается
     # в GUI на странице Стратегии («Авто-починка»).
+    # Уведомления в Telegram (core/notify.py): события роутера уходят в
+    # чат через очередь — Telegram бывает закрыт как раз тогда, когда
+    # сломался обход. transport — спека core/download_transport
+    # ("" / awg[:iface] / singbox[:cfg] / mihomo[:cfg]); proxy — свой
+    # http://host:port, важнее transport.
+    "notify": {
+        "telegram": {
+            "enabled": False,
+            "token": "",
+            "chat_id": "",
+            "transport": "",
+            "proxy": "",
+        },
+        # Какие события слать (всё, что не выключено явно).
+        "events": {
+            "site_down": True,
+            "site_up": True,
+            "tunnel": True,
+            "safe_apply": True,
+            "autopick": True,
+            "update": True,
+        },
+    },
+
     # История изменений файлов (core/file_history.py): settings.json,
     # пользовательские стратегии, хостлисты и ipset'ы — версии, разница,
     # откат. Хранилище — <config_dir>/history/, сжатое.

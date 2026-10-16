@@ -297,7 +297,8 @@ make upstream-offline    # только локальные сверки (идё�
 | `host_guard.py` | Белый список заголовка `Host` против DNS-rebinding (чистая функция; зовёт гейт `app.py`). |
 | `safe_io.py` | Общие безопасные I/O: атомарная запись (`atomic_write_*`: temp→fsync→`os.replace`) и пр. Наблюдатели записи `add_write_observer(wants, callback)` — так история файлов видит каждое сохранение, не втягивая `core/*` в этот модуль. |
 | `file_history.py` | История файлов: версии `settings.json`, своих стратегий, хостлистов и ipset'ов (`<config_dir>/history/`, gzip-объекты по sha256), действия `operation(label)`, сверка с диском (правки вне GUI), разница, откат версии, «отменить последнее», `restore_to(ts)`. Новое место записи отслеживаемых файлов — только через `safe_io.atomic_write_*`, удаление/переименование — `remove_file`/`rename_file`. Наблюдатель зовётся под замком `ConfigManager` — настройки читаются мимо замка (`_conf`). |
-| `safe_apply.py` | «Применить с проверкой»: замер сайтов мониторинга до/после, ожидание подтверждения со сроком, откат по истории + перезапуск движка с прежними аргументами; рабочая точка и «Вернуть рабочее состояние». Состояние — `safe-apply.json`, `recover()` при старте. |
+| `notify.py` | Уведомления в Telegram: `event(kind, text)` ставит в очередь (`notify-queue.json`, дедуп, предел, срок жизни) и будит поток-отправитель; ничего не бросает и не ждёт сети — звать можно откуда угодно (healthcheck, сторожа туннелей, safe_apply, update_checker). Виды событий — `EVENTS`, новый вид добавляется туда же и в дефолты `notify.events`. |
+| `safe_apply.py` | «Применить с проверкой»: замер сайтов мониторинга до/после, ожидание подтверждения со сроком, откат (выбор стратегии в настройках — поштучно, прочие файлы действия — по истории) + перезапуск движка с прежними аргументами; рабочая точка и «Вернуть рабочее состояние». Состояние — `safe-apply.json`, `recover()` при старте. |
 | `backup.py` | Экспорт/импорт всей конфигурации в один JSON. |
 | `teardown.py` | Снятие всех runtime-артефактов перед удалением. |
 | `selfcheck.py` | Самодиагностика на устройстве: зависимости/движки/конфиг/сеть + прогон тестов. CLI: `python3 -m core.selfcheck`. |
@@ -566,6 +567,7 @@ stdout). Период опроса задаёт сам
 | `block_detector.py` / `auto_remediation.py` / `geosite.py` | … | фоновой детектор блокировок / авто-починка / импорт geosite |
 | `connectivity.py` / `devices.py` | … | матрица связности / устройства LAN |
 | `diagnostics.py` | `/api/diagnostics` | ping/http/dns/conflicts/**known-conflicts**/firewall/system/**selfcheck**/**help-report** («Отчёт для помощи», `core/help_report.py`: оба варианта маски одним ответом) |
+| `notify.py` | `/api/notify` | уведомления в Telegram: настройки (токен не отдаётся), пробное сообщение, поиск чата, отправка очереди |
 | `history.py` | `/api/history`, `/api/safe-apply` | история файлов (список, diff, restore, undo, scan) / применение с проверкой (start, confirm, rollback, mark-working, restore-working) |
 | `healthcheck.py` | `/api/healthcheck` | autocircular-демон: enable/disable/run/status/config |
 | `backup.py` / `config_api.py` / `autostart.py` / `gui_update.py` / `logs.py` | … | бэкап / настройки / автозапуск / обновление GUI (+`/releases`) / логи (SSE) |

@@ -11,6 +11,8 @@ catalogs/                  ← ВСЕ builtin-стратегии (INI, read-only
 ├── builtin/               ← Полные конфигурации (с --filter-*/--new)
 │   ├── zapret_gui_defaults.txt   ← дефолты zapret-gui
 │   ├── winws2_presets.txt        ← winws2-пресеты, конвертированные в INI
+│   ├── nfqws2_keenetic.txt       ← дефолт nfqws2-keenetic и профили его чата
+│   ├── nfqws_menu.txt            ← стратегии rndnaame/nfqws-menu
 │   └── z2k_*.txt                 ← оркестраторы circular/autocircular
 ├── basic/                 ← Базовые стратегии для быстрого сканирования
 ├── advanced/              ← Продвинутые стратегии

@@ -1178,9 +1178,11 @@ class NFQWSManager:
         # --qnum
         queue_num = cfg.get("nfqws", "queue_num", default=300)
         args.append("--qnum=%d" % int(queue_num))
-         # OpenWrt: --pidfile для поиска процесса через /proc
-        if IS_OPENWRT:
-            args.append("--pidfile=/var/run/zapret-nfqws.pid")
+        # OpenWrt: --daemon + --pidfile.
+        # --daemon нужен, чтобы nfqws2 корректно форкнулся и записал PID
+        # ребёнка в файл. Без --daemon он тоже форкается, но PID не пишет,
+        # и GUI не находит процесс.
+
 
         # --debug — пер-пакетный лог nfqws2 для диагностики. Глобальная опция,
         # добавляется один раз в base. nfqws2 пишет debug в STDOUT (DLOG),
@@ -1377,10 +1379,13 @@ class NFQWSManager:
 
         for pid in self._find_nfqws_pids():
             cmdline = self._proc_cmdline(pid)
+            # На Keenetic/Entware — только с --daemon/--pidfile.
+            # На OpenWrt — любой nfqws2 (он не форкается).
+            if IS_OPENWRT:
+                return pid
             if any(a == "--daemon" or a.startswith("--pidfile")
                    for a in cmdline):
                 return pid
-        return None
 
     @staticmethod
     def _proc_cmdline(pid: int) -> list:

@@ -485,13 +485,6 @@ class FirewallManager:
 
     def apply_rules(self, queue_num=None, ports_tcp=None,
                     ports_udp=None, mark=None) -> bool:
-        """
-        Применить правила NFQUEUE с привязкой к WAN-интерфейсам.
-
-        Параметры берутся из аргументов или конфига.
-        WAN-интерфейсы берутся из config.interfaces.wan/wan6
-        с fallback на авто-определение по таблице маршрутов.
-        """
         with self._lock:
             from core.config_manager import get_config_manager
             cfg = get_config_manager()
@@ -648,14 +641,8 @@ class FirewallManager:
                           source="firewall")
                 return False
 
-        def _apply_lan_nftables(self, qnum, ports_tcp, ports_udp) -> bool:
-        #Отдельная таблица inet zapret_lan для трафика LAN-клиентов.
-        # На OpenWrt GUI строит правила только для WAN. Трафик клиентов
-        # локальной сети не попадает в NFQUEUE без дополнительных правил.
-        #Отдельная таблица — потому что reapply-firewall.sh удаляет
-        # inet zapret_gui целиком при смене стратегии, а наши LAN-правила
-        # должны пережить это.
-       
+    def _apply_lan_nftables(self, qnum, ports_tcp, ports_udp) -> bool:
+        """Отдельная таблица inet zapret_lan для трафика LAN-клиентов."""
         tcp_ports = "{ %s }" % _nft_port_set(ports_tcp) if ports_tcp else None
         udp_ports = "{ %s }" % _nft_port_set(ports_udp) if ports_udp else None
 
@@ -668,8 +655,16 @@ class FirewallManager:
 
         cmds = [
             "add table inet %s" % NFT_LAN_TABLE,
+            # Цепочка для LAN-трафика (prerouting)
             "add chain inet %s prerouting_hook "
             "{ type filter hook prerouting priority -160 ; policy accept ; }"
+            % NFT_LAN_TABLE,
+            # Цепочка для пакетов самого nfqws2 (output) — ДО drop_invalid
+            # OpenWrt fw4 ставит правило `ct state invalid drop` в OUTPUT,
+            # которое режет фейки nfqws2. Приоритет -100 гарантирует, что
+            # наша цепочка сработает РАНЬШЕ правила fw4.
+            "add chain inet %s output_hook "
+            "{ type filter hook output priority -100 ; policy accept ; }"
             % NFT_LAN_TABLE,
         ]
         if tcp_ports:
@@ -683,6 +678,13 @@ class FirewallManager:
                 "add rule inet %s prerouting_hook iifname \"br-lan\" "
                 "udp dport %s counter queue flags bypass to %d"
                 % (NFT_LAN_TABLE, udp_ports, qnum))
+
+        # Разрешить фейкам nfqws2 (метка desync_mark) проходить OUTPUT
+        # до правила `ct state invalid drop` от fw4.
+        cmds.append(
+            "add rule inet %s output_hook "
+            "meta mark and 0x40000000 == 0x40000000 counter accept"
+            % NFT_LAN_TABLE)
 
         ok = True
         for cmd in cmds:

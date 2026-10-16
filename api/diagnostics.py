@@ -144,6 +144,16 @@ def register(app):
         result = check_nfqws_conflicts()
         return {"ok": True, "result": result}
 
+    @app.route("/api/diagnostics/help-report")
+    def api_diagnostics_help_report():
+        """«Отчёт для помощи»: версии, состояние, списки, журнал — без
+        секретов и внешнего адреса; сайты скрыты, если не ?show_sites=1."""
+        response.content_type = "application/json; charset=utf-8"
+        from core.help_report import build
+        show = str(request.query.get("show_sites") or "").lower() in (
+            "1", "true", "yes")
+        return {"ok": True, "result": build(show_sites=show)}
+
     @app.route("/api/diagnostics/known-conflicts")
     def api_diagnostics_known_conflicts():
         """Конфликты окружения: getdomains/XKeen/podkop/Xray/redsocks и пр."""

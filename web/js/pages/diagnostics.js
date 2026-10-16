@@ -68,6 +68,40 @@ const DiagnosticsPage = (() => {
                 <button class="btn btn-ghost btn-sm" onclick="DiagnosticsPage.refreshSystem()">
                     Обновить систему
                 </button>
+                <button class="btn btn-ghost btn-sm" onclick="DiagnosticsPage.showHelpReport()"
+                        title="Текст для вопроса в чате или issue: версии, состояние, списки, журнал. Без паролей, токенов и внешнего адреса">
+                    Отчёт для помощи
+                </button>
+            </div>
+
+            <!-- Отчёт для помощи -->
+            <div class="modal-backdrop" id="diag-report-modal" style="display:none;">
+                <div class="modal-content" style="max-width:760px;">
+                    <div class="modal-header">
+                        <h3 class="modal-title">Отчёт для помощи</h3>
+                        <button class="modal-close" onclick="DiagnosticsPage.closeHelpReport()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="form-hint" style="margin-top:0;">
+                            Вставьте этот текст в чат или issue. В нём нет паролей,
+                            токенов, внешнего адреса и содержимого списков. Сам отчёт
+                            никуда не отправляется — его копируете вы.
+                        </p>
+                        <label style="display:flex; gap:6px; align-items:center; font-size:13px; margin-bottom:8px;">
+                            <input type="checkbox" id="diag-report-sites" onchange="DiagnosticsPage.showHelpReport()">
+                            Показать имена сайтов (по умолчанию скрыты)
+                        </label>
+                        <textarea class="form-input" id="diag-report-text" rows="18" readonly
+                                  style="width:100%; font-family:var(--font-mono, monospace); font-size:12px;">Собираю…</textarea>
+                        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
+                            <button class="btn btn-primary btn-sm" onclick="DiagnosticsPage.copyHelpReport()">Скопировать</button>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Прогресс -->
@@ -1397,6 +1431,34 @@ const DiagnosticsPage = (() => {
         }
     }
 
+    /* ═══════════════════ отчёт для помощи ═══════════════════ */
+    async function showHelpReport() {
+        const modal = document.getElementById('diag-report-modal');
+        const box = document.getElementById('diag-report-text');
+        const sites = document.getElementById('diag-report-sites');
+        if (!modal || !box) return;
+        modal.style.display = 'flex';
+        box.value = 'Собираю…';
+        try {
+            const q = sites && sites.checked ? '?show_sites=1' : '';
+            const r = await API.get('/api/diagnostics/help-report' + q);
+            box.value = (r.result && r.result.text) || '';
+        } catch (e) {
+            box.value = 'Не удалось собрать отчёт: ' + e.message;
+        }
+    }
+
+    function closeHelpReport() {
+        const modal = document.getElementById('diag-report-modal');
+        if (modal) modal.style.display = 'none';
+    }
+
+    function copyHelpReport() {
+        const box = document.getElementById('diag-report-text');
+        if (!box) return;
+        Clipboard.copyWithToast(box.value, { okText: 'Отчёт скопирован' });
+    }
+
     /* ═══════════════════ utils ═══════════════════ */
     function _esc(str) {
         if (!str) return '';
@@ -1421,5 +1483,8 @@ const DiagnosticsPage = (() => {
         restartGui,
         rebootDevice,
         retryMaintenanceCaps,
+        showHelpReport,
+        closeHelpReport,
+        copyHelpReport,
     };
 })();

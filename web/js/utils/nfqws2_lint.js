@@ -330,6 +330,23 @@ const Nfqws2Lint = (() => {
                     + '(Chrome — нет). Мусорный QUIC Initial сервер отбросит и без TTL.' });
             if (!ttlFake.diag) ttlFake.diag = SEV.WARN;
         }
+        // tcp_ts — единственная маскировка фейка: Windows по умолчанию
+        // меток TCP не шлёт, и фейк уходит серверу настоящим пакетом.
+        // Тот же код, что у серверного линтера (tcp_ts_only_fooling).
+        const isUdpOnly = isUdp && !tokens.some(ct => ct.kind === 'flag'
+            && ct.flag === '--filter-tcp');
+        const tsOnly = isUdpOnly ? null : tokens.find(ct => ct.kind === 'flag'
+            && ct.flag === '--lua-desync' && ct.hasEq
+            && needsTcpTimestamps(ct.value || ''));
+        if (tsOnly) {
+            diagnostics.push({ start: tsOnly.tok.start, end: tsOnly.tok.end,
+                severity: SEV.WARN, code: 'tcp_ts_only_fooling',
+                message: 'Фейк маскируется только через tcp_ts: Windows по умолчанию '
+                    + 'не шлёт метки TCP, и фейк уйдёт серверу настоящим пакетом. '
+                    + 'Добавьте вторую маскировку (tcp_md5, badseq, ip_autottl) или '
+                    + 'включите метки: netsh interface tcp set global timestamps=enabled' });
+            if (!tsOnly.diag) tsOnly.diag = SEV.WARN;
+        }
         // порядок: desync должен идти после filter (мягко).
         const di = order.indexOf('desync');
         const fi = order.indexOf('filter');
@@ -339,6 +356,22 @@ const Nfqws2Lint = (() => {
         }
 
         return { tokens, diagnostics, slots, order, funcs, sawNew };
+    }
+
+    // Есть ли в тексте шаг --lua-desync, у которого tcp_ts= — единственная
+    // маскировка. Зеркало core/strategy_lint.needs_tcp_timestamps: принимает
+    // и значение одного --lua-desync, и строку стратегии целиком.
+    const TS_FOOLING_RE = /(?:^|:)tcp_ts=/;
+    const OTHER_FOOLING_RE = new RegExp('(?:^|:)(?:ip6?_(?:auto)?ttl=|tcp_seq=|tcp_ack='
+        + '|tcp_md5(?:=|:|$)|tcp_flags_(?:set|unset)=|badsum(?::|$)|badseq(?::|$)|fool='
+        + '|ip6_(?:hopbyhop|hopbyhop2|destopt|destopt2|routing|ah)(?::|$))');
+    function needsTcpTimestamps(text) {
+        const steps = String(text || '').split(/\s+/).filter(Boolean)
+            .map(t => t.replace(/^["']|["']$/g, ''))
+            .map(t => t.startsWith('--lua-desync=') ? t.slice('--lua-desync='.length)
+                : (t.startsWith('--') ? null : t))
+            .filter(Boolean);
+        return steps.some(v => TS_FOOLING_RE.test(v) && !OTHER_FOOLING_RE.test(v));
     }
 
     // ──────────────── Документация по токену под курсором ────────────────
@@ -434,7 +467,7 @@ const Nfqws2Lint = (() => {
     }
 
     return {
-        SEV, tokenize, classifyToken, analyze, docAt,
+        SEV, tokenize, classifyToken, analyze, docAt, needsTcpTimestamps,
         splitChain, isRange, isPorts, isPosMarker, checkValueType,
     };
 })();

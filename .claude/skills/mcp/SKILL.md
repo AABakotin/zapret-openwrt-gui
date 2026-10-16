@@ -64,7 +64,7 @@ description: >-
   чистые функции, коды `unknown_lua_function`/`blob_unknown`/
   `blob_file_missing`/`blob_declared_after_new`/`lua_init_order`/
   `bare_trick_no_filter`/`l7_filter_without_ports`/`no_desync_action`/
-  `engine_owned_option`/`ttl_fake_on_udp`, ошибка линтера делает ответ `isError`; сборщик
+  `engine_owned_option`/`ttl_fake_on_udp`/`tcp_ts_only_fooling`, ошибка линтера делает ответ `isError`; сборщик
   вырезает из стратегии опции, которыми владеет GUI — `--user`/`--qnum`/
   `--fwmark`/`--pidfile`/`--writable`/`--debug=@файл`),
   транспорте и авторизации (Bearer-токен, Origin, bind, рейт-лимит,
@@ -1289,6 +1289,7 @@ TTL отсчитывается от старта прогона и покрыв�
 | `no_desync_action` | warning | в argv нет ни одного `--lua-desync` |
 | `engine_owned_option` | **error** | в стратегии опция, которой владеет GUI (`--user`/`--uid`/`--qnum`/`--fwmark`/`--pidfile`/`--daemon`/`--writable`/`--intercept`/`--dry-run`, `--debug=@файл`) — сборщик её вырежет |
 | `ttl_fake_on_udp` | warning | UDP/QUIC-профиль с `ip_ttl`/`ip6_ttl`/`ip_autottl` в `--lua-desync`: ICMP time-exceeded от узла, где умер фейк, NAT доставляет клиенту — Safari/Network.framework рвут QUIC, Chrome нет (приём d2k, `d2k_icmpguard.h`). Одна находка на профиль; у TCP — мягкая ошибка, не ругаемся |
+| `tcp_ts_only_fooling` | warning | TCP-шаг `--lua-desync`, у которого `tcp_ts=` — единственная маскировка: Windows по умолчанию меток TCP не шлёт, и фейк уходит серверу настоящим пакетом. С роутера (и с Linux/Android/macOS/iOS) работает, с Windows — нет. Та же проверка — `strategy_lint.needs_tcp_timestamps`, по ней сканер ставит метку «нужны метки TCP» |
 
 ### Аргументы стратегии: чем владеет GUI
 

@@ -312,6 +312,39 @@ class TestTtlFakeOnUdp(unittest.TestCase):
         self.assertEqual(found.count(lint.CODE_TTL_FAKE_UDP), 2)
 
 
+class TestTcpTsOnly(unittest.TestCase):
+    """tcp_ts — единственная маскировка: с Windows не работает."""
+
+    def test_ts_only_warns(self):
+        found = lint.lint(["--filter-tcp=443",
+                           "--lua-desync=fake:blob=fake_default_tls:"
+                           "tcp_ts=-1000:repeats=6"])
+        hit = [f for f in found if f["code"] == lint.CODE_TCP_TS_ONLY]
+        self.assertEqual(len(hit), 1)
+        self.assertEqual(hit[0]["severity"], lint.SEVERITY_WARNING)
+        self.assertIn("timestamps=enabled", hit[0]["message"])
+
+    def test_second_fooling_is_fine(self):
+        for extra in ("tcp_md5", "badseq", "ip_autottl=-2,3-20",
+                      "tcp_seq=-3000", "badsum"):
+            self.assertNotIn(lint.CODE_TCP_TS_ONLY, codes([
+                "--filter-tcp=443",
+                "--lua-desync=fake:blob=x:tcp_ts=-1000:" + extra]), extra)
+
+    def test_udp_profile_is_skipped(self):
+        self.assertNotIn(lint.CODE_TCP_TS_ONLY, codes([
+            "--filter-udp=443", "--lua-desync=fake:blob=x:tcp_ts=-1000"]))
+
+    def test_needs_tcp_timestamps(self):
+        self.assertTrue(lint.needs_tcp_timestamps(
+            ["--lua-desync=hostfakesplit:host=ya.ru:tcp_ts=-1000"]))
+        self.assertFalse(lint.needs_tcp_timestamps(
+            ["--lua-desync=multisplit:pos=1"]))
+        # tcp_ts_up — не маскировка, а сдвиг опции.
+        self.assertFalse(lint.needs_tcp_timestamps(
+            ["--lua-desync=fake:blob=x:tcp_ts_up"]))
+
+
 class TestRuleTable(unittest.TestCase):
     """Сама таблица правил остаётся данными и остаётся полной."""
 

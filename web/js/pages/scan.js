@@ -562,6 +562,12 @@ const ScanPage = (() => {
             if (w.from_memory) badges.push('<span class="bc-badge" style="background:rgba(59,130,246,0.15); color:var(--accent);" title="Уже помогала на этом сайте в вашей сети">Уже работала у вас</span>');
             if (raw.is_full_preset) badges.push('<span class="bc-badge bc-badge-skip" title="Готовый набор со своими фильтрами">Готовый пресет</span>');
             if (raw.label === 'recommended') badges.push('<span class="bc-badge bc-badge-skip">Рекомендуемая</span>');
+            // Единственная маскировка — tcp_ts: с роутера работает, с Windows
+            // нет (Windows не шлёт метки TCP). Подбор идёт с роутера и этого
+            // не видит — предупреждаем здесь.
+            if (typeof Nfqws2Lint !== 'undefined' && Nfqws2Lint.needsTcpTimestamps(raw.args_preview || '')) {
+                badges.push('<span class="bc-badge bc-badge-warn" title="Фейк маскируется только через tcp_ts. Windows по умолчанию не шлёт метки TCP — включите: netsh interface tcp set global timestamps=enabled (от администратора)">Нужны метки TCP</span>');
+            }
 
             const metrics = [];
             if (kind === 'tls+body') {

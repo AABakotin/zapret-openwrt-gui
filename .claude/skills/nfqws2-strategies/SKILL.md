@@ -602,7 +602,8 @@ bt_handshake utp_bt_handshake`.
 **`fooling`:** `ip_ttl=N`, `ip6_ttl=N`, `ip_autottl=<delta>,<min>-<max>`,
 `ip6_autottl=…`, `ip6_hopbyhop[=hex]`, `ip6_hopbyhop2`, `ip6_destopt`,
 `ip6_destopt2`, `ip6_routing`, `ip6_ah`, `tcp_seq=<±int>`, `tcp_ack=<±int>`,
-`tcp_ts=<±int>`, `tcp_md5[=16byte_hex]`, `tcp_flags_set=FIN,SYN,…`,
+`tcp_ts=<±int>` (работает, только если клиент шлёт метки TCP — Windows по
+умолчанию не шлёт; линтер `tcp_ts_only_fooling`), `tcp_md5[=16byte_hex]`, `tcp_flags_set=FIN,SYN,…`,
 `tcp_flags_unset=ack`, `tcp_ts_up`, `tcp_nop_del`, `fool=<custom_lua_fn>`,
 `badsum`, `badseq`.
 

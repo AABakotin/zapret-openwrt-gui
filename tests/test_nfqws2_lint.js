@@ -374,4 +374,20 @@ test('lint: TTL-фейк на QUIC — предупреждение ttl_fake_on_
     assert.ok(!noTtl.diagnostics.some(d => d.code === 'ttl_fake_on_udp'));
 });
 
+test('lint: tcp_ts — единственная маскировка → tcp_ts_only_fooling', () => {
+    const only = Lint.analyze('--filter-tcp=443 '
+        + '--lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000:repeats=6');
+    assert.ok(only.diagnostics.some(d => d.code === 'tcp_ts_only_fooling'));
+    const two = Lint.analyze('--filter-tcp=443 '
+        + '--lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000:tcp_md5');
+    assert.ok(!two.diagnostics.some(d => d.code === 'tcp_ts_only_fooling'));
+    const udp = Lint.analyze('--filter-udp=443 '
+        + '--lua-desync=fake:blob=fake_default_quic:tcp_ts=-1000');
+    assert.ok(!udp.diagnostics.some(d => d.code === 'tcp_ts_only_fooling'));
+    assert.ok(Lint.needsTcpTimestamps('--filter-tcp=443 --lua-desync=fake:tcp_ts=-5'));
+    assert.ok(Lint.needsTcpTimestamps('fake:blob=x:tcp_ts=-5'));
+    assert.ok(!Lint.needsTcpTimestamps('--lua-desync=fake:tcp_ts=-5:badseq'));
+    assert.ok(!Lint.needsTcpTimestamps('--lua-desync=multisplit:pos=1'));
+});
+
 console.log('nfqws2 lint/spec: ' + passed + ' тест(ов) пройдено');

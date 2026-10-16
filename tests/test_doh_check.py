@@ -69,17 +69,23 @@ class TestVerdict(unittest.TestCase):
         self.assertEqual(v["kind"], "differs")
         self.assertFalse(v["fake"])
 
-    def test_spoofed(self):
+    def test_closed_addr(self):
         v = dc.verdict(["5.5.5.5"], ["8.8.4.4"], [], ["8.8.4.4"])
-        self.assertEqual(v["kind"], "spoofed")
+        self.assertEqual(v["kind"], "closed_addr")
         self.assertTrue(v["fake"])
         self.assertIn("5.5.5.5", v["reason"])
 
-    def test_closed_addr_partial_overlap(self):
+    def test_partial_overlap_is_not_fake(self):
+        # Общий адрес DoH подтверждает — это не подмена.
         v = dc.verdict(["5.5.5.5", "8.8.4.4"], ["8.8.4.4", "8.8.8.8"],
                        [], ["8.8.8.8"])
-        self.assertEqual(v["kind"], "closed_addr")
-        self.assertTrue(v["fake"])
+        self.assertFalse(v["fake"])
+
+    def test_cdn_reason_when_router_opens(self):
+        # cross_check не проверяет DoH, если адрес роутера открылся.
+        v = dc.verdict(["5.5.5.5"], ["1.2.3.4"], ["5.5.5.5"], [])
+        self.assertFalse(v["fake"])
+        self.assertIn("CDN", v["reason"])
 
     def test_everything_closed_is_not_dns(self):
         v = dc.verdict(["5.5.5.5"], ["8.8.4.4"], [], [])
@@ -111,19 +117,43 @@ class TestCrossCheck(unittest.TestCase):
         self.assertTrue(out["fake"])
         self.assertEqual(out["provider"], "Google")
 
-    def test_resolve_falls_through_providers(self):
+    def test_resolve_falls_through_errors_and_empty(self):
         calls = []
 
         def fake_query(url, name, timeout):
             calls.append(url)
-            if "yandex" in url:
+            if "google" in url:
                 raise OSError("timeout")
+            if "cloudflare" in url:
+                return []               # NXDOMAIN — спросить следующего
             return ["9.9.9.9"]
         with mock.patch.object(dc, "_query", side_effect=fake_query):
             r = dc.resolve("x.ru")
         self.assertTrue(r["ok"])
-        self.assertEqual(r["provider"], "Google")
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(r["provider"], "Яндекс")
+        self.assertEqual(len(calls), 3)
+
+    def test_resolve_all_empty(self):
+        with mock.patch.object(dc, "_query", return_value=[]):
+            r = dc.resolve("x.ru")
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["ips"], [])
+
+    def test_resolve_respects_deadline(self):
+        import time
+        with mock.patch.object(dc, "_query") as q:
+            r = dc.resolve("x.ru", deadline=time.monotonic() - 1)
+        q.assert_not_called()
+        self.assertFalse(r["ok"])
+
+    def test_partial_overlap_skips_network(self):
+        with mock.patch.object(dc, "resolve", return_value={
+                "ok": True, "ips": ["1.1.1.1", "3.3.3.3"],
+                "provider": "Google", "error": ""}), \
+             mock.patch.object(dc, "reachable") as reach:
+            out = dc.cross_check("x.ru", ["1.1.1.1", "2.2.2.2"])
+        self.assertFalse(out["fake"])
+        reach.assert_not_called()
 
 
 if __name__ == "__main__":

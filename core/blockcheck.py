@@ -576,13 +576,16 @@ class BlockcheckRunner:
                     is_dns_fake = True
                     fake_reason = f"IP блок-страницы провайдера ({hit})"
 
-            # 2. Сверка с DoH (Яндекс → Google → Cloudflare). Разные наборы
+            # 2. Сверка с DoH (Google → Cloudflare → Яндекс). Разные наборы
             #    сами по себе — не подмена: CDN/гео-балансировка штатно
-            #    отдают разным резолверам разные публичные адреса. Подмена —
-            #    когда (а) у роутера непубличный адрес, или (б) адреса
-            #    роутера не открываются по TCP, а адреса из DoH открываются
-            #    (core/testers/doh_check.verdict). Во втором случае лечит
-            #    DNS, а не стратегия и не туннель.
+            #    отдают разным резолверам разные публичные адреса. DNS_FAKE —
+            #    когда (а) у роутера непубличный адрес, или (б) общих адресов
+            #    нет, адреса роутера не открываются по TCP, а из DoH
+            #    открываются (core/testers/doh_check.verdict). Во втором
+            #    случае лечит смена DNS, а не стратегия и не туннель.
+            #    Только здесь, не в фоновом мониторинге: сверка стоит до
+            #    восьми секунд на домен.
+            closed_addr = False
             doh_note = ""
             doh_ips: list[str] = []
             if ok and resolved_ips and not is_dns_fake:
@@ -598,6 +601,7 @@ class BlockcheckRunner:
                     fake_reason = "расходится с DoH, непубличный IP"
                 elif cross.get("fake"):
                     is_dns_fake = True
+                    closed_addr = True
                     fake_reason = cross.get("reason", "")
                 elif cross.get("kind") == "differs":
                     doh_note = "; DoH (%s): %s — %s" % (
@@ -607,7 +611,8 @@ class BlockcheckRunner:
             # Создаём SingleTestResult
             if is_dns_fake:
                 status = TestStatus.FAILED.value
-                details = f"DNS Spoofing detected ({fake_reason}): system={resolved_ips}"
+                details = (fake_reason if closed_addr else
+                           f"DNS Spoofing detected ({fake_reason}): system={resolved_ips}")
                 error_code = "DNS_FAKE"
             elif ok and resolved_ips:
                 status = TestStatus.SUCCESS.value

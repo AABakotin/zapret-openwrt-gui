@@ -14,15 +14,33 @@ DNS-фаза blockcheck и раньше сверялась с DoH, но флаж
 Здесь второй шаг (приём nfqws2-ui): если наборы адресов не пересекаются,
 спрашиваем сеть, а не только DNS — открываются ли по TCP адреса роутера
 и адреса из DoH. «Роутера — нет, DoH — да» значит, что лечится это DNS
-(DoH/DoT, hosts), а не стратегией и не туннелем. Пересечение или «оба
-открываются» — это CDN/гео-балансировка, а не подмена: молчим.
+(DoH/DoT, hosts): адрес от DNS роутера закрыт. Это не всегда подмена —
+так же выглядит блок по IP одного узла CDN, который выдаёт провайдерский
+резолвер, — но лекарство одно: другой DNS даёт открытый узел. Пересечение
+или «оба открываются» — это CDN/гео-балансировка: молчим.
+
+Чего здесь НЕ ловится: публичная заглушка провайдера, которая принимает
+TCP. По соединению её от CDN не отличить — нужен TLS с проверкой
+сертификата, а это уже работа пробы (``core/testers/probe.py``).
+
+Сверка только в разовом тесте (blockcheck): до девяти сетевых операций
+на домен — фоновому мониторингу по сотням доменов (block_detector) это
+не по карману, он остаётся на однозначных признаках из ``probe.py``.
 
 ## Провайдеры
 
-Яндекс первым: в РФ его DoH обычно доступен, когда Google и Cloudflare
-закрыты или замедлены. Запрос — RFC 8484 в двоичном формате
-(``application/dns-message``): JSON-вид есть не у всех, двоичный — у всех
-трёх. Кодировщик и разборщик DNS-сообщения — свои, на stdlib.
+Google и Cloudflare первыми, Яндекс — запасным: российский резолвер
+обязан следовать реестру блокировок и для заблокированного домена может
+ответить так же, как провайдер, — эталоном он быть не может. Но в РФ его
+DoH обычно доступен, когда Google и Cloudflare закрыты, и для домена вне
+реестра (а «DNS выдаёт закрытый адрес» — как раз про такие) он годится.
+Пустой ответ (NXDOMAIN, нет A-записей) — повод спросить следующего.
+
+Запрос — RFC 8484 в двоичном формате (``application/dns-message``):
+JSON-вид есть не у всех, двоичный — у всех трёх. Отдельно от
+``core/routing/doh_resolver`` намеренно: тот только JSON и включается
+настройкой ``routing.doh.enabled`` для маршрутизации, а диагностике
+DoH нужен всегда.
 
 Сеть здесь только в :func:`resolve` и :func:`reachable`; решение —
 чистая :func:`verdict`, её и тестируем.
@@ -34,14 +52,19 @@ import ipaddress
 import random
 import socket
 import struct
+import time
 import urllib.request
 from typing import Any
 
 PROVIDERS = (
-    ("Яндекс", "https://common.dot.dns.yandex.net/dns-query"),
     ("Google", "https://dns.google/dns-query"),
     ("Cloudflare", "https://cloudflare-dns.com/dns-query"),
+    ("Яндекс", "https://common.dot.dns.yandex.net/dns-query"),
 )
+
+# Бюджет одной сверки, секунд: DNS-фаза идёт по списку доменов
+# последовательно, и закрытые адреса не должны растягивать её на минуты.
+BUDGET = 8.0
 
 USER_AGENT = "zapret-gui/doh-check"
 
@@ -124,33 +147,59 @@ def _query(url: str, name: str, timeout: float) -> list[str]:
         return parse_answer(resp.read(65535))
 
 
-def resolve(name: str, timeout: float = 3.0, providers=PROVIDERS) -> dict:
-    """A-записи имени через первый ответивший DoH-провайдер.
+def resolve(name: str, timeout: float = 3.0, providers=PROVIDERS,
+            deadline: float | None = None) -> dict:
+    """A-записи имени через первого DoH-провайдера с непустым ответом.
 
     Returns:
         {"ok", "ips", "provider", "error"} — ok=False, если не ответил ни
-        один провайдер (DoH тоже бывает закрыт).
+        один провайдер (DoH тоже бывает закрыт); ok=True и пустой ``ips`` —
+        все ответившие сказали «такого адреса нет».
     """
     errors = []
+    answered = ""
     for label, url in providers:
+        left = _left(deadline, timeout)
+        if left <= 0:
+            errors.append("бюджет времени исчерпан")
+            break
         try:
-            ips = _query(url, name, timeout)
+            ips = _query(url, name, left)
         except Exception as e:                      # noqa: BLE001 — сеть
             errors.append("%s: %s" % (label, str(e)[:60]))
             continue
-        return {"ok": True, "ips": ips, "provider": label, "error": ""}
+        if ips:
+            return {"ok": True, "ips": ips, "provider": label, "error": ""}
+        answered = answered or label
+    if answered:
+        return {"ok": True, "ips": [], "provider": answered, "error": ""}
     return {"ok": False, "ips": [], "provider": "",
             "error": "; ".join(errors) or "нет провайдеров"}
 
 
+def _left(deadline, timeout: float) -> float:
+    """Сколько можно ждать следующую операцию: таймаут, но не за дедлайн."""
+    if deadline is None:
+        return timeout
+    return min(timeout, deadline - time.monotonic())
+
+
 def reachable(ips, port: int = 443, timeout: float = 3.0,
-              limit: int = 3) -> list[str]:
-    """Какие из адресов принимают TCP-соединение (не больше ``limit``)."""
+              limit: int = 6, deadline: float | None = None,
+              first: bool = False) -> list[str]:
+    """Какие из адресов принимают TCP-соединение (не больше ``limit``).
+
+    ``first=True`` — остановиться на первом открытом: для вердикта важно
+    «есть ли открытый», а не сколько их.
+    """
     from core import probe_mark
     ok = []
     for ip in list(ips or [])[:limit]:
+        left = _left(deadline, timeout)
+        if left <= 0:
+            break
         try:
-            sock = probe_mark.create_connection((ip, port), timeout=timeout)
+            sock = probe_mark.create_connection((ip, port), timeout=left)
         except Exception:                           # noqa: BLE001 — сеть
             continue
         try:
@@ -158,6 +207,8 @@ def reachable(ips, port: int = 443, timeout: float = 3.0,
         except OSError:
             pass
         ok.append(ip)
+        if first:
+            break
     return ok
 
 
@@ -186,14 +237,16 @@ def verdict(sys_ips, doh_ips, sys_open=None, doh_open=None) -> dict:
             не проверяли (сверка без сети).
 
     Returns:
-        {"kind": "match" | "differs" | "spoofed" | "closed_addr" |
-                 "unknown", "fake": bool, "reason": str}
+        {"kind": "match" | "differs" | "closed_addr" | "unknown",
+         "fake": bool, "reason": str}
 
-        ``spoofed`` — роутер отдал адрес, которого нет в DoH, и он не
-        открывается, а адрес из DoH открывается: подмена DNS.
-        ``closed_addr`` — то же, но адреса пересекаются частично
-        (роутер выдал в том числе закрытый): лечится тоже DNS.
-        ``differs`` — наборы разные, но оба открываются: CDN, не подмена.
+        ``closed_addr`` (fake=True) — у роутера и DoH нет ни одного общего
+        адреса, адреса роутера не открываются, а из DoH открываются:
+        подмена DNS или блок по IP узла, который выдаёт провайдерский
+        резолвер. Лечится сменой DNS.
+        ``differs`` — наборы разные, но адреса роутера открываются (CDN),
+        или открытых нет ни у кого, или наборы пересекаются (общий адрес
+        DoH подтверждает — это не подмена).
     """
     sys_set = set(sys_ips or [])
     doh_set = set(doh_ips or [])
@@ -203,41 +256,53 @@ def verdict(sys_ips, doh_ips, sys_open=None, doh_open=None) -> dict:
     if sys_set <= doh_set:
         return {"kind": "match", "fake": False,
                 "reason": "совпадает с DoH"}
+    if not sys_set.isdisjoint(doh_set):
+        return {"kind": "differs", "fake": False,
+                "reason": "частично совпадает с DoH — не подмена"}
     if sys_open is None or doh_open is None:
         return {"kind": "differs", "fake": False,
                 "reason": "отличается от DoH (CDN или подмена — "
                           "без проверки соединения не понять)"}
-    if not _public(doh_open):
-        return {"kind": "differs", "fake": False,
-                "reason": "адреса из DoH тоже не открываются — дело не в DNS"}
     if sys_open:
         return {"kind": "differs", "fake": False,
                 "reason": "отличается от DoH, но открывается — CDN, не подмена"}
-    kind = "spoofed" if sys_set.isdisjoint(doh_set) else "closed_addr"
-    reason = ("DNS роутера выдаёт %s — не открывается, а адрес из DoH %s "
-              "открывается" % (", ".join(sorted(sys_set)[:3]),
-                               ", ".join(doh_open[:2])))
-    return {"kind": kind, "fake": True, "reason": reason}
+    if not _public(doh_open):
+        return {"kind": "differs", "fake": False,
+                "reason": "адреса из DoH тоже не открываются — дело не в DNS"}
+    reason = ("DNS роутера выдаёт закрытый адрес (%s), а адрес из DoH (%s) "
+              "открывается — поможет другой DNS (DoH/DoT)"
+              % (", ".join(sorted(sys_set)[:3]), ", ".join(doh_open[:2])))
+    return {"kind": "closed_addr", "fake": True, "reason": reason}
 
 
 def cross_check(name: str, sys_ips, port: int = 443,
-                timeout: float = 3.0) -> dict[str, Any]:
-    """Сверка с DoH и, если наборы разные, — проверка соединения.
+                timeout: float = 2.0, budget: float = BUDGET) -> dict[str, Any]:
+    """Сверка с DoH и, если наборы не пересекаются, — проверка соединения.
+
+    Укладывается в ``budget`` секунд (не успели проверить соединение —
+    вердикт ``differs`` без обвинений).
 
     Returns:
         verdict(...) плюс ``doh_ips``, ``provider``, ``doh_error``.
     """
+    deadline = time.monotonic() + budget
     # DoH спрашиваем только про A — и сравниваем с A: IPv6 роутера с
     # IPv4 из DoH не пересекается никогда.
     sys_ips = [ip for ip in (sys_ips or []) if ":" not in str(ip)]
-    doh = resolve(name, timeout=timeout)
+    doh = resolve(name, timeout=timeout, deadline=deadline)
     doh_ips = doh.get("ips") or []
     sys_open = doh_open = None
-    if doh_ips and sys_ips and not set(sys_ips) <= set(doh_ips):
-        sys_open = reachable(sys_ips, port=port, timeout=timeout)
-        doh_open = [] if sys_open else reachable(
-            [ip for ip in doh_ips if ip not in set(sys_ips)],
-            port=port, timeout=timeout)
+    if doh_ips and sys_ips and set(sys_ips).isdisjoint(doh_ips):
+        sys_open = reachable(sys_ips, port=port, timeout=timeout,
+                             deadline=deadline, first=True)
+        if not sys_open:
+            doh_open = reachable(doh_ips, port=port, timeout=timeout,
+                                 deadline=deadline, first=True)
+            # Не успели проверить все адреса роутера — обвинять DNS рано.
+            if time.monotonic() >= deadline:
+                sys_open = doh_open = None
+        else:
+            doh_open = []
     out = verdict(sys_ips, doh_ips, sys_open, doh_open)
     out.update(doh_ips=doh_ips, provider=doh.get("provider", ""),
                doh_error=doh.get("error", ""))

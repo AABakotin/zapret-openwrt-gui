@@ -220,11 +220,24 @@ def _obj_path(sha: str) -> str:
 
 
 def _put(data: bytes) -> str:
+    """Сохранить содержимое (если ещё нет) и запомнить его сжатый размер.
+
+    Размеры живут в индексе: бюджет считается без ``stat`` на каждую
+    запись — а запись ``settings.json`` идёт под замком настроек.
+    """
     from core.safe_io import atomic_write_bytes
     sha = _sha(data)
     p = _obj_path(sha)
+    sizes = _load()["sizes"]
     if not os.path.exists(p):
-        atomic_write_bytes(p, gzip.compress(data, 6))
+        packed = gzip.compress(data, 6)
+        atomic_write_bytes(p, packed)
+        sizes[sha] = len(packed)
+    elif sha not in sizes:
+        try:
+            sizes[sha] = os.path.getsize(p)
+        except OSError:
+            sizes[sha] = 0
     return sha
 
 
@@ -247,7 +260,8 @@ def _load() -> dict:
     global _state
     if _state is not None:
         return _state
-    st = {"seq": 0, "entries": [], "known": {}, "baselined": False}
+    st = {"seq": 0, "entries": [], "known": {}, "sizes": {},
+          "baselined": False}
     try:
         with open(_index_path(), encoding="utf-8") as f:
             data = json.load(f)
@@ -256,6 +270,8 @@ def _load() -> dict:
             st["entries"] = [e for e in data.get("entries") or []
                              if isinstance(e, dict)]
             st["known"] = dict(data.get("known") or {})
+            st["sizes"] = {k: int(v) for k, v in
+                           (data.get("sizes") or {}).items()}
             st["baselined"] = bool(data.get("baselined"))
     except (OSError, ValueError, TypeError):
         pass
@@ -274,8 +290,16 @@ def _reset_for_tests() -> None:
         _state = None
 
 
-def _gc(st: dict) -> None:
-    """Пределы: PER_FILE версий на файл, бюджет на всё хранилище."""
+def _gc(st: dict, sweep: bool = False) -> None:
+    """Пределы: PER_FILE версий на файл, бюджет на старые версии.
+
+    Бюджет считается только по версиям в прошлом: текущие копии файлов
+    (``known``) нужны всегда, и если они одни больше бюджета, история
+    просто короче — но не пуста.
+
+    ``sweep`` — ещё и удалить с диска осиротевшие объекты (обход
+    каталога — из фоновой сверки, не на каждую запись).
+    """
     by_path = {}
     for e in st["entries"]:
         by_path.setdefault(e["path"], []).append(e)
@@ -283,27 +307,31 @@ def _gc(st: dict) -> None:
     for items in by_path.values():
         for e in items[:-PER_FILE]:
             drop.add(e["id"])
-    st["entries"] = [e for e in st["entries"] if e["id"] not in drop]
+    if drop:
+        st["entries"] = [e for e in st["entries"] if e["id"] not in drop]
 
-    def _size(sha):
-        try:
-            return os.path.getsize(_obj_path(sha))
-        except OSError:
-            return 0
+    sizes = st["sizes"]
+    current = {s for s in st["known"].values() if s}
 
-    def _refs():
-        refs = {s for s in st["known"].values() if s}
+    def _past():
+        refs = set()
         for e in st["entries"]:
             refs.update(s for s in (e.get("before"), e.get("after")) if s)
-        return refs
+        return refs - current
 
     budget = _max_bytes()
-    refs = _refs()
-    sizes = {s: _size(s) for s in refs}
-    while st["entries"] and sum(sizes.get(s, 0) for s in refs) > budget:
+    past = _past()
+    # Самые старые версии уходят первыми; пересчёт — только по мере
+    # удаления (сумма — по словарю размеров, без обращений к диску).
+    while st["entries"] and sum(sizes.get(x, 0) for x in past) > budget:
         st["entries"].pop(0)
-        refs = _refs()
-    # Объекты, на которые больше ничто не ссылается.
+        past = _past()
+    if not sweep:
+        return
+    refs = past | current
+    for sha in list(sizes):
+        if sha not in refs:
+            sizes.pop(sha, None)
     objdir = os.path.join(history_dir(), "objects")
     try:
         for name in os.listdir(objdir):
@@ -378,6 +406,7 @@ def _append(st, path, before_sha, after_sha, source, op=None,
     if coalesce and st["entries"]:
         last = st["entries"][-1]
         if (last["path"] == path and last.get("auto_op")
+                and not last.get("sealed")
                 and last.get("source") == source
                 and last.get("after") == before_sha
                 and now - last["ts"] < COALESCE_SEC):
@@ -402,6 +431,20 @@ def _append(st, path, before_sha, after_sha, source, op=None,
     return entry
 
 
+def checkpoint() -> None:
+    """Запретить склейку следующей записи с уже записанной версией.
+
+    Нужна перед запоминанием момента (рабочая точка, начало проверки
+    стратегии): иначе запись после него склеилась бы с версией до него,
+    и состояние «на момент» не восстановить — его просто нет в истории.
+    """
+    with _lock:
+        st = _load()
+        if st["entries"] and not st["entries"][-1].get("sealed"):
+            st["entries"][-1]["sealed"] = True
+            _save()
+
+
 def record(path: str, old, new, source: str = "gui") -> None:
     """Зафиксировать запись файла (``old``/``new`` — bytes или ``None``)."""
     if not enabled():
@@ -409,6 +452,12 @@ def record(path: str, old, new, source: str = "gui") -> None:
     path = _norm(path)
     for blob in (old, new):
         if blob is not None and len(blob) > MAX_FILE_BYTES:
+            # Файл перерос предел — перестаём его вести. Отпечаток
+            # забываем: иначе следующая обычная запись приняла бы
+            # устаревший отпечаток за правку вне GUI.
+            with _lock:
+                if _load()["known"].pop(path, None) is not None:
+                    _save()
             return
     op = getattr(_tls, "op", None)
     if op:
@@ -448,7 +497,30 @@ def _observer(path, old, new) -> None:
     record(path, old, new)
 
 
+def _wants(path: str) -> bool:
+    """Для наблюдателя: отслеживается и не крупнее предела.
+
+    Прежнее содержимое ``safe_io`` читает целиком, только если путь
+    интересен, — многомегабайтный ipset читать впустую незачем.
+    """
+    if not is_tracked(path):
+        return False
+    try:
+        return os.path.getsize(path) <= MAX_FILE_BYTES
+    except OSError:
+        return True                                 # файла ещё нет
+
+
+def _too_big(path: str) -> bool:
+    try:
+        return os.path.getsize(path) > MAX_FILE_BYTES
+    except OSError:
+        return False
+
+
 def _read(path: str):
+    """Содержимое или ``None`` (нет файла либо он крупнее предела —
+    различать через :func:`_too_big`)."""
     try:
         if os.path.getsize(path) > MAX_FILE_BYTES:
             return None
@@ -486,7 +558,7 @@ def install() -> None:
     if _installed:
         return
     from core.safe_io import add_write_observer
-    add_write_observer(is_tracked, _observer)
+    add_write_observer(_wants, _observer)
     _installed = True
 
 
@@ -523,8 +595,9 @@ def scan() -> dict:
             known = st["known"].get(p)
             if sha_new == known:
                 continue
-            if p not in current and not is_tracked(p):
-                # Каталог списков переехал в настройках — не «удаление».
+            if p not in current and (not is_tracked(p) or _too_big(p)):
+                # Каталог списков переехал в настройках или файл перерос
+                # предел — это не «удаление», просто больше не ведём.
                 st["known"].pop(p, None)
                 continue
             if op is None:
@@ -537,9 +610,8 @@ def scan() -> dict:
             e = _append(st, p, known, sha_new, "external", op=op)
             e["label"] = "Правка вне GUI: %s" % e["file"]
             changed.append(e["file"])
-        if changed:
-            _gc(st)
-            _save()
+        _gc(st, sweep=True)
+        _save()
     if changed:
         log.info("история файлов: правки вне GUI — %s"
                  % ", ".join(changed), source="history")
@@ -738,9 +810,14 @@ def _same_as(path: str, sha) -> bool:
 
 def _apply(targets: dict, label: str) -> dict:
     """Записать {path: sha|None} одним действием «restore»."""
-    written, errors = [], []
+    written, errors, skipped = [], [], []
     with operation(label, source="restore"):
         for path, sha in targets.items():
+            if _too_big(path):
+                # Больше не ведётся: текущей версии в истории нет, и
+                # затереть её старой — потерять без возврата.
+                skipped.append(display_name(path))
+                continue
             try:
                 _write_version(path, get_object(sha))
                 written.append(display_name(path))
@@ -750,6 +827,9 @@ def _apply(targets: dict, label: str) -> dict:
     if written:
         log.info("история файлов: %s — %s" % (label, ", ".join(written)),
                  source="history")
+    if skipped:
+        notes.append("крупнее %d МБ, не тронуты: %s" % (
+            MAX_FILE_BYTES // (1024 * 1024), ", ".join(skipped)))
     return {"ok": not errors, "restored": written, "errors": errors,
             "notes": notes,
             "error": "; ".join(errors) if errors else ""}

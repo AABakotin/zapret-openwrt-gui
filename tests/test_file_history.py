@@ -225,6 +225,62 @@ class TestRestore(HistoryCase):
         self.assertEqual(fh.changed_since(t), [])
 
 
+class TestReviewEdges(HistoryCase):
+
+    def test_checkpoint_stops_coalescing(self):
+        self.write("a.txt", "1\n")
+        fh.checkpoint()
+        time.sleep(0.01)
+        t = time.time()
+        time.sleep(0.01)
+        self.write("a.txt", "2\n")         # без checkpoint склеилась бы
+        r = fh.restore_to(t)
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(self.read("a.txt"), "1\n")
+
+    def test_file_grown_past_limit_is_not_deleted(self):
+        with open(self.path("big.txt"), "w") as f:
+            f.write("small\n")
+        fh.scan()
+        with mock.patch.object(fh, "MAX_FILE_BYTES", 10):
+            with open(self.path("big.txt"), "w") as f:
+                f.write("x" * 50)
+            r = fh.scan()
+            self.assertEqual(r["changed"], 0)
+            self.assertNotIn(fh._norm(self.path("big.txt")),
+                             fh._load()["known"])
+            # Откат «к прошлому» большой файл не затирает.
+            res = fh._apply({fh._norm(self.path("big.txt")): None}, "t")
+            self.assertTrue(os.path.exists(self.path("big.txt")))
+            self.assertTrue(res["notes"])
+
+    def test_oversized_write_forgets_known(self):
+        fh.scan()
+        self.write("a.txt", "1\n")
+        with mock.patch.object(fh, "MAX_FILE_BYTES", 5):
+            self.write("a.txt", "x" * 20)
+        self.assertNotIn(fh._norm(self.path("a.txt")), fh._load()["known"])
+        n = len(self.entries())
+        self.write("a.txt", "2\n")
+        self.assertFalse(any(e["source"] == "external"
+                             for e in self.entries()[n:]))
+
+    def test_budget_ignores_current_copies(self):
+        self.write("a.txt", "1\n")
+        with fh.operation("x"):
+            self.write("a.txt", "2\n")
+        with mock.patch.object(fh, "_max_bytes", lambda: 1):
+            # Текущая копия одна больше бюджета — прошлые версии уходят,
+            # но сама история не обнуляется из-за текущих копий.
+            fh._gc(fh._load())
+        self.assertLessEqual(len(self.entries()), 1)
+        with mock.patch.object(fh, "_max_bytes", lambda: 10 ** 9):
+            with fh.operation("y"):
+                self.write("a.txt", "3\n")
+            fh._gc(fh._load())
+        self.assertTrue(self.entries())
+
+
 class TestSafeApplyCompare(unittest.TestCase):
 
     def test_broken_all(self):
@@ -319,6 +375,29 @@ class TestSafeApplyFlow(HistoryCase):
         self.assertEqual(st["session"]["phase"], "confirmed")
         self.assertEqual(st["working"]["strategy_id"], "new")
         self.assertEqual(st["working"]["args"], ["--new"])
+
+    def test_rollback_keeps_unrelated_settings(self):
+        self._run({"sites": {"a": True}}, {"sites": {"a": True}})
+        self.cfg.set("history", "max_mb", 3)
+        self.cfg.save()
+        sa.cancel()
+        self.cfg.load()
+        self.assertEqual(self.cfg.get("strategy", "current_id"), "old")
+        self.assertEqual(self.cfg.get("history", "max_mb"), 3)
+
+    def test_rollback_without_history(self):
+        self.cfg.set("history", "enabled", False)
+        self.cfg.save()
+        self._run({"sites": {"a": True}}, {"sites": {"a": False}})
+        self.cfg.load()
+        self.assertEqual(self.cfg.get("strategy", "current_id"), "old")
+
+    def test_double_rollback_runs_once(self):
+        self._run({"sites": {"a": True}}, {"sites": {"a": True}})
+        sa._update(phase="rolling_back")
+        r = sa._rollback("второй")
+        self.assertEqual(r.get("already"), "rolling_back")
+        self.assertEqual(self.calls, [])
 
     def test_manual_rollback(self):
         self._run({"sites": {"a": True}}, {"sites": {"a": True}})

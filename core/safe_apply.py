@@ -16,7 +16,9 @@ point») применение идёт в три шага:
    перестали — откат сразу.
 3. **Ожидание подтверждения** — до ``deadline``. «Всё работает» —
    стратегия остаётся и становится рабочей точкой; «Откатить» или
-   истёкший срок — всё возвращается: файлы этого действия по истории
+   истёкший срок — всё возвращается: выбор стратегии в настройках —
+   поштучно (не весь ``settings.json``: за время ожидания там могли
+   поменять своё), прочие файлы этого действия — по истории
    (``core.file_history``), движок — с прежними аргументами (или
    останавливается, если не работал), автозапуск — пересобирается.
 
@@ -126,7 +128,8 @@ def status() -> dict:
 
 def active() -> bool:
     s = (_read().get("session") or {})
-    return s.get("phase") in ("probing", "applying", "waiting")
+    return s.get("phase") in ("probing", "applying", "waiting",
+                              "rolling_back")
 
 
 # ─────────────────────────── замеры ────────────────────────────
@@ -191,6 +194,13 @@ def start(strategy_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
                              "подтвердите или откатите её"}
         mgr = _engine()
         cfg = _cfg()
+        # Запись после этого момента не склеится с версией до него —
+        # откат найдёт ровно «как было на старте».
+        try:
+            from core import file_history
+            file_history.checkpoint()
+        except Exception:                           # noqa: BLE001
+            pass
         session = {
             "phase": "probing",
             "strategy_id": strategy_id,
@@ -268,7 +278,12 @@ def _op_paths(op_id: str) -> list:
 
 
 def _wait() -> None:
-    """Ждать подтверждения, отката, срока или чужой смены стратегии."""
+    """Ждать подтверждения, отката, срока или чужой смены стратегии.
+
+    Срок — страховка на случай «до GUI не достучаться», поэтому сбой
+    любой проверки внутри цикла не обрывает ожидание: срок проверяется
+    первым и сработает всё равно.
+    """
     while True:
         s = _read().get("session") or {}
         if s.get("phase") != "waiting":
@@ -276,12 +291,17 @@ def _wait() -> None:
         if time.time() >= float(s.get("deadline") or 0):
             _rollback("не подтверждено за %d с" % int(s.get("timeout", 0)))
             return
-        if _cfg().get("strategy", "current_id") != s.get("strategy_id"):
-            _finish("superseded", "стратегию сменили иначе — проверка снята")
-            return
-        if not _engine().is_running():
-            _rollback("движок остановился, пока ждали подтверждения")
-            return
+        try:
+            if _cfg().get("strategy", "current_id") != s.get("strategy_id"):
+                _finish("superseded",
+                        "стратегию сменили иначе — проверка снята")
+                return
+            if not _engine().is_running():
+                _rollback("движок остановился, пока ждали подтверждения")
+                return
+        except Exception as e:                      # noqa: BLE001 — граница
+            log.warning("Применение с проверкой: проверка не удалась: %s"
+                        % e, source=SOURCE)
         _wake.wait(2)
         _wake.clear()
 
@@ -337,17 +357,51 @@ def _regen_autostart() -> None:
         log.warning("Не удалось обновить автозапуск: %s" % e, source=SOURCE)
 
 
-def _rollback(reason: str) -> dict:
-    """Вернуть файлы действия и движок как было."""
+def _restore_strategy_choice(s: dict) -> None:
+    """Вернуть выбор стратегии в настройках поштучно.
+
+    Не весь ``settings.json`` с начала проверки: за минуты ожидания
+    человек мог поменять что-то своё (разрешения MCP, туннель), и откат
+    стратегии не должен это стирать. И без истории файлов
+    (``history.enabled: false``) выбор всё равно вернётся.
+    """
+    from core import file_history
+    cfg = _cfg()
+    with file_history.operation("Откат: %s" % s.get("strategy_name", ""),
+                                source="restore"):
+        cfg.set("strategy", "current_id", s.get("previous_id"))
+        cfg.set("strategy", "current_name", s.get("previous_name"))
+        cfg.save()
+
+
+def _rollback(reason: str, resume: bool = False) -> dict:
+    """Вернуть выбор стратегии, файлы действия и движок как было.
+
+    ``resume`` — продолжить откат, прерванный перезапуском (фаза
+    ``rolling_back`` уже записана); иначе второй вызов на ту же сессию —
+    кнопка и срок одновременно — ничего не делает.
+    """
     from core import file_history
     with _lock:
         s = _read().get("session") or {}
-        if s.get("phase") in ("rolled_back", "confirmed", "superseded"):
+        done = ("rolled_back", "confirmed", "superseded")
+        if s.get("phase") in done or (s.get("phase") == "rolling_back"
+                                      and not resume):
             return {"ok": True, "already": s.get("phase")}
         _update(phase="rolling_back", reason=reason)
-    paths = s.get("paths") or (_op_paths(s["op"]) if s.get("op") else [])
     restored = {"ok": True, "restored": []}
-    if paths:
+    try:
+        _restore_strategy_choice(s)
+    except Exception as e:                          # noqa: BLE001 — граница
+        restored = {"ok": False, "error": "выбор стратегии не вернулся: %s"
+                    % e}
+    # Прочие файлы, записанные самим применением (settings.json уже
+    # вернули поштучно выше).
+    cfg_path = os.path.abspath(_cfg().path)
+    paths = [p for p in (s.get("paths") or (_op_paths(s["op"])
+                                            if s.get("op") else []))
+             if os.path.abspath(p) != cfg_path]
+    if paths and restored.get("ok"):
         targets = file_history.versions_at(float(s.get("started") or 0),
                                            paths=set(paths))
         restored = file_history.restore_to_targets(
@@ -372,7 +426,7 @@ def recover() -> None:
     s = _read().get("session") or {}
     phase = s.get("phase")
     if phase in ("probing", "applying", "rolling_back"):
-        _rollback("применение прервано перезапуском")
+        _rollback("применение прервано перезапуском", resume=True)
         return
     if phase != "waiting":
         return
@@ -387,6 +441,11 @@ def recover() -> None:
 
 def mark_working(note: str = "") -> dict:
     """Запомнить текущее состояние как рабочее."""
+    try:
+        from core import file_history
+        file_history.checkpoint()
+    except Exception:                               # noqa: BLE001
+        pass
     mgr = _engine()
     cfg = _cfg()
     point = {"ts": time.time(), "note": note or "отмечено вручную",

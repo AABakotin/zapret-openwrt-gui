@@ -112,12 +112,25 @@ const ScanPage = (() => {
                             </div>
                             <div class="form-group" style="flex:1; min-width:220px;">
                                 <label class="form-label" for="scan-mode">Сколько стратегий пробовать</label>
-                                <select class="form-select" id="scan-mode">
+                                <select class="form-select" id="scan-mode" onchange="ScanPage.toggleCustom()">
                                     <option value="quick" selected>Быстро — около 30, несколько минут</option>
                                     <option value="standard">Больше — около 80 и сгенерированные</option>
                                     <option value="full">Все — долго, для трудных случаев</option>
+                                    <option value="custom">Свою — вставить текст из чата</option>
                                 </select>
                             </div>
+                        </div>
+
+                        <div class="form-group hidden" id="scan-custom-group">
+                            <label class="form-label" for="scan-custom">Своя стратегия</label>
+                            <textarea class="form-input" id="scan-custom" rows="5" spellcheck="false"
+                                      style="font-family:var(--font-mono); font-size:12px;"
+                                      placeholder="Вставьте как есть: в кавычках, с подписью, целой командой nfqws2 или NFQWS2_OPT=…"></textarea>
+                            <p class="form-hint">Каждая часть (через --new или пустую строку) — отдельный кандидат, до 10.
+                                Берутся только шаги --lua-desync: порты и списки подбор ставит сам под ваш сайт.
+                                Неизвестную функцию или блоб назовём до запуска.</p>
+                            <button type="button" class="btn btn-ghost btn-sm" onclick="ScanPage.checkCustom()">Проверить текст</button>
+                            <div id="scan-custom-check" style="margin-top:8px; font-size:13px;"></div>
                         </div>
 
                         <div class="bc-form-row">
@@ -269,6 +282,13 @@ const ScanPage = (() => {
             confirm: !!document.getElementById('scan-confirm')?.checked,
         };
         if (resume) body.resume = true;
+        if (body.mode === 'custom') {
+            body.custom = document.getElementById('scan-custom')?.value || '';
+            if (!body.custom.trim()) {
+                Toast.error('Вставьте свою стратегию в поле под списком');
+                return;
+            }
+        }
 
         try {
             const res = await API.post('/api/scan/start', body);
@@ -280,8 +300,45 @@ const ScanPage = (() => {
                 fetchStatus();
             }
         } catch (err) {
+            // Разбор не прошёл — показываем почему, по частям.
+            if (body.custom && err.data) renderCustomCheck(err.data);
             Toast.error(err.message);
         }
+    }
+
+    function toggleCustom() {
+        const custom = document.getElementById('scan-mode')?.value === 'custom';
+        document.getElementById('scan-custom-group')?.classList.toggle('hidden', !custom);
+    }
+
+    async function checkCustom() {
+        const text = document.getElementById('scan-custom')?.value || '';
+        const protocol = document.getElementById('scan-protocol')?.value || 'tcp';
+        try {
+            renderCustomCheck(await API.post('/api/scan/custom/check', { text, protocol }));
+        } catch (err) {
+            Toast.error(err.message);
+        }
+    }
+
+    function renderCustomCheck(r) {
+        const box = document.getElementById('scan-custom-check');
+        if (!box || !r) return;
+        const esc = SetupUI.esc;
+        let html = '';
+        (r.candidates || []).forEach((c, i) => {
+            html += '<div style="color:var(--success);">✓ Кандидат ' + (i + 1) + ': <code>'
+                + esc(c.args.join(' ')) + '</code></div>';
+        });
+        (r.rejected || []).forEach(x => {
+            html += '<div style="color:var(--error);">✗ Часть ' + x.index + ': ' + esc(x.reason)
+                + (x.args && x.args.length ? ' <code>' + esc(x.args.join(' ')) + '</code>' : '') + '</div>';
+        });
+        if (r.dropped) {
+            html += '<div class="text-muted">Ещё ' + r.dropped + ' не вошли: больше 10 за раз не проверяем.</div>';
+        }
+        if (!html) html = '<div class="text-muted">' + esc(r.error || 'Ничего не нашлось') + '</div>';
+        box.innerHTML = html;
     }
 
     async function stop() {
@@ -353,8 +410,8 @@ const ScanPage = (() => {
     function updateUI(data) {
         const isRunning = data.status === 'running';
         const isIdle = data.status === 'idle';
-        const canResume = data.status === 'cancelled'
-            || (data.status === 'completed' && data.stopped_early);
+        const canResume = data.mode !== 'custom' && (data.status === 'cancelled'
+            || (data.status === 'completed' && data.stopped_early));
 
         const btnStart = document.getElementById('scan-btn-start');
         const btnStop = document.getElementById('scan-btn-stop');
@@ -368,7 +425,7 @@ const ScanPage = (() => {
         setElText('scan-btn-resume-label',
                   data.stopped_early ? 'Искать дальше' : 'Продолжить с места остановки');
 
-        ['scan-target', 'scan-protocol', 'scan-mode', 'scan-stop-after', 'scan-confirm'].forEach(id => {
+        ['scan-target', 'scan-protocol', 'scan-mode', 'scan-stop-after', 'scan-confirm', 'scan-custom'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.disabled = isRunning;
         });
@@ -379,6 +436,7 @@ const ScanPage = (() => {
             setValue('scan-target', data.target);
             setValue('scan-protocol', data.protocol);
             setValue('scan-mode', data.mode);
+            toggleCustom();
             if (data.stop_after !== undefined) setValue('scan-stop-after', String(data.stop_after));
             const confirm = document.getElementById('scan-confirm');
             if (confirm && data.confirm !== undefined) confirm.checked = !!data.confirm;
@@ -670,5 +728,6 @@ const ScanPage = (() => {
 
     /* ───────── public ───────── */
 
-    return { render, destroy, start, stop, applyStrategy, pickTarget, refreshHints };
+    return { render, destroy, start, stop, applyStrategy, pickTarget, refreshHints,
+             toggleCustom, checkCustom };
 })();

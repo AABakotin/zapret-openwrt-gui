@@ -8,6 +8,7 @@ API подбора стратегий (Strategy Scanner).
   POST /api/scan/stop           — остановить подбор
   GET  /api/scan/results        — результаты подбора
   POST /api/scan/apply/<idx>    — применить найденную стратегию по индексу
+  POST /api/scan/custom/check   — разобрать «свою стратегию» до запуска
 """
 
 from bottle import request, response
@@ -27,7 +28,9 @@ def register(app):
                 "mode": "quick" | "standard" | "full",      (опционально, default: quick)
                 "resume": true | false,                      (опционально, default: false)
                 "stop_after": 0..50,                         (опционально, 0 — перебрать всё)
-                "confirm": true | false                      (опционально, default: true)
+                "confirm": true | false,                     (опционально, default: true)
+                "custom": "текст из чата"                    (опционально: «своя
+                                                              стратегия» вместо каталога)
             }
         """
         response.content_type = "application/json; charset=utf-8"
@@ -68,8 +71,16 @@ def register(app):
                          "Допустимые: tcp, udp" % protocol,
             }
 
+        custom = None
+        if str(body.get("custom") or "").strip():
+            checked = _check_custom(body.get("custom"), protocol)
+            if not checked["ok"]:
+                response.status = 400
+                return checked
+            custom = checked["candidates"]
+
         mode = body.get("mode", "quick")
-        if mode not in ("quick", "standard", "full"):
+        if custom is None and mode not in ("quick", "standard", "full"):
             response.status = 400
             return {
                 "ok": False,
@@ -96,7 +107,7 @@ def register(app):
 
         # Resume: индекс из сохранённого состояния — только если это тот
         # же прогон (иначе позиция чужого списка стратегий).
-        resume = bool(body.get("resume", False))
+        resume = bool(body.get("resume", False)) and custom is None
         start_index = 0
         if resume:
             start_index = scanner.get_resume_index(
@@ -112,6 +123,7 @@ def register(app):
             dpi_type=dpi_type,
             stop_after=stop_after,
             confirm=confirm,
+            custom=custom,
         )
 
         if not started:
@@ -126,12 +138,30 @@ def register(app):
             "status": "started",
             "target": target,
             "protocol": protocol,
-            "mode": mode,
+            "mode": "custom" if custom else mode,
         }
+        if custom:
+            result["custom"] = checked
         if resume and start_index > 0:
             result["resumed_from"] = start_index
 
         return result
+
+    @app.post("/api/scan/custom/check")
+    def api_scan_custom_check():
+        """«Своя стратегия»: что пойдёт в подбор, что отброшено и почему.
+
+        Body: {"text": "…", "protocol": "tcp" | "udp"}
+        """
+        response.content_type = "application/json; charset=utf-8"
+        try:
+            body = request.json or {}
+        except Exception:
+            body = {}
+        protocol = body.get("protocol", "tcp")
+        if protocol not in ("tcp", "udp"):
+            protocol = "tcp"
+        return _check_custom(body.get("text"), protocol)
 
     @app.route("/api/scan/status")
     def api_scan_status():
@@ -258,3 +288,11 @@ def register(app):
             "ok": True,
             "message": "Стратегия применена",
         }
+
+
+def _check_custom(text, protocol) -> dict:
+    """Разбор «своей стратегии» с окружением этого устройства."""
+    from core import custom_candidates, lint_env
+    return custom_candidates.check(
+        text, protocol, known_functions=lint_env.known_functions(),
+        known_blobs=lint_env.known_blobs())

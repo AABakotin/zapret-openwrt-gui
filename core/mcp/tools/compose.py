@@ -419,36 +419,13 @@ def _lint(argv) -> dict:
 
 
 def _known_functions():
-    """Имена ``--lua-desync`` этого устройства или ``None``.
-
-    ``None`` (карту собрать не удалось) значит «правило не проверяем»:
-    объявить неизвестной каждую функцию хуже, чем не проверить ни одной.
-    """
-    try:
-        from core.lua_manager import get_lua_manager
-        names = {item["name"] for item in get_lua_manager().desync_functions()}
-    except Exception:                           # noqa: BLE001 — граница
-        return None
-    return names or None
+    from core.lint_env import known_functions
+    return known_functions()
 
 
 def _known_blobs():
-    """``{имя: есть ли файл}`` — реестр блобов плюс переменные lua."""
-    try:
-        from core.blob_registry import list_blobs
-        known = {item["name"]: bool(item.get("exists"))
-                 for item in list_blobs()}
-    except Exception:                           # noqa: BLE001 — граница
-        return None
-    try:
-        from core.nfqws_manager import lua_named_patterns
-        # tls_rnd, tls_youtube и прочие — это не файлы, а глобальные
-        # переменные из init_vars.lua; движок подмешивает его сам.
-        for name in lua_named_patterns():
-            known.setdefault(name, True)
-    except Exception:                           # noqa: BLE001 — граница
-        pass
-    return known or None
+    from core.lint_env import known_blobs
+    return known_blobs()
 
 
 def _dry_run(argv) -> dict:

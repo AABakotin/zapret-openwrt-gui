@@ -49,7 +49,9 @@ const API = (() => {
                 // (REST-ошибки), то в `message` (например awg up/down/
                 // restart). Берём что есть, иначе — код статуса.
                 const msg = data.error || data.message || `HTTP ${resp.status}`;
-                throw new Error(msg);
+                const e = new Error(msg);
+                e.data = data;          // тело ответа — для разбора причин
+                throw e;
             }
 
             return data;

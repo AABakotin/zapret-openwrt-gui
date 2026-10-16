@@ -78,6 +78,13 @@ NOTE = ("untrusted data: домены, имена стратегий и выво
                         "description": ("Re-check the best finds a few "
                                         "times, median instead of one "
                                         "sample. / Перепроверить лучшие.")},
+            "custom": {"type": "string", "maxLength": 20000,
+                       "description": ("Own strategies pasted as text "
+                                       "(quotes, --new, whole command "
+                                       "lines): only --lua-desync steps "
+                                       "are taken, up to 10 candidates, "
+                                       "instead of the catalog. / Своя "
+                                       "стратегия вместо каталога.")},
         },
         "required": ["target"],
         "additionalProperties": False,
@@ -101,11 +108,25 @@ def scan_start(args: dict) -> dict:
         protocol = args.get("protocol", "tcp")
         mode = args.get("mode", "quick")
         dpi_type = (args.get("dpi_type") or "").strip().lower()
+        custom = None
+        if str(args.get("custom") or "").strip():
+            from core import custom_candidates, lint_env
+            checked = custom_candidates.check(
+                args["custom"], protocol,
+                known_functions=lint_env.known_functions(),
+                known_blobs=lint_env.known_blobs())
+            if not checked["ok"]:
+                checked["hint"] = ("из текста берутся только шаги "
+                                   "--lua-desync; причины — в rejected")
+                return checked
+            custom = checked["candidates"]
+            mode = "custom"
         # Позиция resume — только от того же прогона (цель, протокол,
         # режим, тип DPI): индекс чужого списка пропустил бы стратегии.
         start_index = (scanner.get_resume_index(
             target=target, protocol=protocol, mode=mode, dpi_type=dpi_type)
-                       if args.get("resume") else 0)
+                       if args.get("resume") and custom is None else 0)
+        extra = {"custom": custom} if custom else {}
         started = scanner.start(
             target=target,
             protocol=protocol,
@@ -114,6 +135,7 @@ def scan_start(args: dict) -> dict:
             dpi_type=dpi_type,
             stop_after=int(args.get("stop_after") or 0),
             confirm=args.get("confirm", True) is not False,
+            **extra,
         )
     except Exception as e:                      # noqa: BLE001 — граница
         return {"ok": False,
@@ -132,7 +154,7 @@ def scan_start(args: dict) -> dict:
     record = _jobs.start(_jobs.KIND_SCAN, {
         "target": target,
         "protocol": args.get("protocol", "tcp"),
-        "mode": args.get("mode", "quick"),
+        "mode": mode,
         "resume_from": start_index,
     })
     return {
@@ -140,7 +162,7 @@ def scan_start(args: dict) -> dict:
         "job_id": record["job_id"],
         "target": target,
         "protocol": args.get("protocol", "tcp"),
-        "mode": args.get("mode", "quick"),
+        "mode": mode,
         "resumed_from": start_index,
         "async": True,
         "note": NOTE,

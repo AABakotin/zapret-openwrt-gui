@@ -258,6 +258,7 @@ class StrategyScanner:
         stop_after: int = 0,
         confirm: bool = True,
         require_isolation: bool = False,
+        custom: Optional[list] = None,
     ) -> bool:
         """
         Запустить сканирование стратегий в фоновом потоке.
@@ -277,6 +278,9 @@ class StrategyScanner:
             require_isolation: Только в песочнице: если она недоступна,
                          прогон завершается ошибкой, а не гасит обход
                          сети (автоподбор, core/autopick.py).
+            custom:      «Своя стратегия»: кандидаты из
+                         ``custom_candidates.check()`` вместо каталога;
+                         режим прогона — ``custom``.
 
         Returns:
             True если сканирование запущено.
@@ -291,6 +295,9 @@ class StrategyScanner:
         dpi_type = str(dpi_type or "").strip().lower()
         stop_after = max(0, min(int(stop_after or 0), MAX_STOP_AFTER))
         confirm = bool(confirm)
+        custom = [dict(c) for c in (custom or [])]
+        if custom:
+            mode = "custom"
 
         with self._lock:
             if self._status == STATUS_RUNNING:
@@ -321,6 +328,7 @@ class StrategyScanner:
             self._stop_after = stop_after
             self._confirm = confirm
             self._require_isolation = bool(require_isolation)
+            self._custom = custom
             self._stopped_early = False
             self._rules_reapplied = 0
             self._stage = STAGE_PREPARE
@@ -868,6 +876,13 @@ class StrategyScanner:
         Returns:
             Список CatalogEntry для тестирования.
         """
+        # «Своя стратегия»: только вставленное, без каталога и памяти.
+        if getattr(self, "_custom", None):
+            from core.custom_candidates import entries as custom_entries
+            self._memory_ids = []
+            return custom_entries(self._custom, self._protocol)[
+                self._start_index:]
+
         from core.catalog_loader import get_catalog_manager
 
         from core.scan_targets import detect_target, traffic_family

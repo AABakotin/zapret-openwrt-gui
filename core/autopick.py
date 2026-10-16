@@ -17,7 +17,10 @@
 2. **Только в песочнице** (``core/nfqws_sandbox``): кандидаты гоняются
    во втором nfqws2, обход остальной сети не трогается. Без песочницы
    автоподбор не запускается — останавливать обход всем ради одного
-   сайта без спроса нельзя.
+   сайта без спроса нельзя. Окончательно это решает сам сканер
+   (``require_isolation=True``): его проверка строже (ещё и baseline с
+   меткой мимо очереди), и между нашей проверкой и его стартом
+   условия могли измениться.
 3. **Итог** по режиму ``healthcheck.autopick.mode``:
 
    * ``suggest`` (по умолчанию при включении) — лучшая находка
@@ -29,7 +32,12 @@
      иначе откат сразу.
 
 Найденная стратегия заменяет текущую целиком (как кнопка «Применить» в
-подборе) — поэтому замер «после» смотрит на все сайты мониторинга.
+подборе). Замер «после» видит только сайты мониторинга, поэтому сам
+автоподбор применяет находку, лишь когда текущая стратегия — не больше
+одного профиля (нечего потерять сверх видимого); иначе — предлагает.
+
+Предложения хранятся по сайту: находка для второго сайта не стирает
+первую.
 
 ## Пределы
 
@@ -108,11 +116,17 @@ def _set_run(key: str, **fields) -> dict:
         return run
 
 
+def suggestions(data: dict | None = None) -> list:
+    data = _read() if data is None else data
+    items = list((data.get("suggestions") or {}).values())
+    return sorted(items, key=lambda x: -float(x.get("ts") or 0))
+
+
 def status() -> dict:
     data = _read()
     return {"ok": True, "settings": settings(),
             "running": _running["key"] or None,
-            "suggestion": data.get("suggestion") or None,
+            "suggestions": suggestions(data),
             "runs": data.get("runs") or {}}
 
 
@@ -201,19 +215,22 @@ def trigger(display: str, hosts) -> dict:
 # ─────────────────────────── прогон ────────────────────────────
 
 def best(working: list) -> dict | None:
-    """Чистая функция: лучшая находка (по score, потом по задержке)."""
+    """Чистая функция: лучшая находка — как у отчёта сканера: сначала
+    перепроверенные, потом по score, потом по задержке."""
     if not working:
         return None
-    return sorted(working, key=lambda r: (-float(r.get("score") or 0),
+    return sorted(working, key=lambda r: (not r.get("confirmed"),
+                                          -float(r.get("score") or 0),
                                           float(r.get("latency_ms") or 0)))[0]
 
 
 def _scan(host: str) -> list:
-    from core.strategy_scanner import (STATUS_RUNNING,
+    from core.strategy_scanner import (STATUS_COMPLETED, STATUS_RUNNING,
                                        get_strategy_scanner)
     sc = get_strategy_scanner()
     if not sc.start(target=host, protocol="tcp", mode=SCAN_MODE,
-                    stop_after=STOP_AFTER, confirm=True):
+                    stop_after=STOP_AFTER, confirm=True,
+                    require_isolation=True):
         raise RuntimeError("сканер занят")
     deadline = time.time() + SCAN_TIMEOUT
     while sc.get_status().get("status") == STATUS_RUNNING:
@@ -222,7 +239,42 @@ def _scan(host: str) -> list:
             raise RuntimeError("подбор не уложился в %d мин"
                                % (SCAN_TIMEOUT // 60))
         time.sleep(3)
+    # Статус «готово» ставится до уборки и освобождения движка — ждём
+    # сам поток, иначе применение наткнулось бы на «движок занят».
+    thread = getattr(sc, "_thread", None)
+    if thread is not None and thread.is_alive():
+        thread.join(120)
+    st = sc.get_status()
+    if st.get("status") != STATUS_COMPLETED:
+        raise RuntimeError("подбор не завершился: %s" % (
+            st.get("error") or st.get("status") or "?"))
     return sc.get_working_strategies()
+
+
+def _single_profile_now() -> bool:
+    """Текущая стратегия — не больше одного включённого профиля."""
+    sid = _cfg().get("strategy", "current_id")
+    if not sid:
+        return True
+    from core.strategy_builder import get_strategy_manager
+    s = get_strategy_manager().get_strategy(sid) or {}
+    enabled = [p for p in s.get("profiles") or [] if p.get("enabled", True)]
+    return len(enabled) <= 1
+
+
+def _wait_safe_apply(display: str, name: str) -> None:
+    """Дождаться итога автоприменения и записать его."""
+    from core import safe_apply
+    thread = safe_apply._thread
+    if thread is not None:
+        thread.join(SCAN_TIMEOUT)
+    s = (safe_apply._read().get("session") or {})
+    phase = s.get("phase") or "?"
+    result = {"confirmed": "applied"}.get(phase, phase)
+    _set_run(display, result=result, reason=s.get("reason") or "")
+    if phase == "failed":
+        _notify("⚠️ Автоподбор для %s: «%s» не применилась — %s"
+                % (display, name, s.get("reason") or "?"))
 
 
 def _run(display: str, host: str, mode: str) -> None:
@@ -244,30 +296,34 @@ def _run(display: str, host: str, mode: str) -> None:
             top.get("strategy_id"))
         if not saved:
             raise RuntimeError("находку не удалось сохранить")
+        name = saved.get("name", "")
         suggestion = {"ts": time.time(), "site": display, "host": host,
-                      "strategy_id": saved["id"],
-                      "strategy_name": saved.get("name", ""),
+                      "strategy_id": saved["id"], "strategy_name": name,
                       "found": len(working)}
-        if mode == "apply":
+        note = ""
+        if mode == "apply" and not _single_profile_now():
+            note = (" Сама не применена: текущая стратегия из нескольких "
+                    "профилей, замена могла бы сломать то, чего нет в "
+                    "мониторинге.")
+        elif mode == "apply":
             from core import safe_apply
             res = safe_apply.start(saved["id"], auto_target=display)
             if not res.get("ok"):
                 raise RuntimeError(res.get("error") or "не применилась")
-            _set_run(display, result="applying",
-                     strategy_id=saved["id"],
-                     strategy_name=saved.get("name", ""))
+            _set_run(display, result="applying", strategy_id=saved["id"],
+                     strategy_name=name)
             _notify("🔎 Автоподбор для %s: применяю «%s» с проверкой"
-                    % (display, saved.get("name", "")))
+                    % (display, name))
+            _wait_safe_apply(display, name)
             return
         with _lock:
             data = _read()
-            data["suggestion"] = suggestion
+            data.setdefault("suggestions", {})[display] = suggestion
             _write(data)
         _set_run(display, result="suggested", strategy_id=saved["id"],
-                 strategy_name=saved.get("name", ""))
+                 strategy_name=name, reason=note.strip())
         _notify("🔎 Для %s нашлась стратегия «%s». Применить: «Стратегии» "
-                "→ «Применить с проверкой»." % (display,
-                                               saved.get("name", "")))
+                "→ «Применить с проверкой».%s" % (display, name, note))
     except Exception as e:                          # noqa: BLE001 — граница
         _set_run(display, result="error", reason=str(e))
         log.warning("автоподбор для %s: %s" % (display, e), source=SOURCE)
@@ -275,22 +331,22 @@ def _run(display: str, host: str, mode: str) -> None:
         _running["key"] = ""
 
 
-def dismiss() -> dict:
-    """Убрать текущее предложение."""
+def dismiss(site: str) -> dict:
+    """Убрать предложение для сайта."""
     with _lock:
         data = _read()
-        data.pop("suggestion", None)
+        (data.get("suggestions") or {}).pop(site, None)
         _write(data)
     return {"ok": True}
 
 
-def apply_suggestion() -> dict:
-    """«Применить с проверкой» для текущего предложения."""
-    sug = _read().get("suggestion") or {}
+def apply_suggestion(site: str) -> dict:
+    """«Применить с проверкой» для предложения по сайту."""
+    sug = (_read().get("suggestions") or {}).get(site) or {}
     if not sug.get("strategy_id"):
         return {"ok": False, "error": "предложения нет"}
     from core import safe_apply
     res = safe_apply.start(sug["strategy_id"])
     if res.get("ok"):
-        dismiss()
+        dismiss(site)
     return res

@@ -57,8 +57,9 @@ class TestPure(unittest.TestCase):
 
 
 class FakeScanner:
-    def __init__(self, working):
+    def __init__(self, working, final="completed"):
         self.working = working
+        self.final = final
         self.started = None
 
     def start(self, **kw):
@@ -66,7 +67,7 @@ class FakeScanner:
         return True
 
     def get_status(self):
-        return {"status": "completed"}
+        return {"status": self.final}
 
     def get_working_strategies(self):
         return self.working
@@ -77,8 +78,8 @@ class FakeScanner:
 
 class TestRun(Case):
 
-    def _run(self, mode, working):
-        sc = FakeScanner(working)
+    def _run(self, mode, working, final="completed"):
+        sc = FakeScanner(working, final)
         with mock.patch("core.strategy_scanner.get_strategy_scanner",
                         lambda: sc):
             ap._running["key"] = "YouTube"
@@ -102,8 +103,9 @@ class TestRun(Case):
     def test_suggest_stores_suggestion(self):
         sc = self._run("suggest", [{"strategy_id": "s1", "score": 2}])
         self.assertEqual(sc.started["target"], "youtube.com")
+        self.assertTrue(sc.started["require_isolation"])
         st = ap.status()
-        self.assertEqual(st["suggestion"]["strategy_id"], "scan_s1")
+        self.assertEqual(st["suggestions"][0]["strategy_id"], "scan_s1")
         self.assertEqual(st["runs"]["YouTube"]["result"], "suggested")
         self.assertIsNone(st["running"])
         self.assertTrue(self.notes)
@@ -111,24 +113,56 @@ class TestRun(Case):
     def test_nothing_found(self):
         self._run("suggest", [])
         self.assertEqual(ap.status()["runs"]["YouTube"]["result"], "nothing")
-        self.assertIsNone(ap.status()["suggestion"])
+        self.assertEqual(ap.status()["suggestions"], [])
+
+    def test_scan_error_is_error_not_nothing(self):
+        self._run("suggest", [{"strategy_id": "s1"}], final="error")
+        self.assertEqual(ap.status()["runs"]["YouTube"]["result"], "error")
 
     def test_apply_uses_safe_apply_auto(self):
         calls = []
-        with mock.patch.object(sa, "start", lambda sid, auto_target="",
-                               **kw: calls.append((sid, auto_target))
-                               or {"ok": True}):
+
+        def fake_start(sid, auto_target="", **kw):
+            calls.append((sid, auto_target))
+            sa._write({"session": {"phase": "confirmed", "started": 1}})
+            return {"ok": True}
+        with mock.patch.object(sa, "start", fake_start), \
+                mock.patch.object(sa, "_thread", None), \
+                mock.patch.object(ap, "_single_profile_now", lambda: True):
             self._run("apply", [{"strategy_id": "s1", "score": 2}])
         self.assertEqual(calls, [("scan_s1", "YouTube")])
         self.assertEqual(ap.status()["runs"]["YouTube"]["result"],
-                         "applying")
+                         "applied")
+
+    def test_apply_multi_profile_falls_back_to_suggest(self):
+        with mock.patch.object(sa, "start") as start, \
+                mock.patch.object(ap, "_single_profile_now", lambda: False):
+            self._run("apply", [{"strategy_id": "s1", "score": 2}])
+        start.assert_not_called()
+        self.assertEqual(ap.status()["suggestions"][0]["site"], "YouTube")
+
+    def test_best_prefers_confirmed(self):
+        top = ap.best([{"strategy_id": "lucky", "score": 500},
+                       {"strategy_id": "solid", "score": 300,
+                        "confirmed": True}])
+        self.assertEqual(top["strategy_id"], "solid")
+
+    def test_suggestions_per_site(self):
+        self._run("suggest", [{"strategy_id": "s1", "score": 2}])
+        ap._running["key"] = "Discord"
+        sc = FakeScanner([{"strategy_id": "s2", "score": 2}])
+        with mock.patch("core.strategy_scanner.get_strategy_scanner",
+                        lambda: sc):
+            ap._run("Discord", "discord.com", "suggest")
+        self.assertEqual({x["site"] for x in ap.status()["suggestions"]},
+                         {"YouTube", "Discord"})
 
     def test_apply_suggestion_and_dismiss(self):
         self._run("suggest", [{"strategy_id": "s1", "score": 2}])
         with mock.patch.object(sa, "start", lambda sid, **kw: {"ok": True}):
-            self.assertTrue(ap.apply_suggestion()["ok"])
-        self.assertIsNone(ap.status()["suggestion"])
-        self.assertFalse(ap.apply_suggestion()["ok"])
+            self.assertTrue(ap.apply_suggestion("YouTube")["ok"])
+        self.assertEqual(ap.status()["suggestions"], [])
+        self.assertFalse(ap.apply_suggestion("YouTube")["ok"])
 
 
 if __name__ == "__main__":

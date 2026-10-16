@@ -34,6 +34,7 @@ WRITABLE = {
     "blockcheck.max_workers",
     "blockcheck.probe_timeout", "dns_routing.rules", "filter.mode",
     "filter.protect_excluded", "healthcheck.auto_reset",
+    "healthcheck.autopick.min_interval_h", "healthcheck.autopick.mode",
     "healthcheck.consecutive_failures", "healthcheck.control_domain",
     "healthcheck.custom_domains", "healthcheck.enabled",
     "healthcheck.history_size", "healthcheck.interval_min",

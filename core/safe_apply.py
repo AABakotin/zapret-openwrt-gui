@@ -280,7 +280,14 @@ def _run_inner() -> None:
         if reason:
             _rollback(reason)
         else:
-            _finish("confirmed", "автоподбор: %s открывается" % target)
+            # Под замком и со сверкой сессии — как confirm(): между
+            # замером и этой строкой сессию мог сменить другой путь.
+            with _lock:
+                cur = _read().get("session") or {}
+                if (cur.get("started") != s.get("started")
+                        or cur.get("phase") != "applying"):
+                    return
+                _finish("confirmed", "автоподбор: %s открывается" % target)
             mark_working("автоподбор для %s" % target)
             from core import notify
             notify.event("autopick", "✅ «%s» применена: %s открывается"

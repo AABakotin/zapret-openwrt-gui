@@ -53,15 +53,25 @@ def _autopick_status() -> dict:
     try:
         from core import autopick
         st = autopick.status()
-        return {"mode": st["settings"]["mode"], "running": st["running"],
-                "suggestion": st["suggestion"]}
+        return {"mode": st["settings"]["mode"],
+                "min_interval_h": st["settings"]["min_interval_h"],
+                "running": st["running"],
+                "suggestions": st["suggestions"]}
     except Exception:                               # noqa: BLE001
-        return {"mode": "off", "running": None, "suggestion": None}
+        return {"mode": "off", "running": None, "suggestions": []}
 
 
 def _autopick(display: str, hosts) -> None:
-    from core import autopick
-    autopick.trigger(display, hosts)
+    """Запустить автоподбор, не задерживая проверку остальных сайтов:
+    решение (песочница, firewall) — в своём потоке."""
+    def _go():
+        try:
+            from core import autopick
+            autopick.trigger(display, list(hosts or []))
+        except Exception as e:                      # noqa: BLE001 — граница
+            log.warning("автоподбор: %s" % e, source="healthcheck")
+    threading.Thread(target=_go, name="autopick-trigger",
+                     daemon=True).start()
 
 
 def get_healthcheck():

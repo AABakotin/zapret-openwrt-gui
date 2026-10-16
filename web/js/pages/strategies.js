@@ -295,8 +295,8 @@ const StrategiesPage = (() => {
                 case 'toggleFavorite': toggleFavorite(sid); break;
                 case 'applyStrategy': applyStrategy(sid); break;
                 case 'safeApplyStrategy': safeApplyStrategy(sid); break;
-                case 'applyAutopick': applyAutopick(); break;
-                case 'dismissAutopick': dismissAutopick(); break;
+                case 'applyAutopick': applyAutopick(autopickSite(el)); break;
+                case 'dismissAutopick': dismissAutopick(autopickSite(el)); break;
                 case 'copyStrategyToClipboard': copyStrategyToClipboard(sid); break;
                 case 'exportToCatalog': exportToCatalog(sid); break;
                 case 'openEdit': openEdit(sid); break;
@@ -607,26 +607,31 @@ const StrategiesPage = (() => {
             return '<div class="alert alert-info" style="margin-bottom:8px;">Автоподбор: ищу стратегию для '
                 + escapeHtml(ap.running) + ' (в песочнице)…</div>';
         }
-        const s = ap.suggestion;
-        if (!s) return '';
-        return '<div class="alert alert-warning" style="margin-bottom:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">'
+        return (ap.suggestions || []).map(s =>
+            '<div class="alert alert-warning" style="margin-bottom:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;"'
+            + ' data-autopick-site="' + escapeAttr(s.site) + '">'
             + '<div style="flex:1; min-width:200px;">Автоподбор: для <b>' + escapeHtml(s.site)
             + '</b> нашлась стратегия «' + escapeHtml(s.strategy_name) + '».</div>'
             + '<button class="btn btn-primary btn-sm" data-action="applyAutopick">Применить с проверкой</button>'
-            + '<button class="btn btn-ghost btn-sm" data-action="dismissAutopick">Скрыть</button></div>';
+            + '<button class="btn btn-ghost btn-sm" data-action="dismissAutopick">Скрыть</button></div>').join('');
     }
 
-    async function applyAutopick() {
+    function autopickSite(el) {
+        const box = el && el.closest('[data-autopick-site]');
+        return box ? box.dataset.autopickSite : '';
+    }
+
+    async function applyAutopick(site) {
         try {
-            const r = await API.post('/api/healthcheck/autopick/apply', {});
+            const r = await API.post('/api/healthcheck/autopick/apply', { site });
             if (!r.ok) { Toast.error(r.error || 'Не удалось'); return; }
             if (typeof SafeApply !== 'undefined') SafeApply.poll();
             refreshHealthcheck();
         } catch (e) { Toast.error(e.message); }
     }
 
-    async function dismissAutopick() {
-        try { await API.post('/api/healthcheck/autopick/dismiss', {}); refreshHealthcheck(); }
+    async function dismissAutopick(site) {
+        try { await API.post('/api/healthcheck/autopick/dismiss', { site }); refreshHealthcheck(); }
         catch (e) { Toast.error(e.message); }
     }
 
@@ -671,6 +676,7 @@ const StrategiesPage = (() => {
         }).join('');
         const custom = (st.custom_domains || []).join('\n');
         const apMode = (st.autopick && st.autopick.mode) || 'off';
+        const apHours = (st.autopick && st.autopick.min_interval_h) || 6;
         return `
             <div style="border:1px solid var(--border, rgba(127,127,127,.2)); border-radius:8px; padding:12px; background:var(--bg-secondary, rgba(127,127,127,.05));">
                 <div style="font-weight:600; margin-bottom:8px; font-size:13px;">Настройки авто-починки</div>
@@ -718,8 +724,11 @@ const StrategiesPage = (() => {
                     <div style="font-size:12px; color:var(--text-muted); margin-top:3px;">
                         Подбор идёт в песочнице (обход остальной сети не трогается), кандидаты из памяти подбора — первыми.
                         Найденная стратегия заменяет текущую; при «применить» она остаётся, только если сайт открылся и
-                        ничего из открывавшегося не перестало. Один сайт — не чаще раза в 6 часов.
+                        ничего из открывавшегося не перестало (и только если текущая стратегия — один профиль; иначе предложит).
                     </div>
+                    <label style="font-size:13px; display:block; margin-top:6px;">Один сайт — не чаще раза в, ч:
+                        <input type="number" id="hc-autopick-hours" min="0.5" max="168" step="0.5" value="${apHours}" style="width:64px; margin-left:4px;">
+                    </label>
                 </div>
 
                 <div style="display:flex; gap:8px;">
@@ -740,7 +749,10 @@ const StrategiesPage = (() => {
         const consecutive_failures = parseInt((document.getElementById('hc-threshold') || {}).value, 10) || 2;
         const outage_guard = !!(document.getElementById('hc-outage-guard') || {}).checked;
         const control_domain = ((document.getElementById('hc-control') || {}).value || '').trim();
-        const autopick = { mode: (document.getElementById('hc-autopick') || {}).value || 'off' };
+        const autopick = {
+            mode: (document.getElementById('hc-autopick') || {}).value || 'off',
+            min_interval_h: parseFloat((document.getElementById('hc-autopick-hours') || {}).value) || 6,
+        };
 
         if (services.length === 0 && custom_domains.length === 0) {
             Toast.error('Выберите хотя бы один сайт для проверки');

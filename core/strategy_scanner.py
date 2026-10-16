@@ -257,6 +257,7 @@ class StrategyScanner:
         callback: Optional[Callable] = None,
         stop_after: int = 0,
         confirm: bool = True,
+        require_isolation: bool = False,
     ) -> bool:
         """
         Запустить сканирование стратегий в фоновом потоке.
@@ -273,6 +274,9 @@ class StrategyScanner:
                          стратегий (0 — перебрать всё).
             confirm:     Перепроверить лучшие находки несколько раз
                          (медиана вместо одного замера).
+            require_isolation: Только в песочнице: если она недоступна,
+                         прогон завершается ошибкой, а не гасит обход
+                         сети (автоподбор, core/autopick.py).
 
         Returns:
             True если сканирование запущено.
@@ -316,6 +320,7 @@ class StrategyScanner:
             self._callback = callback
             self._stop_after = stop_after
             self._confirm = confirm
+            self._require_isolation = bool(require_isolation)
             self._stopped_early = False
             self._rules_reapplied = 0
             self._stage = STAGE_PREPARE
@@ -586,6 +591,10 @@ class StrategyScanner:
             #    сети работает весь подбор; без неё — гасим, как раньше.
             self._decide_isolation()
             if not self._isolated:
+                if getattr(self, "_require_isolation", False):
+                    self._set_error("подбор только в песочнице, а она "
+                                    "недоступна: %s" % self._isolation_note)
+                    return
                 self._stop_current_nfqws()
 
             # 4. Baseline тест (без обхода). При работающем движке сети

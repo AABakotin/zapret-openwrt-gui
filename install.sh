@@ -22,9 +22,9 @@ set -e
 
 # ── Настройки по умолчанию ────────────────────────────────────
 
-REPO_URL="https://github.com/avatarDD/zapret-gui"
+REPO_URL="https://github.com/AABakotin/zapret-openwrt-gui"
 BRANCH="${ZAPRET_GUI_BRANCH:-main}"
-VERSION="0.25.18"
+VERSION="1.0.0"
 
 GUI_PORT="${ZAPRET_GUI_PORT:-8080}"
 GUI_HOST="${ZAPRET_GUI_HOST:-0.0.0.0}"

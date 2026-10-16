@@ -1056,6 +1056,103 @@ _KNOWN_FOREIGN_DAEMONS = {
 }
 
 
+# Другие обходчики DPI: правят те же пакеты, что nfqws2, только своим
+# способом. Вдвоём они не складываются, а мешают друг другу — стратегия
+# «работает через раз», и по логам nfqws2 этого не видно. Имя процесса →
+# (как показать, что делать). Сами мы их никогда не запускаем, так что
+# фильтр «потомок GUI» здесь не нужен (в отличие от nfqws2 сканера).
+_KNOWN_DPI_BYPASSERS = {
+    "youtubeUnblock": ("youtubeUnblock",
+                       "youtubeUnblock перехватывает тот же HTTPS/QUIC "
+                       "через свою очередь NFQUEUE."),
+    "b4": ("b4", "b4 перехватывает трафик через свою очередь NFQUEUE."),
+    "ciadpi": ("byedpi", "byedpi — прокси-обходчик; если на него "
+                         "заворачивается трафик, он меняет те же "
+                         "соединения."),
+    "byedpi": ("byedpi", "byedpi — прокси-обходчик; если на него "
+                         "заворачивается трафик, он меняет те же "
+                         "соединения."),
+    "dpitunnel": ("DPITunnel", "DPITunnel меняет те же соединения."),
+    "dpitunnel-cli": ("DPITunnel", "DPITunnel меняет те же соединения."),
+    "DPITunnel-cli": ("DPITunnel", "DPITunnel меняет те же соединения."),
+    "spoofdpi": ("SpoofDPI", "SpoofDPI меняет те же соединения."),
+    "spoof-dpi": ("SpoofDPI", "SpoofDPI меняет те же соединения."),
+}
+
+# Ядерный вариант youtubeUnblock: процесса нет, есть модуль.
+_KNOWN_DPI_KMODS = {
+    "kyoutubeUnblock": ("youtubeUnblock (модуль ядра)",
+                        "модуль kyoutubeUnblock меняет пакеты прямо в "
+                        "ядре, до nfqws2."),
+}
+
+_RIVAL_TAIL = (" Два обходчика одновременно не складываются, а мешают "
+               "друг другу: стратегия срабатывает через раз. Оставьте "
+               "что-то одно — остановите и уберите из автозапуска лишний.")
+
+
+def evaluate_rival_bypassers(running, kmods, *,
+                             bypassers=None, kernel_modules=None):
+    """
+    Чистая функция: другие обходчики DPI по запущенным именам процессов
+    и загруженным модулям ядра. Одна запись на обходчик, даже если у
+    него несколько процессов (ciadpi + byedpi). Тестируется без I/O.
+    """
+    if bypassers is None:
+        bypassers = _KNOWN_DPI_BYPASSERS
+    if kernel_modules is None:
+        kernel_modules = _KNOWN_DPI_KMODS
+    running = set(running or ())
+    kmods = set(kmods or ())
+    out = []
+    seen = set()
+    for source, table in ((running, bypassers), (kmods, kernel_modules)):
+        for key in sorted(table):
+            if key not in source:
+                continue
+            name, hint = table[key]
+            if name in seen:
+                continue
+            seen.add(name)
+            out.append({
+                "id": "rival-%s" % key.lower(),
+                "severity": "error",
+                "name": name,
+                "title": "Работает другой обходчик: %s" % name,
+                "detail": ("Загружен модуль ядра «%s»" % key
+                           if source is kmods else "Процесс «%s» активен" % key),
+                "hint": hint + _RIVAL_TAIL,
+            })
+    return out
+
+
+def _loaded_kernel_modules(wanted):
+    """Множество имён из `wanted`, загруженных в ядро (/sys/module)."""
+    found = set()
+    for name in wanted or ():
+        try:
+            if os.path.isdir("/sys/module/%s" % name):
+                found.add(name)
+        except OSError:
+            continue
+    return found
+
+
+def check_rival_bypassers():
+    """
+    Другие обходчики DPI, работающие одновременно с нашим nfqws2
+    (youtubeUnblock, b4, byedpi, DPITunnel, SpoofDPI).
+
+    Returns:
+        dict: { rivals: [{id, severity, name, title, detail, hint}],
+                has_rivals }
+    """
+    running = _running_process_names(set(_KNOWN_DPI_BYPASSERS))
+    kmods = _loaded_kernel_modules(_KNOWN_DPI_KMODS)
+    rivals = evaluate_rival_bypassers(running, kmods)
+    return {"rivals": rivals, "has_rivals": bool(rivals)}
+
+
 def evaluate_conflicts(existing_paths, running, *,
                        markers=_KNOWN_TOOL_MARKERS,
                        daemons=None):
@@ -1120,9 +1217,10 @@ def _running_process_names(wanted):
 
 def check_known_conflicts():
     """
-    Конфликты окружения: сторонние системы обхода/маршрутизации
-    (getdomains, XKeen, podkop, HydraRoute, Xray, redsocks), которые
-    мешают единому слою и прозрачному проксированию zapret-gui.
+    Конфликты окружения: другие обходчики DPI (youtubeUnblock, b4,
+    byedpi, …) и сторонние системы обхода/маршрутизации (getdomains,
+    XKeen, podkop, HydraRoute, Xray, redsocks), которые мешают nfqws2,
+    единому слою и прозрачному проксированию zapret-gui.
 
     Returns:
         dict: { ok, warnings: [{id, severity, title, detail, hint}],
@@ -1143,6 +1241,8 @@ def check_known_conflicts():
     warnings = warnings + evaluate_foreign_installs(
         _existing_foreign_markers(), _foreign_autostart_script()
     )
+    # Другие обходчики DPI — первыми: это прямой конфликт за пакеты.
+    warnings = check_rival_bypassers()["rivals"] + warnings
     return {
         "ok": True,
         "warnings": warnings,

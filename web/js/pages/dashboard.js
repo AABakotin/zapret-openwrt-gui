@@ -18,6 +18,9 @@ const DashboardPage = (() => {
                 <p class="page-description">Обзор состояния системы</p>
             </div>
 
+            <!-- Другие обходчики DPI: вдвоём с nfqws2 мешают друг другу -->
+            <div id="dash-rivals" style="display:none; margin-bottom:12px;"></div>
+
             <!-- Статус nfqws -->
             <div class="status-grid" id="status-grid">
                 <div class="status-card" id="card-nfqws">
@@ -271,6 +274,7 @@ const DashboardPage = (() => {
                 updateEngineCards({awg: res.awg, singbox: res.singbox,
                                    mihomo: res.mihomo});
                 updateMonitoringCards(res.block_detector, res.healthcheck);
+                renderRivals(res.rivals || []);
                 renderLogs(res.logs || []);
             }
         } catch (err) {
@@ -531,6 +535,25 @@ const DashboardPage = (() => {
         _toggleCard('card-healthcheck', hcInstalled);
     }
 
+    function renderRivals(rivals) {
+        const el = document.getElementById('dash-rivals');
+        if (!el) return;
+        if (!rivals.length) {
+            el.style.display = 'none';
+            el.innerHTML = '';
+            return;
+        }
+        const names = rivals.map(r => escapeHtml(r.name)).join(', ');
+        el.innerHTML = `
+            <div class="alert alert-danger" data-action="hash-diagnostics" style="cursor:pointer;">
+                <div class="alert-title">Работает другой обходчик: ${names}</div>
+                <div>Он меняет те же пакеты, что nfqws2, и они мешают друг
+                другу: стратегия срабатывает через раз. Оставьте что-то одно.
+                Подробности — в «Диагностике».</div>
+            </div>`;
+        el.style.display = '';
+    }
+
     function renderLogs(entries) {
         const el = document.getElementById('dashboard-logs');
         if (!el) return;
@@ -647,6 +670,7 @@ const DashboardPage = (() => {
         if (a === 'hash-mihomo') { window.location.hash = 'mihomo'; return; }
         if (a === 'hash-block-detector') { window.location.hash = 'blockcheck?tab=monitor'; return; }
         if (a === 'hash-strategies') { window.location.hash = 'strategies'; return; }
+        if (a === 'hash-diagnostics') { window.location.hash = 'diagnostics'; return; }
     }
 
     function bindEvents() {

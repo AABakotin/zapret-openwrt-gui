@@ -24,6 +24,24 @@ def _run_cmd(args, timeout=5):
         return -1, ""
 
 
+_RIVALS_TTL = 30.0
+_rivals_cache = {"ts": 0.0, "value": []}
+
+
+def _cached_rivals():
+    """Другие обходчики DPI для дашборда, с кешем на _RIVALS_TTL секунд."""
+    now = time.time()
+    if now - _rivals_cache["ts"] < _RIVALS_TTL:
+        return _rivals_cache["value"]
+    try:
+        from core.diagnostics import check_rival_bypassers
+        value = check_rival_bypassers()["rivals"]
+    except Exception:
+        value = []
+    _rivals_cache.update(ts=now, value=value)
+    return value
+
+
 def _is_private_ip(addr):
     """Проверить, является ли IPv4-адрес приватным (RFC 1918)."""
     try:
@@ -226,6 +244,12 @@ def register(app):
         except Exception:
             pass
 
+        # 6b. Другие обходчики DPI (youtubeUnblock, b4, byedpi, …): вдвоём
+        # с nfqws2 они мешают друг другу, и это первое, что надо видеть
+        # на главной, а не только в «Диагностике». Обход /proc — раз в
+        # 30 секунд, а не на каждый опрос дашборда.
+        rivals = _cached_rivals()
+
         # 7. Последние логи (15 записей)
         logs_data = []
         try:
@@ -245,6 +269,7 @@ def register(app):
             "mihomo": mihomo_status,
             "block_detector": bd_status,
             "healthcheck": hc_status,
+            "rivals": rivals,
             "logs": logs_data,
         }
 

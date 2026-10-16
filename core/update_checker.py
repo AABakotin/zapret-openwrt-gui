@@ -614,6 +614,28 @@ def _github_latest(repo: str) -> str:
 
 # ─────── background checker ───────
 
+# (движок, версия), о которых уже сообщили в Telegram за время работы.
+_notified_updates = set()
+
+
+def _notify_updates(result: dict) -> None:
+    """Уведомить о новых версиях — по разу на версию."""
+    fresh = []
+    for r in (result or {}).get("results") or []:
+        if not r.get("has_update") and not r.get("update_available"):
+            continue
+        key = (r.get("name"), r.get("latest"))
+        if key in _notified_updates:
+            continue
+        _notified_updates.add(key)
+        fresh.append("%s %s → %s" % (r.get("display_name") or r.get("name"),
+                                     r.get("current") or "?",
+                                     r.get("latest") or "?"))
+    if fresh:
+        from core import notify
+        notify.event("update", "⬆️ Обновления: %s" % "; ".join(fresh))
+
+
 class UpdateCheckerDaemon:
     """Фоновый процесс: проверяет обновления по расписанию."""
 
@@ -690,6 +712,7 @@ class UpdateCheckerDaemon:
                 if updates:
                     log.info("update-checker: найдено %d обновлений" % updates,
                              source="update_checker")
+                    _notify_updates(result)
             except Exception as e:
                 with self._lock:
                     self._stale_check = True

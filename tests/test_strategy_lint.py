@@ -312,6 +312,59 @@ class TestTtlFakeOnUdp(unittest.TestCase):
         self.assertEqual(found.count(lint.CODE_TTL_FAKE_UDP), 2)
 
 
+class TestTcpTsOnly(unittest.TestCase):
+    """tcp_ts — единственная маскировка: с Windows не работает."""
+
+    def test_ts_only_warns(self):
+        found = lint.lint(["--filter-tcp=443",
+                           "--lua-desync=fake:blob=fake_default_tls:"
+                           "tcp_ts=-1000:repeats=6"])
+        hit = [f for f in found if f["code"] == lint.CODE_TCP_TS_ONLY]
+        self.assertEqual(len(hit), 1)
+        self.assertEqual(hit[0]["severity"], lint.SEVERITY_WARNING)
+        self.assertIn("timestamps=enabled", hit[0]["message"])
+
+    def test_second_fooling_is_fine(self):
+        for extra in ("tcp_md5", "badseq", "ip_autottl=-2,3-20",
+                      "tcp_seq=-3000", "badsum", "ip_ttl=4"):
+            self.assertNotIn(lint.CODE_TCP_TS_ONLY, codes([
+                "--filter-tcp=443",
+                "--lua-desync=fake:blob=x:tcp_ts=-1000:" + extra]), extra)
+
+    def test_udp_profile_is_skipped(self):
+        self.assertNotIn(lint.CODE_TCP_TS_ONLY, codes([
+            "--filter-udp=443", "--lua-desync=fake:blob=x:tcp_ts=-1000"]))
+        self.assertNotIn(lint.CODE_TCP_TS_ONLY, codes([
+            "--filter-l7=quic", "--lua-desync=fake:blob=x:tcp_ts=-1000"]))
+
+    def test_ipv6_fooling_does_not_mask_ipv4(self):
+        self.assertIn(lint.CODE_TCP_TS_ONLY, codes([
+            "--filter-tcp=443",
+            "--lua-desync=fake:blob=x:tcp_ts=-1000:ip6_autottl=-2,3-20"]))
+
+    def test_advice_names_real_foolings(self):
+        msg = [f for f in lint.lint(["--filter-tcp=443",
+                                     "--lua-desync=fake:blob=x:tcp_ts=-5"])
+               if f["code"] == lint.CODE_TCP_TS_ONLY][0]["message"]
+        self.assertNotIn("badseq", msg)
+
+    def test_per_profile(self):
+        argv = ["--filter-tcp=443", "--lua-desync=multisplit:pos=1",
+                "--new", "--filter-udp=443",
+                "--lua-desync=fake:blob=x:tcp_ts=-1000"]
+        self.assertFalse(lint.needs_tcp_timestamps(argv))
+        self.assertNotIn(lint.CODE_TCP_TS_ONLY, codes(argv))
+
+    def test_needs_tcp_timestamps(self):
+        self.assertTrue(lint.needs_tcp_timestamps(
+            ["--lua-desync=hostfakesplit:host=ya.ru:tcp_ts=-1000"]))
+        self.assertFalse(lint.needs_tcp_timestamps(
+            ["--lua-desync=multisplit:pos=1"]))
+        # tcp_ts_up — не маскировка, а сдвиг опции.
+        self.assertFalse(lint.needs_tcp_timestamps(
+            ["--lua-desync=fake:blob=x:tcp_ts_up"]))
+
+
 class TestRuleTable(unittest.TestCase):
     """Сама таблица правил остаётся данными и остаётся полной."""
 
@@ -384,3 +437,25 @@ class TestCatalogIsNotNoisy(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_clone_blob_valid_only_after_clone_in_same_profile():
+    from core import strategy_lint
+    kb = {"tls_google": True}
+    ok = ["--filter-tcp=443",
+          "--lua-desync=tls_client_hello_clone:blob=ch_clone",
+          "--lua-desync=fake:blob=ch_clone"]
+    codes = [f["code"] for f in strategy_lint.lint(
+        ok, known_functions=None, known_blobs=kb)]
+    assert "blob_unknown" not in codes
+    # Ссылка до шага clone — blob ещё не готов.
+    early = ["--filter-tcp=443", "--lua-desync=fake:blob=ch_clone",
+             "--lua-desync=tls_client_hello_clone:blob=ch_clone"]
+    assert "blob_unknown" in [f["code"] for f in strategy_lint.lint(
+        early, known_functions=None, known_blobs=kb)]
+    # Соседний профиль clone не видит.
+    other = ["--filter-tcp=443",
+             "--lua-desync=tls_client_hello_clone:blob=ch_clone",
+             "--new", "--filter-tcp=80", "--lua-desync=fake:blob=ch_clone"]
+    assert "blob_unknown" in [f["code"] for f in strategy_lint.lint(
+        other, known_functions=None, known_blobs=kb)]

@@ -8,6 +8,15 @@ API подбора стратегий (Strategy Scanner).
   POST /api/scan/stop           — остановить подбор
   GET  /api/scan/results        — результаты подбора
   POST /api/scan/apply/<idx>    — применить найденную стратегию по индексу
+  POST /api/scan/custom/check   — разобрать «свою стратегию» до запуска
+  POST /api/scan/refine         — «уточнение» лучшей попытки / вариант полегче
+  POST /api/scan/freeze/start   — проба «обрыв на 16 КБ» по сетям хостингов
+  POST /api/scan/freeze/stop    — остановить пробу
+  GET  /api/scan/freeze         — ход пробы или итог прошлой
+  POST /api/scan/freeze/apply   — приём сети профилем на её IP-список
+  GET  /api/scan/community      — стратегии сообщества своего провайдера
+  POST /api/scan/community/share — ссылка на issue «Поделиться/Подтвердить/
+                                  Не сработала»
 """
 
 from bottle import request, response
@@ -27,7 +36,9 @@ def register(app):
                 "mode": "quick" | "standard" | "full",      (опционально, default: quick)
                 "resume": true | false,                      (опционально, default: false)
                 "stop_after": 0..50,                         (опционально, 0 — перебрать всё)
-                "confirm": true | false                      (опционально, default: true)
+                "confirm": true | false,                     (опционально, default: true)
+                "custom": "текст из чата"                    (опционально: «своя
+                                                              стратегия» вместо каталога)
             }
         """
         response.content_type = "application/json; charset=utf-8"
@@ -68,8 +79,16 @@ def register(app):
                          "Допустимые: tcp, udp" % protocol,
             }
 
+        custom = None
+        if str(body.get("custom") or "").strip():
+            checked = _check_custom(body.get("custom"), protocol)
+            if not checked["ok"]:
+                response.status = 400
+                return checked
+            custom = checked["candidates"]
+
         mode = body.get("mode", "quick")
-        if mode not in ("quick", "standard", "full"):
+        if custom is None and mode not in ("quick", "standard", "full"):
             response.status = 400
             return {
                 "ok": False,
@@ -96,7 +115,7 @@ def register(app):
 
         # Resume: индекс из сохранённого состояния — только если это тот
         # же прогон (иначе позиция чужого списка стратегий).
-        resume = bool(body.get("resume", False))
+        resume = bool(body.get("resume", False)) and custom is None
         start_index = 0
         if resume:
             start_index = scanner.get_resume_index(
@@ -112,13 +131,18 @@ def register(app):
             dpi_type=dpi_type,
             stop_after=stop_after,
             confirm=confirm,
+            custom=custom,
+            # Нет в запросе — по настройке scan.parallel.
+            parallel=_flag(body.get("parallel")),
+            community=_flag(body.get("community")),
         )
 
         if not started:
             response.status = 409
             return {
                 "ok": False,
-                "error": "Подбор стратегий уже выполняется",
+                "error": getattr(scanner, "refusal", "")
+                or "Подбор стратегий уже выполняется",
             }
 
         result = {
@@ -126,12 +150,119 @@ def register(app):
             "status": "started",
             "target": target,
             "protocol": protocol,
-            "mode": mode,
+            "mode": "custom" if custom else mode,
         }
+        if custom:
+            result["custom"] = checked
         if resume and start_index > 0:
             result["resumed_from"] = start_index
 
         return result
+
+    @app.post("/api/scan/refine")
+    def api_scan_refine():
+        """«Уточнение» по итогам последнего подбора.
+
+        Body: {"lighter": false} — уточнить почти рабочую (параметры
+        фейка); true — искать вариант полегче для рабочей.
+        """
+        response.content_type = "application/json; charset=utf-8"
+        try:
+            body = request.json or {}
+        except Exception:
+            body = {}
+        from core import strategy_refine
+        res = strategy_refine.start(lighter=bool(body.get("lighter")))
+        if not res.get("ok"):
+            response.status = 409 if "выполняется" in res.get("error", "") \
+                else 400
+        return res
+
+    @app.post("/api/scan/freeze/start")
+    def api_scan_freeze_start():
+        """Проба «обрыв на 16 КБ»: где обрыв и какое имя в фейке его снимает."""
+        response.content_type = "application/json; charset=utf-8"
+        from core import freeze_probe
+        res = freeze_probe.start()
+        if not res.get("ok"):
+            response.status = 409
+        return res
+
+    @app.post("/api/scan/freeze/stop")
+    def api_scan_freeze_stop():
+        response.content_type = "application/json; charset=utf-8"
+        from core import freeze_probe
+        return freeze_probe.stop()
+
+    @app.route("/api/scan/freeze")
+    def api_scan_freeze():
+        response.content_type = "application/json; charset=utf-8"
+        from core import freeze_probe
+        return {"ok": True, **freeze_probe.status()}
+
+    @app.post("/api/scan/freeze/apply")
+    def api_scan_freeze_apply():
+        """«Применить для сети». Body: {"asn": "24940"}."""
+        response.content_type = "application/json; charset=utf-8"
+        try:
+            body = request.json or {}
+        except Exception:
+            body = {}
+        from core import freeze_probe
+        res = freeze_probe.apply_network(str(body.get("asn") or ""))
+        if not res.get("ok"):
+            response.status = 400
+        return res
+
+    @app.route("/api/scan/community")
+    def api_scan_community():
+        """База сообщества: ?force=1 — скачать заново, ?detect=1 —
+        определить провайдера по внешнему адресу (RIPEstat)."""
+        response.content_type = "application/json; charset=utf-8"
+        from core import community_strategies
+        return {"ok": True, **community_strategies.overview(
+            force=request.query.get("force") == "1",
+            detect=request.query.get("detect") == "1")}
+
+    @app.post("/api/scan/community/share")
+    def api_scan_community_share():
+        """Предзаполненная issue для базы сообщества — отправляет человек.
+
+        Body: {"outcome": "works"|"fails", "args": "…" | [...],
+               "host": "сайт", "community": "id записи базы",
+               "result": "3/3", "proto": "tls"|"http"}
+        """
+        response.content_type = "application/json; charset=utf-8"
+        try:
+            body = request.json or {}
+        except Exception:
+            body = {}
+        from core import community_strategies
+        res = community_strategies.share(
+            "fails" if body.get("outcome") == "fails" else "works",
+            body.get("args") or [], host=str(body.get("host") or ""),
+            community=str(body.get("community") or ""),
+            result=str(body.get("result") or ""),
+            proto="http" if body.get("proto") == "http" else "tls")
+        if not res.get("ok"):
+            response.status = 400
+        return res
+
+    @app.post("/api/scan/custom/check")
+    def api_scan_custom_check():
+        """«Своя стратегия»: что пойдёт в подбор, что отброшено и почему.
+
+        Body: {"text": "…", "protocol": "tcp" | "udp"}
+        """
+        response.content_type = "application/json; charset=utf-8"
+        try:
+            body = request.json or {}
+        except Exception:
+            body = {}
+        protocol = body.get("protocol", "tcp")
+        if protocol not in ("tcp", "udp"):
+            protocol = "tcp"
+        return _check_custom(body.get("text"), protocol)
 
     @app.route("/api/scan/status")
     def api_scan_status():
@@ -258,3 +389,18 @@ def register(app):
             "ok": True,
             "message": "Стратегия применена",
         }
+
+
+def _flag(value):
+    """true/false из JSON или строки («off», «0» — нет); нет поля — None."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "on", "yes", "auto")
+    return bool(value)
+
+
+def _check_custom(text, protocol) -> dict:
+    """Разбор «своей стратегии» с окружением этого устройства."""
+    from core.custom_candidates import check_on_device
+    return check_on_device(text, protocol)

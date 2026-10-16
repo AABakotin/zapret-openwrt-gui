@@ -585,6 +585,25 @@ class _Masker:
         return self._label("домен", value)
 
 
+def mask_text(text: str, sites: bool = True) -> tuple:
+    """Замаскировать публичные адреса и (если ``sites``) домены.
+
+    Публичная обёртка над ``_Masker`` для других отчётов (``core/
+    help_report.py``): одна реализация маски на всех.
+
+    Returns:
+        (текст, сколько значений замаскировано)
+    """
+    masker = _Masker(enabled=True)
+    if not isinstance(text, str) or not text:
+        return text, 0
+    text = _IPV4_RE.sub(lambda m: masker._ip(m.group(1)), text)
+    text = _IPV6_RE.sub(lambda m: masker._ip(m.group(1)), text)
+    if sites:
+        text = _DOMAIN_RE.sub(masker._domain, text)
+    return text, masker.count
+
+
 def _looks_like_code(low: str, tld: str) -> bool:
     """Имя из кода (``urllib.error.URLError``, ``core.mcp.tools``), а не домен.
 

@@ -268,8 +268,11 @@ def refresh(kind: str, name: str) -> dict:
     merged = merge(current, remote, _read_remote(kind, name))
     changed = merged != current
     if changed:
-        ok = (mgr.save_ipset(name, merged) if kind == "ipset"
-              else mgr.save_hostlist(name, merged))
+        from core.file_history import operation
+        with operation("Обновление по подписке: %s" % _key(kind, name),
+                       source="auto"):
+            ok = (mgr.save_ipset(name, merged) if kind == "ipset"
+                  else mgr.save_hostlist(name, merged))
         if not ok:
             _set_status(kind, name, last_refresh=now, last_status="error",
                         last_error="файл не записан")

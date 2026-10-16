@@ -12,6 +12,14 @@ POST   /api/config/import   — импортировать из JSON
 from bottle import request, response
 
 
+
+def _mask_notify_token(data: dict) -> None:
+    """Токен бота уведомлений: наружу — только «***» (есть/нет — через
+    /api/notify). Владелец токена управляет ботом целиком."""
+    tg = (data.get("notify") or {}).get("telegram")
+    if isinstance(tg, dict) and tg.get("token"):
+        tg["token"] = "***"
+
 def register(app):
 
     @app.route("/api/config")
@@ -32,6 +40,7 @@ def register(app):
         # клику на странице MCP (GET /api/mcp/ui/token).
         if "mcp" in data and data["mcp"].get("token"):
             data["mcp"]["token"] = "***"
+        _mask_notify_token(data)
 
         return {"ok": True, "config": data}
 
@@ -159,6 +168,7 @@ def register(app):
             data["gui"]["auth_password"] = "***"
         if "mcp" in data and data["mcp"].get("token"):
             data["mcp"]["token"] = "***"
+        _mask_notify_token(data)
         # Маскируем приватные ключи AWG-конфигов
         for section_key in ("awg", "usque", "tgproxy"):
             sec = data.get(section_key, {})

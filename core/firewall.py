@@ -110,6 +110,22 @@ SANDBOX_CHAINS = (
 NFT_SANDBOX_TABLE = "zapret_gui_sbx"
 
 
+def _par_mask() -> int:
+    from core.scan_parallel import PAR_MASK
+    return PAR_MASK
+
+
+def _sandbox_slots(slots) -> list:
+    """Дорожки параллельного подбора: [(метка, порт от, порт до)]."""
+    from core import scan_parallel
+    try:
+        n = max(0, min(scan_parallel.PAR_MAX, int(slots or 0)))
+    except (TypeError, ValueError):
+        n = 0
+    return [(scan_parallel.slot_mark(k),) + scan_parallel.slot_ports(k)
+            for k in range(n)]
+
+
 def ppe_mode(cfg) -> str:
     """``auto`` | ``off`` из ``firewall.ppe_deoffload`` (мусор — auto)."""
     value = str(cfg.get("firewall", "ppe_deoffload", default="auto")
@@ -1861,8 +1877,14 @@ class FirewallManager:
     # Основные правила при этом не меняются и не снимаются: обход сети
     # работает весь подбор.
 
-    def apply_sandbox_rules(self, queue_num: int, mark: int) -> bool:
-        """Поставить (переставить) правила песочницы. True — встали."""
+    def apply_sandbox_rules(self, queue_num: int, mark: int,
+                            slots: int = 0) -> bool:
+        """Поставить (переставить) правила песочницы. True — встали.
+
+        ``slots`` — дорожки параллельного подбора (core/scan_parallel):
+        пакетам с исходным (ответам — с целевым) портом дорожки ставится
+        её метка, по ней nfqws2 выбирает профиль (``--filter-mark``).
+        """
         with self._lock:
             from core.config_manager import get_config_manager
             cfg = get_config_manager()
@@ -1884,6 +1906,7 @@ class FirewallManager:
                 "tcp_in": int(cfg.get("nfqws", "tcp_pkt_in", default=10)),
                 "udp_out": int(cfg.get("nfqws", "udp_pkt_out", default=5)),
                 "udp_in": int(cfg.get("nfqws", "udp_pkt_in", default=3)),
+                "slots": _sandbox_slots(slots),
             }
             if fw_type == "iptables":
                 ok = self._apply_sandbox_ipt("iptables", params)
@@ -1982,6 +2005,14 @@ class FirewallManager:
                                    "-j", "RETURN"])
         ok &= self._run_cmd(inn + ["-m", "connmark", "!", "--mark", sbx,
                                    "-j", "RETURN"])
+        for slot_mark, lo, hi in p.get("slots") or []:
+            for proto in ("tcp", "udp"):
+                ok &= self._run_cmd(out + [
+                    "-p", proto, "--sport", "%d:%d" % (lo, hi), "-j", "MARK",
+                    "--set-xmark", "0x%x/0x%x" % (slot_mark, _par_mask())])
+                ok &= self._run_cmd(inn + [
+                    "-p", proto, "--dport", "%d:%d" % (lo, hi), "-j", "MARK",
+                    "--set-xmark", "0x%x/0x%x" % (slot_mark, _par_mask())])
         if p["tcp"]:
             for base in bases(out, "tcp", "dports", p["tcp"]):
                 ok &= self._run_cmd(base + window("original", p["tcp_out"])
@@ -2042,6 +2073,17 @@ class FirewallManager:
             "add rule inet %s prerouting ct mark and %s != %s return"
             % (t, sbx, sbx),
         ]
+        keep = "0x%x" % (~_par_mask() & 0xFFFFFFFF)
+        for slot_mark, lo, hi in p.get("slots") or []:
+            for proto in ("tcp", "udp"):
+                cmds += [
+                    "add rule inet %s postrouting %s sport %d-%d meta mark "
+                    "set meta mark and %s or 0x%x"
+                    % (t, proto, lo, hi, keep, slot_mark),
+                    "add rule inet %s prerouting %s dport %d-%d meta mark "
+                    "set meta mark and %s or 0x%x"
+                    % (t, proto, lo, hi, keep, slot_mark),
+                ]
         if tcp:
             cmds += [
                 "add rule inet %s postrouting tcp dport %s ct original "

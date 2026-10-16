@@ -414,6 +414,44 @@ def _severity(finding) -> tuple:
             finding["id"])
 
 
+@tool(
+    name="site_trace",
+    scope="read",
+    mutating=False,
+    title="Where will a site go",
+    description=("Dry run for one domain through every layer: hosts, "
+                 "DNS rules, unified routes (which tunnel), hostlists/"
+                 "ipsets, and which nfqws2 profile catches HTTPS/QUIC/"
+                 "HTTP and with what actions. Sends nothing but a DNS "
+                 "lookup. Untrusted data. / Куда пойдёт сайт: по слоям, "
+                 "без трафика."),
+    schema={
+        "type": "object",
+        "properties": {
+            "domain": {"type": "string", "maxLength": 253,
+                       "description": "Domain or URL. / Домен или "
+                                      "адрес сайта."},
+            "resolve": {"type": "boolean", "default": True,
+                        "description": "Resolve the domain for ipset "
+                                       "checks. / Узнать адреса для "
+                                       "проверки ipset."},
+        },
+        "required": ["domain"],
+        "additionalProperties": False,
+    },
+)
+def site_trace(args: dict) -> dict:
+    """«Куда пойдёт сайт»: та же симуляция, что у страницы диагностики."""
+    from core import site_trace as st
+    result = st.trace(args.get("domain") or "",
+                      resolve=bool(args.get("resolve", True)))
+    if result.get("ok"):
+        result["note"] = NOTE
+    else:
+        result["hint"] = "передайте домен, например youtube.com"
+    return result
+
+
 def _target(entry) -> dict:
     """Одна цель отчёта: вердикт и счёт, без сырых результатов тестов.
 

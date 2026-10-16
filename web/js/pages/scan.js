@@ -112,12 +112,25 @@ const ScanPage = (() => {
                             </div>
                             <div class="form-group" style="flex:1; min-width:220px;">
                                 <label class="form-label" for="scan-mode">Сколько стратегий пробовать</label>
-                                <select class="form-select" id="scan-mode">
+                                <select class="form-select" id="scan-mode" onchange="ScanPage.toggleCustom()">
                                     <option value="quick" selected>Быстро — около 30, несколько минут</option>
                                     <option value="standard">Больше — около 80 и сгенерированные</option>
                                     <option value="full">Все — долго, для трудных случаев</option>
+                                    <option value="custom">Свою — вставить текст из чата</option>
                                 </select>
                             </div>
+                        </div>
+
+                        <div class="form-group hidden" id="scan-custom-group">
+                            <label class="form-label" for="scan-custom">Своя стратегия</label>
+                            <textarea class="form-input" id="scan-custom" rows="5" spellcheck="false"
+                                      style="font-family:var(--font-mono); font-size:12px;"
+                                      placeholder="Вставьте как есть: в кавычках, с подписью, целой командой nfqws2 или NFQWS2_OPT=…"></textarea>
+                            <p class="form-hint">Каждая часть (через --new или пустую строку) — отдельный кандидат, до 10.
+                                Берутся только шаги --lua-desync: порты и списки подбор ставит сам под ваш сайт.
+                                Неизвестную функцию или блоб назовём до запуска.</p>
+                            <button type="button" class="btn btn-ghost btn-sm" onclick="ScanPage.checkCustom()">Проверить текст</button>
+                            <div id="scan-custom-check" style="margin-top:8px; font-size:13px;"></div>
                         </div>
 
                         <div class="bc-form-row">
@@ -134,6 +147,14 @@ const ScanPage = (() => {
                                 <label class="checkbox-option" style="margin-top:22px;">
                                     <input type="checkbox" id="scan-confirm" checked>
                                     Перепроверить лучшие несколько раз (надёжнее)
+                                </label>
+                                <label class="checkbox-option" title="Несколько стратегий разом в песочнице — сколько выдержит память роутера (128 МБ — 5, 256 МБ — 10, больше — 15). Нужен nfqws2 1.0.5+. Находки перепроверяются по одной.">
+                                    <input type="checkbox" id="scan-parallel">
+                                    Проверять несколько разом (быстрее)
+                                </label>
+                                <label class="checkbox-option" title="До 8 стратегий, которые сработали у абонентов вашего провайдера (открытая база zemidala/nfqws2-strategies по номеру AS). Подбор узнает провайдера по внешнему адресу через RIPEstat и скачает базу с GitHub.">
+                                    <input type="checkbox" id="scan-community">
+                                    Сначала стратегии сообщества для моего провайдера
                                 </label>
                             </div>
                         </div>
@@ -208,16 +229,166 @@ const ScanPage = (() => {
                         <div id="scan-failures"></div>
                     </div>
                 </div>
+
+                <div class="card" id="scan-freeze">
+                    <div class="card-title">Обрыв на 16 КБ по сетям хостингов</div>
+                    <p class="form-hint">Провайдер может обрывать загрузку с адресов Hetzner, OVH, Cloudflare и других
+                        хостингов на 16–20 КБ — у всех сайтов на них сразу. Проба проверит ~20 сетей без обхода, а где
+                        обрыв есть — подберёт имя для фейка, которое его снимает (в песочнице, обход сети не трогается,
+                        до 15 минут). Находки пойдут в подбор первыми, а «Применить для сети» поставит приём только на
+                        адреса этой сети.</p>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <button type="button" class="btn btn-ghost btn-sm" id="scan-freeze-start" onclick="ScanPage.freezeStart()">Проверить сети</button>
+                        <button type="button" class="btn btn-ghost btn-sm hidden" id="scan-freeze-stop" onclick="ScanPage.freezeStop()">Остановить</button>
+                        <span id="scan-freeze-progress" style="font-size:13px; color:var(--text-muted);"></span>
+                    </div>
+                    <div id="scan-freeze-result" style="margin-top:8px; font-size:13px;"></div>
+                </div>
+
+                <div class="card" id="scan-community-card">
+                    <div class="card-title">Стратегии сообщества</div>
+                    <p class="form-hint">Открытая база стратегий по провайдерам (номер AS): что сработало у абонентов
+                        вашего провайдера. Провайдер определяется по внешнему адресу через RIPEstat, база читается с GitHub.
+                        Поделиться своей находкой — кнопкой у результата подбора: откроется заполненная форма, отправляете вы сами.</p>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="ScanPage.communityLoad(false)">Показать для моего провайдера</button>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="ScanPage.communityLoad(true)">Обновить</button>
+                    <div id="scan-community-list" style="margin-top:8px; font-size:13px;"></div>
+                </div>
             </div>
         `;
 
         refreshHints();
         fetchStatus();
+        freezeFetch();
+        initParallel();
+    }
+
+    /** Галка «несколько разом» — по настройке scan.parallel. */
+    async function initParallel() {
+        try {
+            const data = await API.get('/api/config');
+            const v = String((data && data.config && data.config.scan
+                              && data.config.scan.parallel) || 'off').toLowerCase();
+            const el = document.getElementById('scan-parallel');
+            if (el && !el.disabled) el.checked = v === 'auto' || v === 'on' || parseInt(v, 10) > 1;
+            const comm = document.getElementById('scan-community');
+            if (comm && !comm.disabled) comm.checked = !!(data.config.scan && data.config.scan.community);
+        } catch (_e) { /* без фатала */ }
     }
 
     function destroy() {
         stopPolling();
+        freezeStopPolling();
         lastStatus = null;
+    }
+
+    /* ───────── проба «обрыв на 16 КБ» ───────── */
+
+    let freezeTimer = null;
+
+    function freezeStopPolling() {
+        if (freezeTimer) clearInterval(freezeTimer);
+        freezeTimer = null;
+    }
+
+    async function freezeFetch() {
+        let s;
+        try {
+            s = await API.get('/api/scan/freeze');
+        } catch (err) {
+            return;
+        }
+        renderFreeze(s);
+        const running = s.state === 'running';
+        if (running && !freezeTimer) freezeTimer = setInterval(freezeFetch, 3000);
+        if (!running) freezeStopPolling();
+    }
+
+    async function freezeStart() {
+        try {
+            const res = await API.post('/api/scan/freeze/start', {});
+            if (res.ok) {
+                Toast.success('Проба запущена');
+                freezeFetch();
+            }
+        } catch (err) {
+            Toast.error(err.message);
+        }
+    }
+
+    async function freezeStop() {
+        try {
+            await API.post('/api/scan/freeze/stop', {});
+        } catch (err) {
+            Toast.error(err.message);
+        }
+    }
+
+    async function freezeApply(asn) {
+        if (!confirm('Поставить найденный приём профилем на адреса AS' + asn
+            + '? Текущая стратегия сохранится под ним, применение — с проверкой и откатом.')) return;
+        try {
+            const res = await API.post('/api/scan/freeze/apply', { asn: String(asn) });
+            if (res.ok) {
+                Toast.success('Применяем с проверкой: адресов в списке ' + res.ipset + ' — ' + res.prefixes);
+            }
+        } catch (err) {
+            Toast.error(err.message);
+        }
+    }
+
+    const FREEZE_END = {
+        stopped: 'остановлена', time: 'вышло время (15 минут)', error: 'ошибка',
+    };
+
+    function renderFreeze(s) {
+        const prog = document.getElementById('scan-freeze-progress');
+        const out = document.getElementById('scan-freeze-result');
+        if (!prog || !out) return;
+        const running = s.state === 'running';
+        document.getElementById('scan-freeze-start')?.classList.toggle('hidden', running);
+        document.getElementById('scan-freeze-stop')?.classList.toggle('hidden', !running);
+        const nets = Array.isArray(s.nets) ? s.nets : [];
+        if (running) {
+            const phase = s.phase === 'names' ? 'подбор имени' : 'замер без обхода';
+            prog.textContent = phase + ' · ' + (s.done || 0) + '/' + (s.total || 0)
+                + (s.current ? ' · ' + s.current : '');
+        } else if (s.state && s.state !== 'idle') {
+            const when = s.finished ? new Date(s.finished * 1000).toLocaleString() : '';
+            prog.textContent = 'Прошлая проба: ' + when
+                + (FREEZE_END[s.state] ? ' · ' + FREEZE_END[s.state] : '')
+                + (s.error ? ' · ' + s.error : '');
+        } else {
+            prog.textContent = '';
+        }
+        if (!nets.length) {
+            out.innerHTML = '';
+            return;
+        }
+        const frozen = nets.filter(n => n.verdict === 'freeze');
+        const okCount = nets.filter(n => n.verdict === 'ok').length;
+        const errCount = nets.filter(n => n.verdict === 'error').length;
+        let html = '<div>Без обхода: открываются ' + okCount + ', обрыв — ' + frozen.length
+            + (errCount ? ', не ответили — ' + errCount : '') + '.</div>';
+        if (frozen.length) {
+            html += '<table class="table" style="margin-top:6px;"><tbody>' + frozen.map(n => {
+                const name = 'AS' + escapeHtml(n.asn) + ' ' + escapeHtml(n.provider);
+                let what;
+                if (n.found && !running) {
+                    what = 'снимает: <code>' + escapeHtml(n.found.steps.join(' ')) + '</code> '
+                        + '<button type="button" class="btn btn-primary btn-sm" onclick="ScanPage.freezeApply(\''
+                        + escapeHtml(n.asn) + '\')">Применить для сети</button>';
+                } else if (n.found) {
+                    what = 'снимает: <code>' + escapeHtml(n.found.steps.join(' ')) + '</code>';
+                } else if (running && s.phase === 'names') {
+                    what = 'подбираем… (проверено ' + (n.tried || 0) + ')';
+                } else {
+                    what = 'ни одно имя не помогло' + (n.tried ? ' (проверено ' + n.tried + ')' : '');
+                }
+                return '<tr><td>' + name + '</td><td>' + what + '</td></tr>';
+            }).join('') + '</tbody></table>';
+        }
+        out.innerHTML = html;
     }
 
     /* ───────── controls ───────── */
@@ -267,8 +438,17 @@ const ScanPage = (() => {
             mode: document.getElementById('scan-mode')?.value || 'quick',
             stop_after: parseInt(document.getElementById('scan-stop-after')?.value || '0', 10) || 0,
             confirm: !!document.getElementById('scan-confirm')?.checked,
+            parallel: !!document.getElementById('scan-parallel')?.checked,
+            community: !!document.getElementById('scan-community')?.checked,
         };
         if (resume) body.resume = true;
+        if (body.mode === 'custom') {
+            body.custom = document.getElementById('scan-custom')?.value || '';
+            if (!body.custom.trim()) {
+                Toast.error('Вставьте свою стратегию в поле под списком');
+                return;
+            }
+        }
 
         try {
             const res = await API.post('/api/scan/start', body);
@@ -280,8 +460,61 @@ const ScanPage = (() => {
                 fetchStatus();
             }
         } catch (err) {
+            // Разбор не прошёл — показываем почему, по частям.
+            if (body.custom && err.data) renderCustomCheck(err.data);
             Toast.error(err.message);
         }
+    }
+
+    async function refine(lighter) {
+        try {
+            const res = await API.post('/api/scan/refine', { lighter: !!lighter });
+            if (res.ok) {
+                Toast.success((lighter ? 'Ищем вариант полегче' : 'Уточняем')
+                    + ' «' + res.base + '»: вариантов — ' + res.variants);
+                const section = document.getElementById('scan-results-section');
+                if (section) section.classList.add('hidden');
+                startPolling();
+                fetchStatus();
+            }
+        } catch (err) {
+            Toast.error(err.message);
+        }
+    }
+
+    function toggleCustom() {
+        const custom = document.getElementById('scan-mode')?.value === 'custom';
+        document.getElementById('scan-custom-group')?.classList.toggle('hidden', !custom);
+    }
+
+    async function checkCustom() {
+        const text = document.getElementById('scan-custom')?.value || '';
+        const protocol = document.getElementById('scan-protocol')?.value || 'tcp';
+        try {
+            renderCustomCheck(await API.post('/api/scan/custom/check', { text, protocol }));
+        } catch (err) {
+            Toast.error(err.message);
+        }
+    }
+
+    function renderCustomCheck(r) {
+        const box = document.getElementById('scan-custom-check');
+        if (!box || !r) return;
+        const esc = escapeHtml;
+        let html = '';
+        (r.candidates || []).forEach((c, i) => {
+            html += '<div style="color:var(--success);">✓ Кандидат ' + (i + 1) + ': <code>'
+                + esc(c.args.join(' ')) + '</code></div>';
+        });
+        (r.rejected || []).forEach(x => {
+            html += '<div style="color:var(--error);">✗ Часть ' + x.index + ': ' + esc(x.reason)
+                + (x.args && x.args.length ? ' <code>' + esc(x.args.join(' ')) + '</code>' : '') + '</div>';
+        });
+        if (r.dropped) {
+            html += '<div class="text-muted">Ещё ' + r.dropped + ' не вошли: больше 10 за раз не проверяем.</div>';
+        }
+        if (!html) html = '<div class="text-muted">' + esc(r.error || 'Ничего не нашлось') + '</div>';
+        box.innerHTML = html;
     }
 
     async function stop() {
@@ -353,8 +586,8 @@ const ScanPage = (() => {
     function updateUI(data) {
         const isRunning = data.status === 'running';
         const isIdle = data.status === 'idle';
-        const canResume = data.status === 'cancelled'
-            || (data.status === 'completed' && data.stopped_early);
+        const canResume = data.mode !== 'custom' && (data.status === 'cancelled'
+            || (data.status === 'completed' && data.stopped_early));
 
         const btnStart = document.getElementById('scan-btn-start');
         const btnStop = document.getElementById('scan-btn-stop');
@@ -368,7 +601,7 @@ const ScanPage = (() => {
         setElText('scan-btn-resume-label',
                   data.stopped_early ? 'Искать дальше' : 'Продолжить с места остановки');
 
-        ['scan-target', 'scan-protocol', 'scan-mode', 'scan-stop-after', 'scan-confirm'].forEach(id => {
+        ['scan-target', 'scan-protocol', 'scan-mode', 'scan-stop-after', 'scan-confirm', 'scan-parallel', 'scan-community', 'scan-custom'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.disabled = isRunning;
         });
@@ -379,6 +612,7 @@ const ScanPage = (() => {
             setValue('scan-target', data.target);
             setValue('scan-protocol', data.protocol);
             setValue('scan-mode', data.mode);
+            toggleCustom();
             if (data.stop_after !== undefined) setValue('scan-stop-after', String(data.stop_after));
             const confirm = document.getElementById('scan-confirm');
             if (confirm && data.confirm !== undefined) confirm.checked = !!data.confirm;
@@ -470,6 +704,20 @@ const ScanPage = (() => {
                 : ['warn', 'Обход сети на время подбора остановлен'
                     + (data.isolation_note ? ' (' + data.isolation_note + ')' : '') + '.']);
         }
+        if (data.community_first > 0) {
+            notes.push(['info', (data.status === 'running' ? 'Сначала проверяем ' : 'Первыми проверили ')
+                + plural(data.community_first, 'стратегию', 'стратегии', 'стратегий')
+                + ' сообщества для вашего провайдера (AS' + ((data.community || {}).asn || '?') + ').']);
+        } else if (data.community && data.community.error) {
+            notes.push(['info', 'Стратегии сообщества не проверялись: ' + data.community.error + '.']);
+        } else if (data.community && data.community.asn && data.status !== 'running') {
+            notes.push(['info', 'Для вашего провайдера (AS' + data.community.asn + ') в базе сообщества стратегий пока нет — поделитесь найденной.']);
+        }
+        if (data.status === 'running' && data.parallel > 0) {
+            notes.push(['info', 'Проверяем до ' + data.parallel + ' стратегий разом (по памяти роутера); находки перепроверяются по одной.']);
+        } else if (data.status === 'running' && data.parallel_note) {
+            notes.push(['info', 'Проверяем по одной: ' + data.parallel_note + '.']);
+        }
         if (data.rules_reapplied > 0) {
             notes.push(['warn', 'Системный firewall ' + plural(data.rules_reapplied, 'раз', 'раза', 'раз')
                 + ' сбросил наши правила посреди подбора — мы их вернули. Если результаты странные, повторите подбор.']);
@@ -501,12 +749,17 @@ const ScanPage = (() => {
         if (r.memory_first) chips.push(['muted', 'Из памяти первыми: ' + r.memory_first]);
 
         let cls, icon, title, detail;
+        // «Уточнение»: почти рабочую — параметрами фейка, рабочую — полегче.
+        let refine = '';
         if (working.length) {
             const best = r.best_strategy || working[0];
             cls = 'v-ok'; icon = '✅';
             title = 'Найдено ' + plural(working.length, 'рабочая стратегия', 'рабочие стратегии', 'рабочих стратегий');
             detail = 'Лучшая — «' + (best.strategy_name || best.strategy_id) + '». Нажмите «Применить» — обход запустится с ней и останется после перезагрузки.';
             if (r.stopped_early) detail += ' Перебор остановлен досрочно — можно «Искать дальше».';
+            refine = '<button class="btn btn-ghost btn-sm" onclick="ScanPage.refine(true)" '
+                + 'title="Убрать лишние шаги и повторы у лучшей рабочей: меньше нагрузки, меньше поводов сломаться">'
+                + 'Искать вариант полегче</button>';
         } else if (r.baseline_accessible && !(r.failed_strategies || []).some(f => f.error !== 'BASELINE_OPEN')) {
             cls = 'v-skip'; icon = 'ℹ️';
             title = 'Сайт открывается и без обхода';
@@ -519,6 +772,9 @@ const ScanPage = (() => {
             cls = 'v-bad'; icon = '❌';
             title = 'Рабочих стратегий не нашлось';
             detail = hintForNothing(r);
+            refine = '<button class="btn btn-primary btn-sm" onclick="ScanPage.refine(false)" '
+                + 'title="Взять стратегию, продвинувшуюся дальше всех, и перебрать параметры её фейка: способ обмана DPI, повторы, подставное имя, настоящий ClientHello">'
+                + 'Уточнить лучшую попытку</button>';
         }
         el.innerHTML = `
             <div class="bc-verdict ${cls}">
@@ -528,6 +784,7 @@ const ScanPage = (() => {
                     <div class="bc-verdict-detail">${escapeHtml(detail)}</div>
                     <div class="bc-verdict-chips">${chips.map(([k, t]) =>
                         `<span class="bc-chip bc-chip-${k}">${escapeHtml(t)}</span>`).join('')}</div>
+                    ${refine ? '<div style="margin-top:8px;">' + refine + '</div>' : ''}
                 </div>
             </div>`;
     }
@@ -540,9 +797,12 @@ const ScanPage = (() => {
         return 'Что можно сделать: ' + tips.join('; ') + '.';
     }
 
+    let shareItems = [];
+
     function renderWorking(working, report) {
         const el = document.getElementById('scan-results-list');
         if (!el) return;
+        shareItems = [];
         if (!working.length) { el.innerHTML = ''; return; }
         const kind = (report && report.probe_kind) || 'tls+body';
         const bestId = report && report.best_strategy && report.best_strategy.strategy_id;
@@ -562,6 +822,13 @@ const ScanPage = (() => {
             if (w.from_memory) badges.push('<span class="bc-badge" style="background:rgba(59,130,246,0.15); color:var(--accent);" title="Уже помогала на этом сайте в вашей сети">Уже работала у вас</span>');
             if (raw.is_full_preset) badges.push('<span class="bc-badge bc-badge-skip" title="Готовый набор со своими фильтрами">Готовый пресет</span>');
             if (raw.label === 'recommended') badges.push('<span class="bc-badge bc-badge-skip">Рекомендуемая</span>');
+            if (raw.label === 'community') badges.push('<span class="bc-badge" title="' + escapeHtml(w.description || 'Из базы сообщества') + '">Сообщество</span>');
+            // Единственная маскировка — tcp_ts: с роутера работает, с Windows
+            // нет (Windows не шлёт метки TCP). Подбор идёт с роутера и этого
+            // не видит — предупреждаем здесь.
+            if (typeof Nfqws2Lint !== 'undefined' && Nfqws2Lint.needsTcpTimestamps(raw.args_preview || '')) {
+                badges.push('<span class="bc-badge bc-badge-warn" title="Фейк маскируется только через tcp_ts. Windows по умолчанию не шлёт метки TCP — включите: netsh interface tcp set global timestamps=enabled (от администратора)">Нужны метки TCP</span>');
+            }
 
             const metrics = [];
             if (kind === 'tls+body') {
@@ -586,6 +853,7 @@ const ScanPage = (() => {
                             ${name} ${badges.join(' ')}
                         </div>
                         <div class="scan-result-meta">
+                            ${kind === 'tls+body' ? shareButton(w, true) : ''}
                             <button class="btn btn-primary btn-sm" onclick="ScanPage.applyStrategy(${i})">Применить</button>
                         </div>
                     </div>
@@ -612,11 +880,84 @@ const ScanPage = (() => {
         const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([code, n]) =>
             `<li><span class="scan-reason-count">${n}</span> ${escapeHtml(REASONS[code] || 'другая причина')}
              <span class="scan-reason-code">${escapeHtml(code)}</span></li>`).join('');
+        // Из базы сообщества, но не сработала — можно отметить в базе.
+        const comm = failed.filter(f => (f.raw_data || {}).label === 'community');
+        const commRows = comm.map(f => `<li>${escapeHtml(f.strategy_name || f.strategy_id)} ${shareButton(f, false)}</li>`).join('');
         el.innerHTML = `
+            ${comm.length ? `<div style="margin-top:8px;">Из базы сообщества у вас не сработали:<ul>${commRows}</ul></div>` : ''}
             <details class="scan-failures">
                 <summary>Почему не подошли остальные (${failed.length})</summary>
                 <ul>${rows}</ul>
             </details>`;
+    }
+
+    /* ───────── база сообщества ───────── */
+
+    async function communityLoad(force) {
+        const out = document.getElementById('scan-community-list');
+        if (!out) return;
+        out.textContent = 'Загружаем…';
+        let d;
+        try {
+            d = await API.get('/api/scan/community?detect=1' + (force ? '&force=1' : ''));
+        } catch (err) {
+            out.textContent = err.message;
+            return;
+        }
+        if (!d.asn) {
+            out.textContent = d.error || 'Провайдер не определён — впишите номер AS в настройке community.asn.';
+            return;
+        }
+        const head = 'AS' + escapeHtml(d.asn) + (d.provider ? ' · ' + escapeHtml(d.provider) : '')
+            + (d.auto ? ' (определён по внешнему адресу; если это туннель, а не провайдер, впишите номер в community.asn)' : '')
+            + ' — ' + plural(d.items.length, 'стратегия', 'стратегии', 'стратегий')
+            + (d.error ? ' · ' + escapeHtml(d.error) : '');
+        const rows = d.items.map(x => '<tr' + (x.skipped ? ' style="opacity:.55"' : '') + '><td><code>'
+            + escapeHtml(x.steps.join(' ')) + '</code></td><td>подтвердили ' + x.reports
+            + (x.fails ? ', не сработала у ' + x.fails : '') + '</td><td>' + escapeHtml(x.last || '—')
+            + (x.fresh ? '' : ' (давно)') + (x.skipped ? ' · не пробуется' : '') + '</td></tr>').join('');
+        out.innerHTML = '<div>' + head + ' · <a href="' + escapeHtml(d.page || d.repo)
+            + '" target="_blank" rel="noopener">в репозитории</a></div>'
+            + (rows ? '<table class="table" style="margin-top:6px;"><tbody>' + rows + '</tbody></table>'
+                : '<div style="margin-top:4px;">Для вашего провайдера в базе пока ничего нет — поделитесь найденной в подборе.</div>');
+    }
+
+    /** «Поделиться» (своя находка), «Подтвердить» / «Не сработала» (из базы). */
+    function shareButton(r, works) {
+        const raw = r.raw_data || {};
+        const fromBase = raw.label === 'community';
+        if (!works && !fromBase) return '';
+        const idx = shareItems.push({ r, works }) - 1;
+        const [text, title] = !works
+            ? ['Не сработала', 'Отметить в базе сообщества: роутеры будут пробовать её позже других']
+            : fromBase
+                ? ['Подтвердить', 'Сработала и у вас — подтвердите в базе, это поднимет её для других']
+                : ['Поделиться', 'Отправить в базу сообщества: её будут пробовать абоненты вашего провайдера'];
+        return `<button class="btn btn-ghost btn-sm" title="${escapeHtml(title)}" onclick="ScanPage.share(${idx})">${text}</button>`;
+    }
+
+    async function share(idx) {
+        const item = shareItems[idx];
+        if (!item) return;
+        const r = item.r;
+        const raw = r.raw_data || {};
+        const src = String(raw.source_file || '');
+        const body = {
+            outcome: item.works ? 'works' : 'fails',
+            args: raw.args_preview || '',
+            host: (lastStatus && lastStatus.target) || '',
+            community: src.startsWith('community:') ? src.slice(10) : '',
+            result: r.checks > 1 ? r.passes + '/' + r.checks : (item.works ? '1/1' : '0/1'),
+            proto: (lastStatus && lastStatus.family) === 'http' ? 'http' : 'tls',
+        };
+        try {
+            const res = await API.post('/api/scan/community/share', body);
+            if (!res.ok) return;
+            if (!confirm('Откроется форма issue на GitHub — отправляете вы сами. В ней будет:\n\n' + res.text)) return;
+            window.open(res.url, '_blank', 'noopener');
+        } catch (err) {
+            Toast.error(err.message);
+        }
     }
 
     /* ───────── helpers ───────── */
@@ -664,5 +1005,6 @@ const ScanPage = (() => {
 
     /* ───────── public ───────── */
 
-    return { render, destroy, start, stop, applyStrategy, pickTarget, refreshHints };
+    return { render, destroy, start, stop, applyStrategy, pickTarget, refreshHints,
+             toggleCustom, checkCustom, refine, freezeStart, freezeStop, freezeApply, share, communityLoad };
 })();

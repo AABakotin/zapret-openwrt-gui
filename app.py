@@ -1031,6 +1031,30 @@ def create_app(config_dir: str = None) -> Bottle:
         except Exception as e:
             log.warning("usque autostart при boot: %s" % e, source="usque")
 
+        # История файлов: наблюдатель записей + сверка с диском (правки
+        # вне GUI). Первый запуск только запоминает отпечатки.
+        try:
+            from core import file_history
+            file_history.start()
+        except Exception as e:
+            log.warning("История файлов при boot: %s" % e, source="history")
+
+        # Уведомления: дослать очередь, не ушедшую до перезапуска.
+        try:
+            from core import notify
+            notify.start()
+        except Exception as e:
+            log.warning("Уведомления при boot: %s" % e, source="notify")
+
+        # Применение с проверкой, прерванное перезапуском: продолжить
+        # ожидание подтверждения или откатить (core/safe_apply.py).
+        try:
+            from core import safe_apply
+            safe_apply.recover()
+        except Exception as e:
+            log.warning("Применение с проверкой при boot: %s" % e,
+                        source="safe-apply")
+
         # Healthcheck-демон (autocircular watchdog): ничего не делает, если
         # cfg.healthcheck.enabled = false (дефолт). Включается через GUI.
         try:

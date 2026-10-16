@@ -68,6 +68,56 @@ const DiagnosticsPage = (() => {
                 <button class="btn btn-ghost btn-sm" onclick="DiagnosticsPage.refreshSystem()">
                     Обновить систему
                 </button>
+                <button class="btn btn-ghost btn-sm" onclick="DiagnosticsPage.showHelpReport()"
+                        title="Текст для вопроса в чате или issue: версии, состояние, списки, журнал. Без паролей, токенов и внешнего адреса">
+                    Отчёт для помощи
+                </button>
+            </div>
+
+            <!-- «Куда пойдёт сайт» (core/site_trace.py) -->
+            <div class="card" id="diag-trace-card">
+                <div class="card-header"><h3 class="card-title">Куда пойдёт сайт</h3></div>
+                <p class="form-hint" style="margin-top:0;">
+                    Почему сайт идёт не так, как настроено: hosts, DNS, маршруты единого
+                    слоя (туннель забирает трафик мимо nfqws2) и какой профиль стратегии
+                    возьмёт HTTPS, QUIC и HTTP — и почему пропущены остальные.
+                </p>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <input class="form-input" id="diag-trace-domain" placeholder="youtube.com"
+                           style="max-width:320px;" onkeydown="if(event.key==='Enter')DiagnosticsPage.traceSite()">
+                    <button class="btn btn-primary btn-sm" onclick="DiagnosticsPage.traceSite()">Проверить</button>
+                </div>
+                <div id="diag-trace-result" style="margin-top:10px;"></div>
+            </div>
+
+            <!-- Отчёт для помощи -->
+            <div class="modal-backdrop" id="diag-report-modal" style="display:none;">
+                <div class="modal-content" style="max-width:760px;">
+                    <div class="modal-header">
+                        <h3 class="modal-title">Отчёт для помощи</h3>
+                        <button class="modal-close" onclick="DiagnosticsPage.closeHelpReport()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="form-hint" style="margin-top:0;">
+                            Вставьте этот текст в чат или issue. В нём нет паролей,
+                            токенов, внешнего адреса и содержимого списков. Сам отчёт
+                            никуда не отправляется — его копируете вы.
+                        </p>
+                        <label style="display:flex; gap:6px; align-items:center; font-size:13px; margin-bottom:8px;">
+                            <input type="checkbox" id="diag-report-sites" onchange="DiagnosticsPage.renderHelpReport()">
+                            Показать имена сайтов (по умолчанию скрыты)
+                        </label>
+                        <textarea class="form-input" id="diag-report-text" rows="18" readonly
+                                  style="width:100%; font-family:var(--font-mono, monospace); font-size:12px;">Собираю…</textarea>
+                        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
+                            <button class="btn btn-primary btn-sm" onclick="DiagnosticsPage.copyHelpReport()">Скопировать</button>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Прогресс -->
@@ -268,6 +318,18 @@ const DiagnosticsPage = (() => {
         loadConflicts();
         loadSelfcheckStatus();
         loadMaintenanceCaps();
+
+        // Пришли с главной («Сайт не открывается?»): сразу «Куда пойдёт сайт».
+        const site = new URLSearchParams((location.hash.split('?')[1]) || '').get('site');
+        if (site) {
+            // Параметр — разовый: перезагрузка или «Назад» не должны
+            // запускать проверку снова.
+            try { history.replaceState(null, '', '#diagnostics'); } catch (_) {}
+            const input = document.getElementById('diag-trace-domain');
+            if (input) input.value = site;
+            document.getElementById('diag-trace-card')?.scrollIntoView({ block: 'start' });
+            traceSite();
+        }
     }
 
     function destroy() {
@@ -1113,7 +1175,7 @@ const DiagnosticsPage = (() => {
                             <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
                             <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
                         </svg>
-                        Сторонние системы обхода/маршрутизации (могут конфликтовать с единым слоем и прозрачным проксированием):
+                        Другие обходчики и системы маршрутизации (обходчики DPI спорят с nfqws2 за пакеты, остальные — с единым слоем и прозрачным проксированием):
                     </div>
                     <div class="diag-conflicts-list">
                         ${env.warnings.map(w => {
@@ -1397,6 +1459,89 @@ const DiagnosticsPage = (() => {
         }
     }
 
+    /* ═══════════════════ отчёт для помощи ═══════════════════ */
+    // Оба варианта приходят одним ответом: галочка переключает их на
+    // месте и не может получить текст «не того» запроса.
+    let helpReport = null;
+
+    async function showHelpReport() {
+        const modal = document.getElementById('diag-report-modal');
+        const box = document.getElementById('diag-report-text');
+        if (!modal || !box) return;
+        modal.style.display = 'flex';
+        helpReport = null;
+        box.value = 'Собираю…';
+        try {
+            const r = await API.get('/api/diagnostics/help-report');
+            helpReport = r.result || null;
+            renderHelpReport();
+        } catch (e) {
+            box.value = 'Не удалось собрать отчёт: ' + e.message;
+        }
+    }
+
+    function renderHelpReport() {
+        const box = document.getElementById('diag-report-text');
+        const sites = document.getElementById('diag-report-sites');
+        if (!box || !helpReport) return;
+        const variant = sites && sites.checked ? helpReport.sites : helpReport.masked;
+        box.value = (variant && variant.text) || '';
+    }
+
+    async function traceSite() {
+        const input = document.getElementById('diag-trace-domain');
+        const box = document.getElementById('diag-trace-result');
+        if (!input || !box) return;
+        const domain = input.value.trim();
+        if (!domain) return;
+        box.innerHTML = '<div class="text-muted">Проверяю…</div>';
+        try {
+            const r = await API.get('/api/diagnostics/site-trace?domain=' + encodeURIComponent(domain));
+            box.innerHTML = renderTrace(r);
+        } catch (e) {
+            box.textContent = 'Ошибка: ' + e.message;
+        }
+    }
+
+    function renderTrace(r) {
+        if (!r.ok) return '<div class="text-muted">' + _esc(r.error || 'Не удалось') + '</div>';
+        let html = '<div style="font-size:13px;"><b>' + _esc(r.domain) + '</b>'
+            + (r.ips && r.ips.length ? ' <span class="text-muted">(' + _esc(r.ips.join(', ')) + ')</span>' : '')
+            + '<ul style="margin:6px 0 0 18px; padding:0;">'
+            + (r.summary || []).map(l => '<li>' + _esc(l) + '</li>').join('') + '</ul>';
+        const flows = (r.nfqws && r.nfqws.flows) || {};
+        const skipped = Object.keys(flows).filter(k => (flows[k].skipped || []).length);
+        if (skipped.length) {
+            html += '<details style="margin-top:6px;"><summary>Почему пропущены другие профили</summary>'
+                + skipped.map(k => '<div style="margin-top:4px;"><b>' + _esc(flows[k].title) + '</b>'
+                    + '<ul style="margin:2px 0 0 18px; padding:0;">'
+                    + flows[k].skipped.map(s => '<li>профиль ' + s.profile + ': ' + _esc(s.reason) + '</li>').join('')
+                    + '</ul></div>').join('') + '</details>';
+        }
+        const lists = r.lists || {};
+        const inLists = (lists.hostlists || []).map(x => x.name + ' (' + x.match + ')')
+            .concat((lists.named || []).map(x => '«' + x.name + '» (' + x.match + ')'));
+        html += '<div class="text-muted" style="margin-top:6px;">Есть в списках: '
+            + (inLists.length ? _esc(inLists.join(', ')) : 'нигде') + '</div>';
+        const errs = Object.keys(r.errors || {});
+        if (errs.length) {
+            html += '<div class="text-muted" style="margin-top:4px;">Не удалось проверить: '
+                + _esc(errs.map(k => k + ' — ' + r.errors[k]).join('; ')) + '</div>';
+        }
+        return html + '</div>';
+    }
+
+    function closeHelpReport() {
+        const modal = document.getElementById('diag-report-modal');
+        if (modal) modal.style.display = 'none';
+    }
+
+    function copyHelpReport() {
+        const box = document.getElementById('diag-report-text');
+        if (!box) return;
+        Clipboard.copyWithToast(box.value, { okText: 'Отчёт скопирован' });
+    }
+
     /* ═══════════════════ utils ═══════════════════ */
     function _esc(str) {
         if (!str) return '';
@@ -1421,5 +1566,10 @@ const DiagnosticsPage = (() => {
         restartGui,
         rebootDevice,
         retryMaintenanceCaps,
+        showHelpReport,
+        renderHelpReport,
+        closeHelpReport,
+        traceSite,
+        copyHelpReport,
     };
 })();

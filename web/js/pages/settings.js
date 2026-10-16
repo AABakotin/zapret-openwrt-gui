@@ -63,6 +63,12 @@ const SettingsPage = (() => {
             ]
         },
         {
+            id: 'notify',
+            label: 'Уведомления',
+            icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
+            fields: [],
+        },
+        {
             id: 'backup',
             label: 'Бэкап',
             icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>',
@@ -373,11 +379,202 @@ const SettingsPage = (() => {
             html += renderBackupBlock();
         }
 
+        // Уведомления в Telegram — свой API (/api/notify): токен не
+        // ездит в браузер и обратно через общий «Сохранить».
+        if (activeSection === 'notify') {
+            html += renderNotifyBlock();
+        }
+
         formEl.innerHTML = html;
 
         if (activeSection === 'interfaces') {
             loadInterfaces();
         }
+        if (activeSection === 'notify') {
+            loadNotify();
+        }
+    }
+
+    // ══════════════════ Уведомления (core/notify.py) ══════════════════
+
+    let notifyEvents = {};
+
+    const escapeHtml = s => SetupUI.escAttr(s);
+
+    function renderNotifyBlock() {
+        return `
+            <div style="font-size:13px; line-height:1.5;">
+                <p class="text-muted" style="margin-top:0;">
+                    События роутера в чат Telegram: сайт из мониторинга перестал
+                    или снова начал открываться, сторож перезапустил туннель,
+                    проверка стратегии откатила её, вышло обновление. Если Telegram
+                    недоступен, сообщения ждут в очереди (до суток) и уходят, когда
+                    связь появится.
+                </p>
+                <p class="text-muted">
+                    Создайте бота у @BotFather, вставьте токен, напишите боту
+                    что-нибудь и нажмите «Найти чат».
+                </p>
+                <label class="settings-toggle-row" style="display:flex; gap:8px; align-items:center; margin:10px 0;">
+                    <input type="checkbox" id="ntf-enabled"> Включить уведомления
+                </label>
+                <div class="form-group">
+                    <label class="form-label">Токен бота</label>
+                    <input class="form-input" id="ntf-token" type="password" autocomplete="off"
+                           placeholder="123456:ABC…">
+                    <div class="form-hint" id="ntf-token-hint"></div>
+                    <button class="btn btn-ghost btn-sm" id="ntf-token-clear" style="display:none;"
+                            onclick="SettingsPage.notifyClearToken()">Удалить сохранённый токен</button>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Чат (chat_id)</label>
+                    <div style="display:flex; gap:8px;">
+                        <input class="form-input" id="ntf-chat" placeholder="123456789">
+                        <button class="btn btn-ghost btn-sm" onclick="SettingsPage.notifyFindChats()">Найти чат</button>
+                    </div>
+                    <div id="ntf-chats" style="margin-top:6px;"></div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Через что отправлять</label>
+                    <select class="form-input" id="ntf-transport"><option value="">Напрямую</option></select>
+                    <div class="form-hint">Если api.telegram.org закрыт напрямую — через туннель или прокси, которые уже работают на роутере.</div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Свой HTTP-прокси (необязательно)</label>
+                    <input class="form-input" id="ntf-proxy" placeholder="http://192.168.1.10:3128">
+                    <div class="form-hint">Если задан, важнее выбора выше.</div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Что присылать</label>
+                    <div id="ntf-events"></div>
+                </div>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <button class="btn btn-primary btn-sm" onclick="SettingsPage.notifySave()">Сохранить</button>
+                    <button class="btn btn-ghost btn-sm" onclick="SettingsPage.notifyTest()">Отправить пробное</button>
+                </div>
+                <div class="form-hint" id="ntf-status" style="margin-top:8px;"></div>
+            </div>
+        `;
+    }
+
+    function notifyForm() {
+        const v = id => (document.getElementById(id) || {}).value || '';
+        const events = {};
+        document.querySelectorAll('#ntf-events input[data-event]').forEach(cb => {
+            events[cb.dataset.event] = cb.checked;
+        });
+        return {
+            enabled: !!(document.getElementById('ntf-enabled') || {}).checked,
+            token: v('ntf-token').trim(),
+            chat_id: v('ntf-chat').trim(),
+            transport: v('ntf-transport'),
+            proxy: v('ntf-proxy').trim(),
+            events,
+        };
+    }
+
+    async function loadNotify() {
+        try {
+            const r = await API.get('/api/notify');
+            const st = r.settings || {};
+            const status = r.status || {};
+            notifyEvents = status.events || {};
+            const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
+            const en = document.getElementById('ntf-enabled');
+            if (en) en.checked = !!st.enabled;
+            set('ntf-chat', st.chat_id);
+            set('ntf-proxy', st.proxy);
+            const hint = document.getElementById('ntf-token-hint');
+            if (hint) hint.textContent = st.has_token
+                ? 'Токен сохранён. Оставьте поле пустым, чтобы его не менять.' : '';
+            const clr = document.getElementById('ntf-token-clear');
+            if (clr) clr.style.display = st.has_token ? '' : 'none';
+            const evBox = document.getElementById('ntf-events');
+            if (evBox) {
+                evBox.innerHTML = Object.keys(notifyEvents).map(k =>
+                    '<label style="display:flex; gap:6px; align-items:center;">'
+                    + '<input type="checkbox" data-event="' + escapeHtml(k) + '"'
+                    + ((st.events || {})[k] !== false ? ' checked' : '') + '> '
+                    + escapeHtml(notifyEvents[k]) + '</label>').join('');
+            }
+            const sel = document.getElementById('ntf-transport');
+            if (sel && typeof TransportSelect !== 'undefined') {
+                try {
+                    const list = await TransportSelect.load();
+                    sel.innerHTML = TransportSelect.optionsHtml(list, st.transport || '');
+                } catch (_) { /* останется «Напрямую» */ }
+            }
+            const box = document.getElementById('ntf-status');
+            if (box) {
+                box.textContent = (status.pending ? 'В очереди: ' + status.pending + '. ' : '')
+                    + (status.last_error ? 'Последняя ошибка: ' + status.last_error : '');
+            }
+        } catch (e) {
+            Toast.error('Уведомления: ' + e.message);
+        }
+    }
+
+    async function notifySave() {
+        const form = notifyForm();
+        if (form.enabled && !form.chat_id) {
+            Toast.error('Укажите chat_id или нажмите «Найти чат»');
+            return;
+        }
+        try {
+            const r = await API.post('/api/notify/settings', form);
+            if (r.ok) { Toast.success('Уведомления сохранены'); loadNotify(); }
+            else Toast.error(r.error || 'Не сохранено');
+        } catch (e) { Toast.error(e.message); }
+    }
+
+    async function notifyTest() {
+        try {
+            const r = await API.post('/api/notify/test', notifyForm());
+            if (r.ok) Toast.success('Отправлено — проверьте чат');
+            else Toast.error(r.error || 'Не отправлено');
+        } catch (e) { Toast.error(e.message); }
+    }
+
+    async function notifyFindChats() {
+        const box = document.getElementById('ntf-chats');
+        if (box) box.textContent = 'Ищу…';
+        try {
+            const r = await API.post('/api/notify/find-chats', notifyForm());
+            if (!box) return;
+            if (!r.ok) { box.textContent = r.error || 'Не удалось'; return; }
+            if (!(r.chats || []).length) {
+                box.textContent = 'Чатов нет: напишите боту что-нибудь и повторите.';
+                return;
+            }
+            // id — в data-атрибуте, не в тексте onclick: экранирование
+            // HTML внутри JS-строки атрибута не защищает.
+            box.innerHTML = r.chats.map(c =>
+                '<button class="btn btn-ghost btn-sm" style="margin:2px;" data-chat="'
+                + escapeHtml(c.id) + '">' + escapeHtml(c.title) + ' (' + escapeHtml(c.id) + ')</button>').join('');
+            box.querySelectorAll('button[data-chat]').forEach(b => {
+                b.addEventListener('click', () => notifyPickChat(b.dataset.chat));
+            });
+        } catch (e) {
+            if (box) box.textContent = e.message;
+        }
+    }
+
+    async function notifyClearToken() {
+        if (!confirm('Удалить токен бота? Уведомления перестанут отправляться.')) return;
+        try {
+            const form = notifyForm();
+            form.token = '';
+            form.clear_token = true;
+            form.enabled = false;
+            const r = await API.post('/api/notify/settings', form);
+            if (r.ok) { Toast.success('Токен удалён'); loadNotify(); }
+            else Toast.error(r.error || 'Не удалось');
+        } catch (e) { Toast.error(e.message); }
+    }
+
+    function notifyPickChat(id) {
+        const el = document.getElementById('ntf-chat');
+        if (el) el.value = id;
     }
 
     function renderBackupBlock() {
@@ -1205,5 +1402,10 @@ const SettingsPage = (() => {
     return {
         render,
         destroy,
+        notifySave,
+        notifyTest,
+        notifyFindChats,
+        notifyPickChat,
+        notifyClearToken,
     };
 })();

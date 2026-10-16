@@ -203,6 +203,12 @@ class StrategyScanner:
         self._confirm_total = 0
         # id стратегий, поднятых в начало памятью подбора.
         self._memory_ids: list[str] = []
+        # Находки пробы обрыва 16 КБ, поставленные первыми (для resume).
+        self._freeze: list[dict] = []
+        # Стратегии сообщества, поставленные первыми, и что о базе сказать.
+        self._community: list[dict] = []
+        self._community_info: dict = {}
+        self._community_req = None
         # Записи каталога прогона по id — для перепроверки.
         self._entries_by_id: dict[str, CatalogEntry] = {}
         # Профиль цели (см. core/scan_targets.py)
@@ -215,6 +221,11 @@ class StrategyScanner:
         # (_decide_isolation); причина — в isolation_note статуса.
         self._isolated = False
         self._isolation_note = ""
+        # Параллельный подбор (core/scan_parallel.py): дорожек в пачке
+        # (0 — по одной), почему выключен, что просили при старте.
+        self._parallel = 0
+        self._parallel_note = ""
+        self._parallel_req = None
         self._sandbox = None
         self._sandbox_mark = 0
         # Метка проб baseline: при работающем движке сети замер «без
@@ -257,6 +268,10 @@ class StrategyScanner:
         callback: Optional[Callable] = None,
         stop_after: int = 0,
         confirm: bool = True,
+        require_isolation: bool = False,
+        custom: Optional[list] = None,
+        parallel: Optional[bool] = None,
+        community: Optional[bool] = None,
     ) -> bool:
         """
         Запустить сканирование стратегий в фоновом потоке.
@@ -273,6 +288,18 @@ class StrategyScanner:
                          стратегий (0 — перебрать всё).
             confirm:     Перепроверить лучшие находки несколько раз
                          (медиана вместо одного замера).
+            require_isolation: Только в песочнице: если она недоступна,
+                         прогон завершается ошибкой, а не гасит обход
+                         сети (автоподбор, core/autopick.py).
+            custom:      «Своя стратегия»: кандидаты из
+                         ``custom_candidates.check()`` вместо каталога;
+                         режим прогона — ``custom``.
+            parallel:    Проверять пачками в одной песочнице
+                         (core/scan_parallel.py); None — по настройке
+                         ``scan.parallel``.
+            community:   Стратегии сообщества своего провайдера первыми
+                         (core/community_strategies.py); None — по
+                         настройке ``scan.community``.
 
         Returns:
             True если сканирование запущено.
@@ -287,6 +314,24 @@ class StrategyScanner:
         dpi_type = str(dpi_type or "").strip().lower()
         stop_after = max(0, min(int(stop_after or 0), MAX_STOP_AFTER))
         confirm = bool(confirm)
+        custom = [dict(c) for c in (custom or [])]
+        if custom:
+            mode = "custom"
+
+        # Пока ждёт подтверждения «Применить с проверкой», движок — её:
+        # подбор занял бы его, и откат по сроку не смог бы перезапустить
+        # nfqws2 (core/safe_apply.py).
+        self.refusal = "Подбор стратегий уже выполняется"
+        try:
+            from core import safe_apply
+            if safe_apply.active():
+                self.refusal = ("идёт «Применить с проверкой» — сначала "
+                                "подтвердите или откатите стратегию")
+                log.warning("Подбор не запущен: %s" % self.refusal,
+                            source="scanner")
+                return False
+        except Exception:                       # noqa: BLE001 — граница
+            pass
 
         with self._lock:
             if self._status == STATUS_RUNNING:
@@ -316,6 +361,12 @@ class StrategyScanner:
             self._callback = callback
             self._stop_after = stop_after
             self._confirm = confirm
+            self._require_isolation = bool(require_isolation)
+            self._custom = custom
+            self._parallel_req = parallel
+            self._community_req = community
+            self._community, self._community_info = [], {}
+            self._parallel, self._parallel_note = 0, ""
             self._stopped_early = False
             self._rules_reapplied = 0
             self._stage = STAGE_PREPARE
@@ -416,7 +467,24 @@ class StrategyScanner:
                 # Песочница: кандидаты во втором nfqws2, обход сети цел.
                 "isolated": self._isolated,
                 "isolation_note": self._isolation_note,
+                # Параллельно: сколько дорожек (0 — по одной) и почему нет.
+                "parallel": self._parallel,
+                "parallel_note": self._parallel_note,
+                # База сообщества: AS, сколько записей, ошибка.
+                "community": dict(self._community_info),
+                "community_first": len(self._community),
+                # Семейство цели (tls/http/quic/voice) — для «Поделиться».
+                "family": self._family_name(),
             }
+
+    def _family_name(self) -> str:
+        if self._scan_profile is None:
+            return ""
+        try:
+            from core.scan_targets import traffic_family
+            return traffic_family(self._scan_profile, self._protocol)
+        except Exception:                       # noqa: BLE001
+            return ""
 
     def _probe_kind_name(self) -> str:
         """Чем проверяется цель: ``tls+body`` / ``quic`` / ``stun``."""
@@ -429,6 +497,31 @@ class StrategyScanner:
     def get_results(self) -> Optional[StrategyScanReport]:
         """Получить результаты последнего сканирования."""
         return self._report
+
+    def refine_base(self, lighter: bool = False) -> Optional[dict]:
+        """База для «уточнения» (core/strategy_refine.py) из этого прогона.
+
+        ``lighter`` — лучшая рабочая (искать вариант полегче), иначе —
+        продвинувшаяся дальше всех неудачная (наибольший ``score``).
+        """
+        with self._lock:
+            if self._status == STATUS_RUNNING:
+                return None
+            results = list(self._results)
+            entries = dict(self._entries_by_id)
+            target, protocol = self._target, self._protocol
+        pool = [r for r in results if r.success] if lighter \
+            else [r for r in results if not r.success and r.score > 0]
+        if not pool:
+            return None
+        best = max(pool, key=lambda r: (r.confirmed, r.score))
+        entry = entries.get(best.strategy_id) or \
+            self._catalog_entry(best.strategy_id)
+        if entry is None:
+            return None
+        return {"strategy_id": best.strategy_id, "name": best.strategy_name,
+                "args": entry.get_args_list(), "score": best.score,
+                "target": target, "protocol": protocol}
 
     def get_working_strategies(self) -> list[dict[str, Any]]:
         """Получить список работающих стратегий."""
@@ -586,7 +679,12 @@ class StrategyScanner:
             #    сети работает весь подбор; без неё — гасим, как раньше.
             self._decide_isolation()
             if not self._isolated:
+                if getattr(self, "_require_isolation", False):
+                    self._set_error("подбор только в песочнице, а она "
+                                    "недоступна: %s" % self._isolation_note)
+                    return
                 self._stop_current_nfqws()
+            self._decide_parallel(len(strategies))
 
             # 4. Baseline тест (без обхода). При работающем движке сети
             #    пробы идут с меткой мимо очереди.
@@ -616,11 +714,17 @@ class StrategyScanner:
             self._set_stage(STAGE_SCAN)
             self._set_phase("Перебор стратегий")
 
+            batch: dict = {}
+            batch_end = 0
             for idx, entry in enumerate(strategies):
                 if self._cancelled:
                     break
 
                 actual_idx = self._start_index + idx
+                # Параллельно: пачка начиная с этой стратегии — разом;
+                # дальше цикл берёт готовые итоги по одному.
+                if self._parallel and idx >= batch_end:
+                    batch, batch_end = self._probe_batch(strategies, idx)
                 with self._lock:
                     self._progress = idx + 1
                     self._current_strategy_name = entry.name
@@ -656,7 +760,11 @@ class StrategyScanner:
 
                 # Пробуем одну стратегию
                 probe_start = time.time()
-                result = self._probe_one_strategy(entry, actual_idx)
+                from_batch = idx in batch
+                if from_batch:
+                    result = batch.pop(idx)
+                else:
+                    result = self._probe_one_strategy(entry, actual_idx)
                 probe_elapsed = time.time() - probe_start
                 result.from_memory = entry.section_id in self._memory_ids
 
@@ -731,7 +839,8 @@ class StrategyScanner:
                     break
 
                 # Пауза между стратегиями
-                if not self._cancelled and idx < len(strategies) - 1:
+                if (not self._cancelled and not from_batch
+                        and idx < len(strategies) - 1):
                     time.sleep(INTER_STRATEGY_DELAY)
 
             # 7. Перепроверка лучших: один замер — это совпадение,
@@ -859,6 +968,13 @@ class StrategyScanner:
         Returns:
             Список CatalogEntry для тестирования.
         """
+        # «Своя стратегия»: только вставленное, без каталога и памяти.
+        if getattr(self, "_custom", None):
+            from core.custom_candidates import entries as custom_entries
+            self._memory_ids = []
+            return custom_entries(self._custom, self._protocol)[
+                self._start_index:]
+
         from core.catalog_loader import get_catalog_manager
 
         from core.scan_targets import detect_target, traffic_family
@@ -957,6 +1073,11 @@ class StrategyScanner:
 
         # То, что уже срабатывало на этой цели в этой сети, — первым:
         # пользователю важна рабочая стратегия, и шанс у этих выше.
+        # Каждый ставит своё в самое начало, поэтому порядок вызовов
+        # обратный итоговому: память подбора, находки пробы обрыва,
+        # сообщество.
+        entries = self._community_first(entries, family)
+        entries = self._freeze_first(entries, family)
         entries = self._memory_first(entries)
 
         # Применяем start_index для resume
@@ -996,6 +1117,93 @@ class StrategyScanner:
                 % (len(front), self._target), source="scanner")
         return front + [e for e in entries if e.section_id not in taken]
 
+    def _freeze_first(self, entries: list, family: str) -> list:
+        """Находки пробы «обрыв на 16 КБ» (core/freeze_probe) — первыми.
+
+        Только для TLS: приёмы пробы — на ClientHello. Для resume берётся
+        сохранённый список, а не свежий файл: «продолжить» обязано идти по
+        тому же порядку.
+        """
+        self._freeze = []
+        if self._protocol != "tcp" or family != "tls":
+            return entries
+        try:
+            if self._start_index > 0:
+                saved = self._load_resume_state().get("freeze")
+                found = saved if isinstance(saved, list) else []
+            else:
+                from core import freeze_probe
+                found = freeze_probe.candidates(freeze_probe.load())
+                found = found[:freeze_probe.SCAN_FIRST_MAX]
+            from core.custom_candidates import entries as custom_entries
+            front = custom_entries(found, self._protocol)
+        except Exception as e:                  # noqa: BLE001 — граница
+            log.debug("Находки пробы обрыва недоступны: %s" % e,
+                      source="scanner")
+            return entries
+        if not front:
+            return entries
+        self._freeze = found
+        log.info("Проба обрыва 16 КБ: первыми проверим %d её находок"
+                 % len(front), source="scanner")
+        # Те же шаги из каталога второй раз не пробуем.
+        have = {tuple(e.get_args_list()) for e in front}
+        return front + [e for e in entries
+                        if tuple(e.get_args_list()) not in have]
+
+    def _community_first(self, entries: list, family: str) -> list:
+        """Стратегии сообщества своего провайдера (core/community_strategies)
+        — первыми, если пользователь включил базу.
+
+        TLS и HTTP: база других не знает. Сеть (RIPEstat, GitHub) — только
+        здесь, в потоке сканера. Для resume — сохранённый список.
+        """
+        self._community, self._community_info = [], {}
+        req = getattr(self, "_community_req", None)
+        if req is None:
+            try:
+                from core.config_manager import get_config_manager
+                req = bool(get_config_manager().get("scan", "community",
+                                                    default=False))
+            except Exception:                   # noqa: BLE001 — граница
+                req = False
+        resuming = self._start_index > 0
+        # Resume — по сохранённому списку, даже если галку сняли: иначе
+        # позиция продолжения съехала бы на длину этого списка.
+        if (not req and not resuming) or self._protocol != "tcp" \
+                or family not in ("tls", "http"):
+            return entries
+        try:
+            if resuming:
+                saved = self._load_resume_state().get("community")
+                found = saved if isinstance(saved, list) else []
+                from core import community_strategies
+                info = {"asn": community_strategies.provider().get("asn")}
+            else:
+                from core import community_strategies
+                self._set_phase("Стратегии сообщества для вашего провайдера")
+                found, info = community_strategies.scan_candidates(
+                    self._target, family)
+            from core.custom_candidates import entries as custom_entries
+            front = custom_entries(found, self._protocol)
+        except Exception as e:                  # noqa: BLE001 — граница
+            log.warning("База сообщества недоступна: %s" % e,
+                        source="scanner")
+            self._community_info = {"error": str(e)[:200]}
+            return entries
+        self._community_info = info
+        if info.get("error"):
+            log.info("Сообщество: %s" % info["error"], source="scanner")
+        if not front:
+            return entries
+        self._community = found
+        log.info("Сообщество: первыми проверим %d стратегий абонентов "
+                 "AS%s" % (len(front), info.get("asn", "?")),
+                 source="scanner")
+        have = {tuple(e.get_args_list()) for e in front}
+        return front + [e for e in entries
+                        if tuple(e.get_args_list()) not in have]
+
     def _remembered_ids(self) -> list:
         """id стратегий из памяти: для resume — сохранённые, иначе свежие."""
         if self._start_index > 0:
@@ -1010,6 +1218,9 @@ class StrategyScanner:
         ids = []
         for item in found.get("items") or []:
             sid = str(item.get("strategy_id") or "")
+            # «Своя стратегия» в каталоге не живёт — по id её не поднять.
+            if sid.startswith("custom_"):
+                continue
             if (sid and sid not in ids and not item.get("stale")
                     and item.get("wins", 0) > item.get("losses", 0)):
                 ids.append(sid)
@@ -1024,7 +1235,7 @@ class StrategyScanner:
             if len(ids) >= MEMORY_FIRST_MAX:
                 break
             sid = str(item.get("strategy_id") or "")
-            if sid and sid not in ids:
+            if sid and sid not in ids and not sid.startswith("custom_"):
                 ids.append(sid)
         if len(ids) > own:
             log.info("Память подбора: %d стратегий от соседей по домену "
@@ -1316,7 +1527,47 @@ class StrategyScanner:
             elapsed_ms = (time.time() - start_time) * 1000
 
             # 7. Формируем результат
-            return StrategyProbeResult(
+            return self._probe_result(entry, probe, args_full, elapsed_ms)
+
+        except Exception as e:
+            elapsed_ms = (time.time() - start_time) * 1000
+            log.error(
+                "Ошибка пробы стратегии %s: %s" % (entry.name, e),
+                source="scanner",
+            )
+            return self._exception_result(entry, e, elapsed_ms)
+
+        finally:
+            # КРИТИЧНО: гарантируем cleanup после каждой стратегии
+            try:
+                if nfqws_started:
+                    nfqws.stop()
+            except Exception as e:
+                log.warning(
+                    "Ошибка остановки nfqws2: %s" % e,
+                    source="scanner",
+                )
+
+    def _exception_result(self, entry, e, elapsed_ms: float):
+        return StrategyProbeResult(
+            strategy_id=entry.section_id,
+            strategy_name=entry.name,
+            target=self._target,
+            success=False,
+            latency_ms=round(elapsed_ms, 2),
+            error="EXCEPTION",
+            protocol=self._protocol,
+            raw_data={
+                "detail": str(e)[:200],
+                "source_file": entry.source_file,
+                "level": entry.level,
+            },
+        )
+
+    def _probe_result(self, entry, probe: dict, args_full: str,
+                      elapsed_ms: float):
+        """Итог глубокой пробы → StrategyProbeResult."""
+        return StrategyProbeResult(
                 strategy_id=entry.section_id,
                 strategy_name=entry.name,
                 target=self._target,
@@ -1344,37 +1595,168 @@ class StrategyScanner:
                 },
             )
 
-        except Exception as e:
-            elapsed_ms = (time.time() - start_time) * 1000
-            log.error(
-                "Ошибка пробы стратегии %s: %s" % (entry.name, e),
-                source="scanner",
-            )
-            return StrategyProbeResult(
-                strategy_id=entry.section_id,
-                strategy_name=entry.name,
-                target=self._target,
-                success=False,
-                latency_ms=round(elapsed_ms, 2),
-                error="EXCEPTION",
-                protocol=self._protocol,
-                raw_data={
-                    "detail": str(e)[:200],
-                    "source_file": entry.source_file,
-                    "level": entry.level,
-                },
-            )
+    # ─────────────────── Параллельный подбор ───────────────────
 
-        finally:
-            # КРИТИЧНО: гарантируем cleanup после каждой стратегии
+    def _decide_parallel(self, count: int) -> None:
+        """Пачками или по одной — и почему (в статус и журнал)."""
+        from core import scan_parallel
+        self._parallel, self._parallel_note = 0, ""
+        self._batch_fails = 0
+        req = getattr(self, "_parallel_req", None)
+        try:
+            from core.config_manager import get_config_manager
+            value = get_config_manager().get("scan", "parallel",
+                                             default="off")
+        except Exception:                       # noqa: BLE001 — граница
+            value = "off"
+        # Галка формы главнее; включена — потолок дорожек всё равно из
+        # настройки, если там число.
+        if req is False:
+            value = "off"
+        elif req and not scan_parallel.enabled(value):
+            value = "auto"
+        if not scan_parallel.enabled(value):
+            return
+        if not self._isolated or self._sandbox is None:
+            note = "нужна песочница: %s" % (self._isolation_note or "нет")
+        elif count < scan_parallel.PAR_MIN:
+            note = "кандидатов меньше %d" % scan_parallel.PAR_MIN
+        elif not self._sandbox.supports_option("filter-mark"):
+            note = "nfqws2 старше 1.0.5: нет --filter-mark"
+        else:
+            note = ""
+        if note:
+            self._parallel_note = note
+            log.info("Параллельный подбор выключен: %s" % note,
+                     source="scanner")
+            return
+        self._parallel = scan_parallel.limit(value)
+        log.info("Параллельный подбор: до %d стратегий разом (по памяти "
+                 "— перед каждой пачкой)" % self._parallel, source="scanner")
+
+    @staticmethod
+    def _meminfo() -> str:
+        try:
+            with open("/proc/meminfo", "r") as f:
+                return f.read()
+        except OSError:
+            return ""
+
+    def _probe_batch(self, strategies: list, idx: int) -> tuple:
+        """Пачка с ``idx`` разом: ({индекс: результат}, конец пачки).
+
+        Не вошедшие в пачку (и вся пачка, которую nfqws2 не принял) в
+        словаре отсутствуют — цикл проверит их по одной, а новую пачку
+        начнёт только за концом этой. Находка пачки сразу
+        перепроверяется в одиночку; две пачки подряд не поднялись —
+        дальше по одной до конца прогона.
+        """
+        from core import scan_parallel
+        slots = min(self._parallel,
+                    scan_parallel.slots_for_memory(self._meminfo()))
+        chunk = strategies[idx:idx + slots]
+        end = idx + max(1, len(chunk))
+        if slots < 2 or len(chunk) < 2:
+            return {}, idx + 1
+        args_lists = []
+        for entry in chunk:
             try:
-                if nfqws_started:
-                    nfqws.stop()
-            except Exception as e:
-                log.warning(
-                    "Ошибка остановки nfqws2: %s" % e,
-                    source="scanner",
-                )
+                args_lists.append(self._build_strategy_args(entry))
+            except Exception:                   # noqa: BLE001 — по одной
+                args_lists.append([])
+        argv, packed, _alone = scan_parallel.combine(args_lists)
+        if len(packed) < 2:
+            return {}, end
+        entries = [chunk[i] for i in packed]
+        self._set_phase("Перебор стратегий: %d разом" % len(entries))
+        results = self._run_batch(entries, argv,
+                                  [" ".join(args_lists[i]) for i in packed])
+        if results is None:
+            self._batch_fails = getattr(self, "_batch_fails", 0) + 1
+            log.info("Пачка не поднялась — эти %d по одной" % len(entries),
+                     source="scanner")
+            if self._batch_fails >= 2:
+                self._parallel = 0
+                self._parallel_note = ("nfqws2 дважды не принял пачку — "
+                                       "дальше по одной")
+                log.warning("Параллельный подбор выключен: %s"
+                            % self._parallel_note, source="scanner")
+            return {}, end
+        self._batch_fails = 0
+        # Перепроверять по одной — не больше, чем нужно до stop_after:
+        # остальные находки пачки цикл проверит сам, если дойдёт.
+        with self._lock:
+            have = len([r for r in self._results if r.success])
+        need = (self._stop_after - have) if self._stop_after else len(packed)
+        out = {}
+        for i, result in zip(packed, results):
+            if result.success and (self._cancelled or need <= 0):
+                # Неперепроверенная находка в итог не идёт.
+                continue
+            if result.success:
+                need -= 1
+                with self._lock:
+                    self._current_strategy_name = chunk[i].name
+                solo = self._probe_one_strategy(
+                    chunk[i], self._start_index + idx + i)
+                if solo.raw_data is None:
+                    solo.raw_data = {}
+                solo.raw_data["parallel"] = (
+                    "найдена в пачке, перепроверена по одной")
+                result = solo
+            out[idx + i] = result
+        return out, end
+
+    def _run_batch(self, entries: list, argv: list, previews: list):
+        """Один nfqws2 песочницы на пачку, пробы — параллельно."""
+        from core import probe_mark, scan_parallel
+        from core.firewall import get_firewall_manager
+
+        nfqws = self._sandbox
+        if nfqws is None or not self._ensure_scan_rules(
+                get_firewall_manager()):
+            return None
+        if not nfqws.start(argv):
+            return None
+        try:
+            time.sleep(self._get_stabilization_delay())
+            if not nfqws.is_running():
+                return None
+            probes = [None] * len(entries)
+            took = [0.0] * len(entries)
+
+            def work(k):
+                t0 = time.time()
+                try:
+                    with probe_mark.marking(self._sandbox_mark,
+                                            ports=scan_parallel.slot_ports(k)):
+                        probes[k] = self._deep_probe()
+                except Exception as e:          # noqa: BLE001 — в итог
+                    probes[k] = e
+                took[k] = (time.time() - t0) * 1000
+
+            threads = [threading.Thread(target=work, args=(k,), daemon=True,
+                                        name="scan-slot-%d" % k)
+                       for k in range(len(entries))]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        finally:
+            try:
+                nfqws.stop()
+            except Exception as e:              # noqa: BLE001
+                log.warning("Ошибка остановки nfqws2: %s" % e,
+                            source="scanner")
+        # Время — своей дорожки, а не всей пачки.
+        out = []
+        for entry, probe, preview, ms in zip(entries, probes, previews,
+                                             took):
+            if isinstance(probe, dict):
+                out.append(self._probe_result(entry, probe, preview, ms))
+            else:
+                out.append(self._exception_result(entry, probe, ms))
+        return out
 
     # ─────────────────── Правила на весь прогон ───────────────────
 
@@ -1398,8 +1780,10 @@ class StrategyScanner:
     def _apply_scan_rules(self, fw) -> bool:
         """Основные правила — или только правила песочницы."""
         if self._isolated:
-            return fw.apply_sandbox_rules(self._sandbox_queue(),
-                                          self._sandbox_mark)
+            from core import scan_parallel
+            return fw.apply_sandbox_rules(
+                self._sandbox_queue(), self._sandbox_mark,
+                slots=scan_parallel.PAR_MAX if self._parallel else 0)
         return fw.apply_rules()
 
     def _sandbox_queue(self) -> int:
@@ -2084,7 +2468,9 @@ class StrategyScanner:
         ]
         if self._mode == "quick":
             return all_hosts[:1]
-        if self._mode == "standard":
+        # «Своя стратегия» — как standard: кандидатов мало, но человек
+        # ждёт ответа быстрее полного прогона.
+        if self._mode in ("standard", "custom"):
             return all_hosts[:2]
         return all_hosts[:4]
 
@@ -2490,6 +2876,13 @@ class StrategyScanner:
 
     def _save_resume_state(self, next_index: int) -> None:
         """Сохранить позицию для resume."""
+        # Свой текст не продолжить (его нет в каталоге), а файл один:
+        # не затираем позицию прерванного прогона по каталогу. Так же и
+        # фоновый автоподбор (он один ходит с require_isolation): его
+        # прогон не должен стирать «Продолжить» пользователя.
+        if self._mode == "custom" or getattr(self, "_require_isolation",
+                                             False):
+            return
         resume_file = self._resume_file_path()
         with self._lock:
             state = {
@@ -2498,6 +2891,8 @@ class StrategyScanner:
                 "mode": self._mode,
                 "dpi_type": self._dpi_type,
                 "memory_ids": list(self._memory_ids),
+                "freeze": list(getattr(self, "_freeze", []) or []),
+                "community": list(getattr(self, "_community", []) or []),
                 "next_index": next_index,
                 "timestamp": time.time(),
                 "working_count": len(
@@ -2585,18 +2980,10 @@ class StrategyScanner:
 
     # ─────────────────── Apply strategy ───────────────────
 
-    def _apply_probe_result(self, probe_result: StrategyProbeResult) -> bool:
+    def _save_probe_result(self, probe_result: StrategyProbeResult):
         """
-        Применить стратегию из результата пробы.
-
-        Создаёт user-стратегию в JSON-формате через StrategyManager
-        и применяет её через ``nfqws_control.apply_strategy``.
-
-        Args:
-            probe_result: Результат успешной пробы.
-
-        Returns:
-            True если стратегия применена.
+        Сохранить находку пользовательской стратегией (JSON) через
+        StrategyManager. Возвращает сохранённую стратегию или ``None``.
         """
         from core.catalog_loader import get_catalog_manager
         from core.strategy_builder import get_strategy_manager
@@ -2607,13 +2994,17 @@ class StrategyScanner:
             probe_result.strategy_id,
             protocol=probe_result.protocol,
         )
+        if entry is None:
+            # «Своя стратегия» — не из каталога: запись этого прогона.
+            with self._lock:
+                entry = self._entries_by_id.get(probe_result.strategy_id)
 
         if entry is None:
             log.error(
                 "Запись каталога не найдена: %s" % probe_result.strategy_id,
                 source="scanner",
             )
-            return False
+            return None
 
         # Собираем аргументы
         args = self._build_strategy_args(entry)
@@ -2623,7 +3014,7 @@ class StrategyScanner:
                 % probe_result.strategy_name,
                 source="scanner",
             )
-            return False
+            return None
 
         # Если в args есть ссылка на TMP_HOSTLIST_PATH (это означает,
         # что стратегия была trick-обёрткой), переписываем её в постоянный
@@ -2655,7 +3046,35 @@ class StrategyScanner:
                 "Не удалось сохранить стратегию: %s" % entry.name,
                 source="scanner",
             )
+            return None
+        return saved
+
+    def save_working_by_id(self, strategy_id: str):
+        """Сохранить находку своей стратегией, НЕ применяя её.
+
+        Для автоподбора (core/autopick.py): применять он будет через
+        «Применить с проверкой», а не напрямую.
+
+        Returns:
+            dict сохранённой стратегии (``id``, ``name``…) или ``None``.
+        """
+        with self._lock:
+            probe_result = next((r for r in self._results
+                                 if r.success and r.strategy_id == strategy_id),
+                                None)
+        if probe_result is None:
+            return None
+        return self._save_probe_result(probe_result)
+
+    def _apply_probe_result(self, probe_result: StrategyProbeResult) -> bool:
+        """
+        Применить стратегию из результата пробы: сохранить своей
+        (:meth:`_save_probe_result`) и применить.
+        """
+        saved = self._save_probe_result(probe_result)
+        if not saved:
             return False
+        entry_name = probe_result.strategy_name
 
         # Применяем тем же путём, что кнопка «Применить» и MCP
         # (`nfqws_control.apply_strategy`): общий мьютекс на движок (не
@@ -2668,13 +3087,13 @@ class StrategyScanner:
         if not result.get("ok"):
             log.error(
                 "Не удалось применить стратегию %s: %s"
-                % (entry.name, result.get("error") or "?"),
+                % (entry_name, result.get("error") or "?"),
                 source="scanner",
             )
             return False
 
         log.success(
-            "Стратегия применена: %s" % entry.name,
+            "Стратегия применена: %s" % entry_name,
             source="scanner",
         )
         return True

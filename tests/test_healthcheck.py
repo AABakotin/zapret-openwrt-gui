@@ -94,6 +94,28 @@ class TestHealthcheckTick(unittest.TestCase):
         # После reset streak сбрасывается, чтобы не зацикливать
         self.assertEqual(self.hc._fail_streak["youtube"], 0)
 
+    def test_deferred_autopick_retried_while_down(self):
+        """Автоподбор отложен из-за занятости ⇒ повтор на следующем провале,
+        не дожидаясь нового перехода «открывается → нет»."""
+        self.cfg._config["healthcheck"]["auto_reset"] = False
+        urls = {"https://www.youtube.com": False, "https://discord.com": True}
+        calls = []
+        with patch("core.diagnostics.check_http",
+                   side_effect=_fake_check_http_factory(urls)), \
+                patch("core.healthcheck._notify"), \
+                patch("core.healthcheck._autopick",
+                      lambda d, h: calls.append(d)):
+            with patch("core.healthcheck._autopick_pending",
+                       lambda d: False):
+                self.hc.run_now()
+                self.hc.run_now()   # переход — первый запуск
+                self.hc.run_now()   # не отложен — повтора нет
+            self.assertEqual(len(calls), 1)
+            with patch("core.healthcheck._autopick_pending",
+                       lambda d: True):
+                self.hc.run_now()   # отложен — повтор
+        self.assertEqual(len(calls), 2)
+
     def test_success_resets_failure_streak(self):
         urls = {"https://www.youtube.com": False, "https://discord.com": True}
         with patch("core.diagnostics.check_http",

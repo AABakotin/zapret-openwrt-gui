@@ -130,8 +130,10 @@ from core.mcp import registry
 # `self_edit_core`: оно снимает маскировку в ответе (по явному
 # `raw: true`) и запрет на запись секретных полей настроек. Ноль
 # напротив него — это его смысл.
+# «Куда пойдёт сайт»: + 1 на чтение (site_trace — сухой прогон домена
+# по слоям; наружу уходит только DNS-запрос, как у страницы).
 BY_SCOPE = {
-    "read": 40,
+    "read": 41,
     "control": 8,
     "strategies_write": 12,
     "config_write": 1,
@@ -218,6 +220,8 @@ class TestToolCounts(unittest.TestCase):
         "lists_list", "lua_functions_list",
         # S4 — перехват и трафик
         "firewall_status", "traffic_recent",
+        # «Куда пойдёт сайт»
+        "site_trace",
         # генератор конфигов WARP/Proton
         "vpngen_options", "vpngen_check",
         # S5 — туннели, диагностика, обновления

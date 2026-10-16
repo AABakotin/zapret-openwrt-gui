@@ -235,7 +235,11 @@ const StrategiesPage = (() => {
         consumePendingPrefill();
         // Делегирование обработчиков:data-action → методы StrategiesPage.
         _bindEvents(container);
+        // Итог «Применить с проверкой» меняет активную стратегию.
+        window.addEventListener('safeapply:done', onSafeApplyDone);
     }
+
+    function onSafeApplyDone() { fetchStrategies(); }
 
     // ══════════════════ Event delegation ══════════════════
 
@@ -290,6 +294,9 @@ const StrategiesPage = (() => {
                 }
                 case 'toggleFavorite': toggleFavorite(sid); break;
                 case 'applyStrategy': applyStrategy(sid); break;
+                case 'safeApplyStrategy': safeApplyStrategy(sid); break;
+                case 'applyAutopick': applyAutopick(autopickSite(el)); break;
+                case 'dismissAutopick': dismissAutopick(autopickSite(el)); break;
                 case 'copyStrategyToClipboard': copyStrategyToClipboard(sid); break;
                 case 'exportToCatalog': exportToCatalog(sid); break;
                 case 'openEdit': openEdit(sid); break;
@@ -589,8 +596,43 @@ const StrategiesPage = (() => {
             toggleLabel.textContent = st.running ? 'Включено (работает)'
                 : (st.enabled ? 'Включено' : 'Выключено');
         }
-        body.innerHTML = renderHealthcheck(st);
+        body.innerHTML = renderAutopick(st.autopick) + renderHealthcheck(st);
         lastHealthStatus = st;
+    }
+
+    // Предложение автоподбора (core/autopick.py) над итогами мониторинга.
+    function renderAutopick(ap) {
+        if (!ap) return '';
+        if (ap.running) {
+            return '<div class="alert alert-info" style="margin-bottom:8px;">Автоподбор: ищу стратегию для '
+                + escapeHtml(ap.running) + ' (в песочнице)…</div>';
+        }
+        return (ap.suggestions || []).map(s =>
+            '<div class="alert alert-warning" style="margin-bottom:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;"'
+            + ' data-autopick-site="' + escapeAttr(s.site) + '">'
+            + '<div style="flex:1; min-width:200px;">Автоподбор: для <b>' + escapeHtml(s.site)
+            + '</b> нашлась стратегия «' + escapeHtml(s.strategy_name) + '».</div>'
+            + '<button class="btn btn-primary btn-sm" data-action="applyAutopick">Применить с проверкой</button>'
+            + '<button class="btn btn-ghost btn-sm" data-action="dismissAutopick">Скрыть</button></div>').join('');
+    }
+
+    function autopickSite(el) {
+        const box = el && el.closest('[data-autopick-site]');
+        return box ? box.dataset.autopickSite : '';
+    }
+
+    async function applyAutopick(site) {
+        try {
+            const r = await API.post('/api/healthcheck/autopick/apply', { site });
+            if (!r.ok) { Toast.error(r.error || 'Не удалось'); return; }
+            if (typeof SafeApply !== 'undefined') SafeApply.poll();
+            refreshHealthcheck();
+        } catch (e) { Toast.error(e.message); }
+    }
+
+    async function dismissAutopick(site) {
+        try { await API.post('/api/healthcheck/autopick/dismiss', { site }); refreshHealthcheck(); }
+        catch (e) { Toast.error(e.message); }
     }
 
     // ══════════════════ Healthcheck: панель настроек ══════════════════
@@ -633,6 +675,8 @@ const StrategiesPage = (() => {
             </label>`;
         }).join('');
         const custom = (st.custom_domains || []).join('\n');
+        const apMode = (st.autopick && st.autopick.mode) || 'off';
+        const apHours = (st.autopick && st.autopick.min_interval_h) || 6;
         return `
             <div style="border:1px solid var(--border, rgba(127,127,127,.2)); border-radius:8px; padding:12px; background:var(--bg-secondary, rgba(127,127,127,.05));">
                 <div style="font-weight:600; margin-bottom:8px; font-size:13px;">Настройки авто-починки</div>
@@ -669,6 +713,24 @@ const StrategiesPage = (() => {
                     </div>
                 </div>
 
+                <div style="margin-bottom:10px;">
+                    <label style="font-size:13px;">Автоподбор, когда сайт перестал открываться:
+                        <select id="hc-autopick" style="margin-left:4px;">
+                            <option value="off"${apMode === 'off' ? ' selected' : ''}>выключен</option>
+                            <option value="suggest"${apMode === 'suggest' ? ' selected' : ''}>подобрать и предложить</option>
+                            <option value="apply"${apMode === 'apply' ? ' selected' : ''}>подобрать и применить с проверкой</option>
+                        </select>
+                    </label>
+                    <div style="font-size:12px; color:var(--text-muted); margin-top:3px;">
+                        Подбор идёт в песочнице (обход остальной сети не трогается), кандидаты из памяти подбора — первыми.
+                        Найденная стратегия заменяет текущую; при «применить» она остаётся, только если сайт открылся и
+                        ничего из открывавшегося не перестало (и только если текущая стратегия — один профиль; иначе предложит).
+                    </div>
+                    <label style="font-size:13px; display:block; margin-top:6px;">Один сайт — не чаще раза в, ч:
+                        <input type="number" id="hc-autopick-hours" min="0.5" max="168" step="0.5" value="${apHours}" style="width:64px; margin-left:4px;">
+                    </label>
+                </div>
+
                 <div style="display:flex; gap:8px;">
                     <button class="btn btn-primary btn-sm" data-action="saveHealthcheckSettings">Сохранить</button>
                     <button class="btn btn-ghost btn-sm" data-action="toggleHealthcheckSettings">Отмена</button>
@@ -687,6 +749,10 @@ const StrategiesPage = (() => {
         const consecutive_failures = parseInt((document.getElementById('hc-threshold') || {}).value, 10) || 2;
         const outage_guard = !!(document.getElementById('hc-outage-guard') || {}).checked;
         const control_domain = ((document.getElementById('hc-control') || {}).value || '').trim();
+        const autopick = {
+            mode: (document.getElementById('hc-autopick') || {}).value || 'off',
+            min_interval_h: parseFloat((document.getElementById('hc-autopick-hours') || {}).value) || 6,
+        };
 
         if (services.length === 0 && custom_domains.length === 0) {
             Toast.error('Выберите хотя бы один сайт для проверки');
@@ -694,7 +760,7 @@ const StrategiesPage = (() => {
         }
         try {
             const body = { services, custom_domains, interval_min,
-                consecutive_failures, outage_guard, control_domain };
+                consecutive_failures, outage_guard, control_domain, autopick };
             const data = await API.post('/api/healthcheck/config', body);
             if (data && data.ok) {
                 Toast.success('Настройки сохранены');
@@ -1236,6 +1302,7 @@ const StrategiesPage = (() => {
                     <details class="strategy-card-menu">
                         <summary class="btn btn-ghost btn-sm" title="Ещё действия">⋯</summary>
                         <div class="strategy-card-menu-list">
+                            ${!isActive ? '<button class="btn btn-ghost btn-sm" data-action="safeApplyStrategy" title="Замерить сайты мониторинга до и после; если не подтвердить — вернётся прежняя">Применить с проверкой</button>' : ''}
                             <button class="btn btn-ghost btn-sm" data-action="showPreview">Превью команды</button>
                             <button class="btn btn-ghost btn-sm" data-action="copyStrategyToClipboard">Скопировать в буфер</button>
                             ${isBuiltin
@@ -1278,6 +1345,18 @@ const StrategiesPage = (() => {
         } catch (err) {
             Toast.error(err.message);
         }
+    }
+
+    // «Применить с проверкой» (core/safe_apply.py): замер до/после и
+    // ожидание подтверждения; дальше всё ведёт баннер SafeApply.
+    async function safeApplyStrategy(sid) {
+        const s = strategies.find(x => x.id === sid);
+        if (!s) return;
+        if (!confirm('Применить «' + s.name + '» с проверкой?\n\n'
+            + 'Сначала проверю сайты мониторинга, потом применю стратегию и проверю ещё раз. '
+            + 'Если перестанет открываться всё, что открывалось, или движок упадёт — сразу верну прежнюю. '
+            + 'Иначе подтвердите в течение 3 минут, что всё работает, — без подтверждения тоже верну.')) return;
+        await SafeApply.start(sid, 180);
     }
 
     async function toggleFavorite(sid) {
@@ -2235,18 +2314,64 @@ const StrategiesPage = (() => {
 
     // Открыть редактор СОЗДАНИЯ, предзаполненный профилями из буфера.
     // Автоматически НЕ сохраняем — решение за пользователем (§3).
-    function _openPasteEditor(text) {
-        const profiles = _parseStrategyArgs(text);
-        if (!profiles.length) { Toast.warning('В буфере нет распознаваемой стратегии'); return; }
+    // Сначала — разбор на сервере (core/profile_import.py): конфиг другого
+    // роутера, пути к lua/блобам/спискам переносятся на наши, опции
+    // движка убираются. Не вышло — прежний разбор здесь же.
+    let pasteBusy = false;
+
+    async function _openPasteEditor(text) {
+        // Пока сервер разбирает, второй Ctrl+V не открывает второй редактор.
+        if (pasteBusy) return;
+        pasteBusy = true;
+        try {
+            await _openPasteEditorInner(text);
+        } finally {
+            pasteBusy = false;
+        }
+    }
+
+    async function _openPasteEditorInner(text) {
+        let profiles = [];
+        let res = null;
+        try {
+            res = await API.post('/api/strategies/import', { text });
+        } catch (_e) { res = null; }
+        if (res && !res.ok) {
+            // Сервер разобрал и отказал по делу (v1, нет --lua-desync) —
+            // сырой текст в редактор не тащим.
+            Toast.warning(res.error || 'В буфере нет распознаваемой стратегии');
+            return;
+        }
+        profiles = res ? (res.profiles || []) : _parseStrategyArgs(text);
+        if (!profiles.length || _anyModalOpen()) {
+            if (!profiles.length) Toast.warning('В буфере нет распознаваемой стратегии');
+            return;
+        }
+        const imported = res && res.ok && res.kind && res.kind !== 'args';
         openEditor({
             id: '',
             name: '',
-            description: 'Вставлено из буфера обмена',
+            description: imported ? 'Импорт: ' + res.kind_title : 'Вставлено из буфера обмена',
             type: profiles.length > 1 ? 'combined' : 'single',
             profiles,
         }, 'create');
+        const notes = ((res && res.warnings) || []).slice();
+        if (res && res.dropped && res.dropped.length) {
+            notes.push('Убрано: ' + res.dropped.join(' '));
+        }
+        const body = document.getElementById('modal-body');
+        if (body && notes.length) {
+            const box = document.createElement('div');
+            box.className = 'alert alert-warning';
+            box.style.marginBottom = '12px';
+            box.innerHTML = '<div class="alert-title">Что поменяно при вставке</div><ul style="margin:4px 0 0 18px; padding:0;">'
+                + notes.map(n => '<li>' + escapeHtml(n) + '</li>').join('') + '</ul>';
+            body.prepend(box);
+        }
         Toast.info('Стратегия из буфера — задайте ID/имя, проверьте и сохраните');
     }
+
+
 
     // Копирование в буфер с fallback на execCommand (работает и по http,
     // где navigator.clipboard недоступен).
@@ -2576,6 +2701,7 @@ const StrategiesPage = (() => {
     }
 
     function destroy() {
+        window.removeEventListener('safeapply:done', onSafeApplyDone);
         NfqwsAutocomplete.detachAll();
         detachGlobalKeys();
         disableModalResize();
@@ -2601,6 +2727,7 @@ const StrategiesPage = (() => {
         destroy,
         setFilter,
         applyStrategy,
+        safeApplyStrategy,
         toggleFavorite,
         deleteStrategy,
         duplicateStrategy,

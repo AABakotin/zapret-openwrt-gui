@@ -57,6 +57,7 @@ OWNER_EXPERIMENT = "experiment"
 OWNER_BLOCKCHECK = "blockcheck"
 OWNER_PROBE = "probe"
 OWNER_UI = "ui"
+OWNER_FREEZE = "freeze"
 
 # Человеческие названия для текстов отказа. Владелец, которого здесь
 # нет, покажется как есть: выдуманное описание хуже сырого имени.
@@ -66,6 +67,7 @@ OWNER_TEXT = {
     OWNER_BLOCKCHECK: "диагностика blockcheck",
     OWNER_PROBE: "сравнение «с обходом и без»",
     OWNER_UI: "управление обходом",
+    OWNER_FREEZE: "проба «обрыв на 16 КБ»",
 }
 
 # Имя lock-файла рядом с settings.json.

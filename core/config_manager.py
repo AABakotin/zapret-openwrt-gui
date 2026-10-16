@@ -279,6 +279,24 @@ DEFAULT_CONFIG = {
         "isolated": "auto",
         # Очередь песочницы; 0 — основная + 1. С основной совпасть не может.
         "sandbox_queue_num": 0,
+        # Параллельный подбор (core/scan_parallel.py): off — по одной, auto —
+        # пачками, сколько выдержит память, число 2-15 — не больше стольких.
+        # Галка в форме подбора главнее.
+        "parallel": "off",
+        # Стратегии сообщества своего провайдера первыми в подборе
+        # (core/community_strategies.py). Выключено: подбор тогда ходит в
+        # RIPEstat (провайдер по внешнему адресу) и на GitHub.
+        "community": False,
+    },
+    # База стратегий сообщества (core/community_strategies.py): репозиторий
+    # (owner/name), AS и название провайдера (пусто — определить по
+    # внешнему адресу и запомнить), транспорт скачивания
+    # (core/download_transport).
+    "community": {
+        "repo": "zemidala/nfqws2-strategies",
+        "asn": 0,
+        "provider": "",
+        "transport": "",
     },
 
     # --- Healthcheck (фоновый watchdog для autocircular) ---
@@ -287,6 +305,39 @@ DEFAULT_CONFIG = {
     # nfqws2 переподобрал стратегию автоматически, без участия пользователя.
     # По умолчанию ВЫКЛЮЧЕН: создаёт фоновый трафик роутера наружу. Включается
     # в GUI на странице Стратегии («Авто-починка»).
+    # Уведомления в Telegram (core/notify.py): события роутера уходят в
+    # чат через очередь — Telegram бывает закрыт как раз тогда, когда
+    # сломался обход. transport — спека core/download_transport
+    # ("" / awg[:iface] / singbox[:cfg] / mihomo[:cfg]); proxy — свой
+    # http://host:port, важнее transport.
+    "notify": {
+        "telegram": {
+            "enabled": False,
+            "token": "",
+            "chat_id": "",
+            "transport": "",
+            "proxy": "",
+        },
+        # Какие события слать (всё, что не выключено явно).
+        "events": {
+            "site_down": True,
+            "site_up": True,
+            "tunnel": True,
+            "safe_apply": True,
+            "autopick": True,
+            "update": True,
+        },
+    },
+
+    # История изменений файлов (core/file_history.py): settings.json,
+    # пользовательские стратегии, хостлисты и ipset'ы — версии, разница,
+    # откат. Хранилище — <config_dir>/history/, сжатое.
+    "history": {
+        "enabled": True,
+        # Бюджет хранилища, МБ: сверх него уходят самые старые версии.
+        "max_mb": 8,
+    },
+
     "healthcheck": {
         "enabled": False,
         # Интервал между проверками (минуты). Слишком частые проверки
@@ -296,6 +347,14 @@ DEFAULT_CONFIG = {
         # выученной стратегии для её хостов. 1 = первый же провал; 2 — баланс
         # между «не дёргать на временный лаг» и «починить быстро».
         "consecutive_failures": 2,
+        # Автоподбор (core/autopick.py): сайт перестал открываться →
+        # сканер в песочнице. mode: off | suggest (предложить) | apply
+        # (применить с проверкой без человека, откат при регрессе).
+        "autopick": {
+            "mode": "off",
+            # Один сайт — не чаще раза в столько часов.
+            "min_interval_h": 6,
+        },
         # Автоматический сброс state.tsv по затронутым хостам при провале.
         # Без него healthcheck только логирует; полезно для дебага.
         "auto_reset": True,

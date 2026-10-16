@@ -54,10 +54,11 @@ class FakeScanner:
 
     def start(self, target="", protocol="tcp", mode="quick",
               start_index=0, dpi_type="", callback=None, stop_after=0,
-              confirm=True):
+              confirm=True, custom=None):
         if self.running:
             return False
         self.running = True
+        self.custom = custom
         self.started_with = {"target": target, "protocol": protocol,
                              "mode": mode, "start_index": start_index,
                              "dpi_type": dpi_type, "stop_after": stop_after,
@@ -170,6 +171,30 @@ class TestStartReturnsAJob(JobCase):
         self.assertEqual(self.scanner.started_with["target"],
                          "youtube.com")
         self.assertEqual(self.scanner.started_with["mode"], "standard")
+
+    def test_custom_text_goes_instead_of_catalog(self):
+        from unittest import mock
+        with mock.patch("core.lint_env.known_functions",
+                        lambda: {"multisplit"}), \
+                mock.patch("core.lint_env.known_blobs", lambda: {}):
+            result = data("scan_start", {
+                "target": "youtube.com", "resume": True,
+                "custom": "«--lua-desync=multisplit:pos=1»"})
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["mode"], "custom")
+            self.assertEqual(self.scanner.started_with["start_index"], 0)
+            self.assertEqual(self.scanner.custom[0]["args"],
+                             ["--lua-desync=multisplit:pos=1"])
+
+    def test_custom_text_rejected_before_start(self):
+        from unittest import mock
+        with mock.patch("core.lint_env.known_functions",
+                        lambda: {"multisplit"}), \
+                mock.patch("core.lint_env.known_blobs", lambda: {}):
+            result = data("scan_start", {"target": "youtube.com",
+                                         "custom": "--lua-desync=nope"})
+        self.assertFalse(result["ok"])
+        self.assertFalse(self.scanner.running)
 
     def test_resume_asks_the_scanner_where_it_stopped(self):
         result = data("scan_start", {"target": "youtube.com",

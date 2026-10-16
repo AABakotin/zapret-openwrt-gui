@@ -510,9 +510,12 @@ class StrategyManager:
                          if k not in ("is_builtin", "_filepath")}
 
             try:
-                with open(filepath, "w", encoding="utf-8") as f:
-                    json.dump(save_data, f, indent=2, ensure_ascii=False)
-            except (IOError, OSError) as e:
+                # Атомарно: читатель не увидит половину файла, а история
+                # файлов (core/file_history.py) — увидит саму запись.
+                from core.safe_io import atomic_write_json
+                atomic_write_json(filepath, save_data)
+                os.chmod(filepath, 0o644)
+            except (IOError, OSError, TypeError, ValueError) as e:
                 log.error("Ошибка сохранения стратегии: %s" % e,
                           source="strategies")
                 return None
@@ -549,7 +552,8 @@ class StrategyManager:
             filepath = strategy.get("_filepath")
             if filepath and os.path.exists(filepath):
                 try:
-                    os.remove(filepath)
+                    from core.file_history import remove_file
+                    remove_file(filepath)
                 except OSError as e:
                     log.error("Ошибка удаления файла: %s" % e,
                               source="strategies")

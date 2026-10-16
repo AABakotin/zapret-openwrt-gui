@@ -38,7 +38,7 @@ const Sidebar = (() => {
     const NAV_GROUPS = [
         {
             items: [
-                { id: 'dashboard', label: 'Главная', icon: 'dashboard' },
+                { simple: true, id: 'dashboard', label: 'Главная', icon: 'dashboard' },
             ]
         },
         {
@@ -46,20 +46,20 @@ const Sidebar = (() => {
             // в группе «Диагностика» (раздел «Диагностика блокировок»).
             label: 'Обход DPI (nfqws2)',
             items: [
-                { id: 'control',     label: 'Управление', icon: 'play' },
-                { id: 'strategies',  label: 'Стратегии',  icon: 'strategy' },
+                { simple: true, id: 'control', label: 'Управление', icon: 'play' },
+                { simple: true, id: 'strategies', label: 'Стратегии',  icon: 'strategy' },
                 // Вкладки: официальный blockcheck2.sh + перебор по нашему каталогу.
-                { id: 'scan',        label: 'Подбор стратегий', icon: 'scan' },
+                { simple: true, id: 'scan', label: 'Подбор стратегий', icon: 'scan' },
             ]
         },
         {
             label: 'VPN и маршрутизация',
             items: [
-                { id: 'routing', label: 'Маршрутизация', icon: 'globe' },
+                { simple: true, id: 'routing', label: 'Маршрутизация', icon: 'globe' },
                 // Мастер и генератор — первые точки входа для новичка:
                 // «настроить VPN по шагам» и «получить бесплатный конфиг».
-                { id: 'setup-wizard', label: 'Мастер настройки', icon: 'play' },
-                { id: 'vpngen', label: 'Генератор конфигов', icon: 'awg' },
+                { simple: true, id: 'setup-wizard', label: 'Мастер настройки', icon: 'play' },
+                { simple: true, id: 'vpngen', label: 'Генератор конфигов', icon: 'awg' },
                 { id: 'awg', label: 'AmneziaWG', icon: 'awg', children: [
                     { id: 'awg-configs', label: 'Конфиги',  icon: 'lua' },
                     { id: 'awg-warp',    label: 'WARP',      icon: 'awg' },
@@ -88,8 +88,8 @@ const Sidebar = (() => {
         {
             label: 'Списки и данные',
             items: [
-                { id: 'lists',     label: 'Списки маршрутизации', icon: 'globe' },
-                { id: 'hostlists', label: 'Домены (nfqws2)', icon: 'hostlist' },
+                { simple: true, id: 'lists', label: 'Списки маршрутизации', icon: 'globe' },
+                { simple: true, id: 'hostlists', label: 'Домены (nfqws2)', icon: 'hostlist' },
                 { id: 'ipsets',    label: 'IP-списки',    icon: 'ipset' },
                 { id: 'blobs',     label: 'Блобы',        icon: 'blob' },
                 { id: 'lua',       label: 'Lua-скрипты',  icon: 'lua' },
@@ -100,24 +100,45 @@ const Sidebar = (() => {
         {
             label: 'Диагностика',
             items: [
-                { id: 'diagnostics', label: 'Диагностика', icon: 'diagnostic' },
+                { simple: true, id: 'diagnostics', label: 'Диагностика', icon: 'diagnostic' },
                 // Вкладки: «Тест доступности» + «Мониторинг DNS» (бывш. Block Detector).
                 { id: 'blockcheck',  label: 'Диагностика блокировок', icon: 'scan' },
-                { id: 'logs',        label: 'Логи',        icon: 'log' },
+                { simple: true, id: 'logs', label: 'Логи',        icon: 'log' },
             ]
         },
         {
             label: 'Система',
             items: [
-                { id: 'updates',     label: 'Обновления',  icon: 'zapret' },
+                { simple: true, id: 'updates', label: 'Обновления',  icon: 'zapret' },
+                { simple: true, id: 'history', label: 'История изменений', icon: 'log' },
                 { id: 'zapret',      label: 'Zapret2 (установка)', icon: 'zapret' },
                 { id: 'autostart',   label: 'Автозапуск',  icon: 'autostart' },
                 { id: 'mcp',         label: 'MCP-сервер',  icon: 'mcp' },
                 { id: 'agent',       label: 'Агент',       icon: 'agent' },
-                { id: 'settings',    label: 'Настройки',   icon: 'settings' },
+                { simple: true, id: 'settings', label: 'Настройки',   icon: 'settings' },
             ]
         },
     ];
+
+    // Простое меню — шесть разделов с главным, остальное по «Все разделы»
+    // (приём nfqws2-ui). Предпочтение устройства, как тема и «эксперт».
+    const NAV_KEY = 'zapret-gui-nav';
+
+    function _simple() {
+        try { return localStorage.getItem(NAV_KEY) === 'simple'; }
+        catch (_) { return false; }
+    }
+
+    function _setSimple(on) {
+        try { localStorage.setItem(NAV_KEY, on ? 'simple' : 'full'); } catch (_) {}
+        render();
+    }
+
+    // Пункт виден в простом меню: помечен simple или открыт сейчас (иначе
+    // переход по ссылке на скрытый раздел оставил бы меню без активного).
+    function _visible(item) {
+        return item.simple || item.id === currentPage || _hasActiveChild(item);
+    }
 
     let currentPage = 'dashboard';
     // Состояние раскрытия родительских пунктов дерева (id → bool).
@@ -237,9 +258,11 @@ const Sidebar = (() => {
         if (!nav) return;
 
         nav.innerHTML = '';
+        const simple = _simple();
 
         NAV_GROUPS.forEach((group, gi) => {
-            if (group.items.length === 0) return;
+            const items = simple ? group.items.filter(_visible) : group.items;
+            if (items.length === 0) return;
 
             // Разделитель между группами (кроме первой)
             if (gi > 0) {
@@ -256,15 +279,34 @@ const Sidebar = (() => {
                 nav.appendChild(label);
             }
 
-            // Элементы (с поддержкой вложенных children)
-            group.items.forEach(item => {
-                if (item.children && item.children.length) {
+            // Элементы (с поддержкой вложенных children). В простом меню
+            // дерево не раскрывается: дочерние разделы — у полного.
+            items.forEach(item => {
+                // Простое меню и открыт дочерний раздел — показываем его
+                // самого (с именем родителя), чтобы активный пункт был виден.
+                const activeChild = simple && !item.simple
+                    && (item.children || []).find(c => c.id === currentPage);
+                if (activeChild) {
+                    _renderLeaf(nav, Object.assign({}, activeChild,
+                        { label: `${item.label} · ${activeChild.label}` }), false);
+                    return;
+                }
+                if (item.children && item.children.length && !simple) {
                     _renderParent(nav, item);
                 } else {
                     _renderLeaf(nav, item, false);
                 }
             });
         });
+
+        const sw = document.createElement('div');
+        sw.className = 'nav-view-switch';
+        sw.textContent = simple ? 'Все разделы…' : 'Простое меню';
+        sw.title = simple
+            ? 'Показать все разделы GUI'
+            : 'Оставить в меню только главные разделы';
+        sw.addEventListener('click', () => _setSimple(!simple));
+        nav.appendChild(sw);
     }
 
     function setCurrentPage(pageId) {

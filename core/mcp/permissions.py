@@ -192,6 +192,7 @@ ENUMS = {
                                   "af_packet"],
     "nfqws.fastpath_workaround": ["auto", "1", "0"],
     "scan.isolated": ["auto", "off"],
+    "healthcheck.autopick.mode": ["off", "suggest", "apply"],
 }
 
 

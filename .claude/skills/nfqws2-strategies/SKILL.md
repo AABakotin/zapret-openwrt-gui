@@ -602,7 +602,8 @@ bt_handshake utp_bt_handshake`.
 **`fooling`:** `ip_ttl=N`, `ip6_ttl=N`, `ip_autottl=<delta>,<min>-<max>`,
 `ip6_autottl=…`, `ip6_hopbyhop[=hex]`, `ip6_hopbyhop2`, `ip6_destopt`,
 `ip6_destopt2`, `ip6_routing`, `ip6_ah`, `tcp_seq=<±int>`, `tcp_ack=<±int>`,
-`tcp_ts=<±int>`, `tcp_md5[=16byte_hex]`, `tcp_flags_set=FIN,SYN,…`,
+`tcp_ts=<±int>` (работает, только если клиент шлёт метки TCP — Windows по
+умолчанию не шлёт; линтер `tcp_ts_only_fooling`), `tcp_md5[=16byte_hex]`, `tcp_flags_set=FIN,SYN,…`,
 `tcp_flags_unset=ack`, `tcp_ts_up`, `tcp_nop_del`, `fool=<custom_lua_fn>`,
 `badsum`, `badseq`.
 
@@ -1044,6 +1045,15 @@ TLS-only без body считается псевдо-успехом (отсев 
 Аналог в `blockcheck2.sh` — env `CURL_HTTPS_GET=1` (GUI-галка «Качать полное
 тело»): HTTPS-проба делает GET всего тела вместо HEAD (`-I`).
 
+**Обрыв по сетям хостингов** (`core/freeze_probe.py`, карточка в «Подборе»):
+не по сайту, а по ASN — адреса из `data/tcp_targets.json` качаются до 25 КБ
+мимо очереди; для сетей с обрывом в песочнице перебираются шаблоны
+`hostfakesplit:…:host=NAME` и `fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=NAME`
+с «безопасными» именами (ya.ru, hcaptcha.com, vk.com…), засчитывается 3 из 3.
+Фильтр пробы — `--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello`.
+Находки — первыми в подборе (`_freeze_first`, только TLS-цели), «Применить для
+сети» — профиль с `--ipset=lists/asn<N>.txt` ПЕРВЫМ в стратегии `net16k-…`.
+
 ### 13.4 Предварительная проверка предпосылок
 
 `StrategyScanner._check_prerequisites()` (`:550`) вызывает
@@ -1080,6 +1090,25 @@ API: `GET /api/diagnostics/prerequisites`. Проверяет:
   `nft_queue` (как и основным правилам); state.tsv песочницы — свой
   (`/tmp/zapret-gui-sandbox-state`), circular-кандидаты не пишут в
   состояние обхода сети.
+* **Параллельный подбор** (`core/scan_parallel.py`, `scan.parallel` или
+  `parallel` в `/api/scan/start`, по умолчанию выключен): пачка кандидатов —
+  в ОДНОМ nfqws2 песочницы, профиль каждого начинается с
+  `--filter-mark=0x0k000000/0x0f000000` (nfqws2 1.0.5+, проверяется
+  `supports_option("filter-mark")`); пробы дорожки `k` открывают сокеты с
+  исходных портов `20000+256k…+255` (`probe_mark.marking(ports=…)`), а правила
+  песочницы (`apply_sandbox_rules(slots=15)`) ставят по этому порту метку
+  дорожки — в POSTROUTING (sport, после маршрутизации) и PREROUTING (dport:
+  ответы адресованы самому роутеру).
+  Дорожек — по памяти перед каждой пачкой (128 МБ — 5, 256 — 10, от 384 —
+  15). Находка пачки сразу перепроверяется по одной; не поднялась пачка —
+  её кандидаты идут по одной (виновника назовёт одиночный старт).
+* **Стратегии сообщества** (`core/community_strategies.py`, `scan.community`
+  или `community` в `/api/scan/start`, по умолчанию выключено): до 8 записей
+  из `data/AS<N>.json` базы `community.repo` (по умолчанию
+  zemidala/nfqws2-strategies) — первыми после памяти и находок пробы обрыва,
+  только для TLS/HTTP-целей; шаги строго `--lua-desync=fn:k=v…` без путей
+  (`STEP_RE`), плюс наш линтер. Отправки нет: «Поделиться/Подтвердить/Не
+  сработала» — ссылка на issue с `template=strategy.yml`.
 * **Правила firewall — один раз на прогон** (`_start_scan_rules` после
   baseline; в песочнице — только её правила). На стратегию — только
   старт/стоп nfqws2 и дешёвая проверка правил (`fw.is_applied()` или

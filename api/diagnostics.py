@@ -17,6 +17,7 @@ API диагностики сети и системы.
   GET  /api/diagnostics/nfqueue-deps/install/status — прогресс установки
   GET  /api/diagnostics/system     — расширенная системная информация
   GET  /api/diagnostics/services   — список доступных сервисов
+  GET  /api/diagnostics/site-trace?domain= — «Куда пойдёт сайт»
 
   POST /api/diagnostics/selfcheck         — запустить самодиагностику
                                             (body: {tests, pattern}), фоном
@@ -143,6 +144,23 @@ def register(app):
         from core.diagnostics import check_nfqws_conflicts
         result = check_nfqws_conflicts()
         return {"ok": True, "result": result}
+
+    @app.route("/api/diagnostics/site-trace")
+    def api_diagnostics_site_trace():
+        """«Куда пойдёт сайт»: hosts → DNS → единый слой → профиль nfqws2."""
+        response.content_type = "application/json; charset=utf-8"
+        from core import site_trace
+        return site_trace.trace(request.params.get("domain", ""))
+
+    @app.route("/api/diagnostics/help-report")
+    def api_diagnostics_help_report():
+        """«Отчёт для помощи»: версии, состояние, списки, журнал — без
+        секретов и внешнего адреса. Оба варианта разом: ``masked`` (сайты
+        скрыты) и ``sites`` (сайты видны, адреса скрыты) — галочка в UI
+        переключает их без нового запроса."""
+        response.content_type = "application/json; charset=utf-8"
+        from core.help_report import build_both
+        return {"ok": True, "result": build_both()}
 
     @app.route("/api/diagnostics/known-conflicts")
     def api_diagnostics_known_conflicts():

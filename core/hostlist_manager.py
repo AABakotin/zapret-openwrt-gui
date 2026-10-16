@@ -401,9 +401,6 @@ class HostlistManager:
         if not self._validate_name(name):
             return False
 
-        self._ensure_dir()
-        filepath = self._file_path(name)
-
         # Очищаем и дедуплицируем
         clean = []
         seen = set()
@@ -413,6 +410,21 @@ class HostlistManager:
                 clean.append(d)
                 seen.add(d)
 
+        if self._write_text(name, "\n".join(clean) + "\n" if clean else ""):
+            log.info(f"Сохранён {name}.txt ({len(clean)} доменов)", source="hostlists")
+            return True
+        return False
+
+    def _write_text(self, name, text):
+        """Записать файл списка как есть и разбудить тех, кто его читает.
+
+        Общая часть ``save_hostlist`` и правки «как есть» (с комментариями:
+        ``core/list_lint.fix_list``).
+        """
+        if not self._validate_name(name):
+            return False
+        self._ensure_dir()
+        filepath = self._file_path(name)
         try:
             # Атомарно: nfqws2 сам перечитывает хостлист по смене mtime
             # (nfq2/hostlist.c, HostlistsReloadCheck) и мог попасть на
@@ -420,11 +432,7 @@ class HostlistManager:
             # пустой список. 0644 — файл читает nfqws2 уже от --user=nobody.
             from core.safe_io import atomic_write_text
             with self._lock:
-                atomic_write_text(filepath,
-                                  "\n".join(clean) + "\n" if clean else "",
-                                  mode=0o644)
-
-            log.info(f"Сохранён {name}.txt ({len(clean)} доменов)", source="hostlists")
+                atomic_write_text(filepath, text, mode=0o644)
 
             # nfqws2 держит хостлисты в памяти и перечитывает их только по
             # SIGHUP. Без этого правка списка (в т.ч. исключений netrogat)
@@ -515,7 +523,8 @@ class HostlistManager:
 
         try:
             with self._lock:
-                os.rename(src, dst)
+                from core.file_history import rename_file
+                rename_file(src, dst)
             log.info(f"Список {old_name}.txt переименован в {new_name}.txt",
                      source="hostlists")
             try:
@@ -553,7 +562,8 @@ class HostlistManager:
 
         try:
             with self._lock:
-                os.remove(filepath)
+                from core.file_history import remove_file
+                remove_file(filepath)
             log.info(f"Удалён список {name}.txt", source="hostlists")
             # Подписка удалённого списка не должна достаться новому
             # списку с тем же именем.

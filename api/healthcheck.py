@@ -45,6 +45,33 @@ def register(app):
         for k in _CFG_KEYS:
             if k in body:
                 cfg.set("healthcheck", k, body[k])
+        # Автоподбор (core/autopick.py): только режим, остальное — как было.
+        mode = str((body.get("autopick") or {}).get("mode") or "").lower() \
+            if isinstance(body.get("autopick"), dict) else ""
+        from core.autopick import MODES
+        if mode in MODES:
+            cfg.set("healthcheck", "autopick", "mode", mode)
+        try:
+            hours = float((body.get("autopick") or {}).get("min_interval_h"))
+            cfg.set("healthcheck", "autopick", "min_interval_h",
+                    max(0.5, min(168.0, hours)))
+        except (AttributeError, TypeError, ValueError):
+            pass
+
+    @app.post("/api/healthcheck/autopick/apply")
+    def api_autopick_apply():
+        """«Применить с проверкой» для предложения автоподбора."""
+        response.content_type = "application/json; charset=utf-8"
+        from core import autopick
+        body = request.json or {}
+        return autopick.apply_suggestion(str(body.get("site") or ""))
+
+    @app.post("/api/healthcheck/autopick/dismiss")
+    def api_autopick_dismiss():
+        response.content_type = "application/json; charset=utf-8"
+        from core import autopick
+        body = request.json or {}
+        return autopick.dismiss(str(body.get("site") or ""))
 
     @app.post("/api/healthcheck/config")
     def api_healthcheck_config():

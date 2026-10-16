@@ -64,7 +64,7 @@ description: >-
   чистые функции, коды `unknown_lua_function`/`blob_unknown`/
   `blob_file_missing`/`blob_declared_after_new`/`lua_init_order`/
   `bare_trick_no_filter`/`l7_filter_without_ports`/`no_desync_action`/
-  `engine_owned_option`/`ttl_fake_on_udp`, ошибка линтера делает ответ `isError`; сборщик
+  `engine_owned_option`/`ttl_fake_on_udp`/`tcp_ts_only_fooling`, ошибка линтера делает ответ `isError`; сборщик
   вырезает из стратегии опции, которыми владеет GUI — `--user`/`--qnum`/
   `--fwmark`/`--pidfile`/`--writable`/`--debug=@файл`),
   транспорте и авторизации (Bearer-токен, Origin, bind, рейт-лимит,
@@ -325,6 +325,7 @@ UI), и `tools_by_scope`.
 | `tunnels_status` | read | нет | `tools/tunnels.py` | engine?, logs?, running_only?, instances?, offset?, limit? | шесть движков одним ответом: установлен/запущен/конфиги/трафик/последняя ошибка |
 | `diagnostics_run` | read | нет | `tools/diagnostics.py` | checks?, services?, offset?, limit? | окружение, конфликты, предпосылки; сетевые пробы — по разрешению `probes` |
 | `dpi_report` | read | нет | `tools/diagnostics.py` | targets?, offset?, limit? | последняя классификация DPI из blockcheck; **проб не запускает** |
+| `site_trace` | read | нет | `tools/diagnostics.py` | domain, resolve? | куда пойдёт сайт: hosts → DNS-правила → единый слой → списки → профиль nfqws2 по HTTPS/QUIC/HTTP; наружу — только DNS-запрос |
 | `updates_check` | read | нет | `tools/updates.py` | refresh?, updates_only?, offset?, limit? | версии движков и обновления; по умолчанию из кеша, `refresh` — по `probes` |
 | `config_writable_paths` | read | нет | `tools/config.py` | section?, search?, offset?, limit? | что можно менять: путь, тип, текущее значение, `enum` |
 | `audit_list` | read | нет | `tools/audit.py` | tool?, status?, mutating_only?, offset?, limit? | последние вызовы MCP из журнала, новые первыми, с пометкой «ещё откатывается» |
@@ -362,7 +363,7 @@ UI), и `tools_by_scope`.
 | `probe_targets` | probes | нет | `tools/probes.py` | targets, repeats?, timeout_sec?, port?, offset?, limit? | проба доменов DNS→TCP→TLS→HTTP; коды из `PROBE_CODES`, состояния не меняет |
 | `probe_compare` | probes | **да** | `tools/probes.py` | target, repeats?, timeout_sec?, toggle? | домен с обходом и без; вердикт из пяти. Движок работает и метка проб действует — сторона «без обхода» меряется пробой с `SO_MARK` мимо очереди (`without_method: probe_mark`), движок не трогается и `control` не нужен; иначе переключение движка требует ещё и `control` |
 | `dpi_classify` | probes | нет | `tools/probes.py` | target, repeats?, timeout_sec?, control_sni? | чем режут (приём d2k, `core/testers/dpi_differential.py`): ClientHello целиком → разрез после 1-го байта → чужое имя на тот же IP; вердикты `clear/prefix/opaque/address/response/local_address/unreachable/flaky/inconclusive`, `dpi_classification`+`remediation`; без метки при работающем движке `clear` не выдаётся |
-| `scan_start` | probes | **да** | `tools/scan.py` | target, protocol?, mode?, resume?, dpi_type?, stop_after?, confirm? | запустить подбор стратегий; ответ — `job_id`, сразу. `stop_after` — остановиться после N рабочих (0 — всё), `confirm` — перепроверить лучшие (медиана); `resume` берёт позицию только того же прогона |
+| `scan_start` | probes | **да** | `tools/scan.py` | target, protocol?, mode?, resume?, dpi_type?, stop_after?, confirm?, custom? | запустить подбор стратегий; ответ — `job_id`, сразу. `stop_after` — остановиться после N рабочих (0 — всё), `confirm` — перепроверить лучшие (медиана); `resume` берёт позицию только того же прогона; `custom` — своя стратегия текстом вместо каталога (`core/custom_candidates.py`: только шаги `--lua-desync`, до 10 кандидатов, неизвестная функция/blob отбрасывается до запуска, режим `custom`) |
 | `scan_stop` | probes | **да** | `tools/scan.py` | — | остановить подбор; проверенное остаётся в `scan_results` |
 | `blockcheck_start` | probes | **да** | `tools/blockcheck.py` | mode?, domains?, timeout_sec? | наш blockcheck в фоне; отчёт потом — `dpi_report` |
 | `blockcheck2_start` | probes | **да** | `tools/blockcheck.py` | domains?, scanlevel?, ipv?, repeats?, http?, tls12?, tls13?, http3? | оригинальный скрипт zapret2 (DOMAINS/SCANLEVEL/REPEATS/…) |
@@ -1281,7 +1282,7 @@ TTL отсчитывается от старта прогона и покрыв�
 |---|---|---|
 | `bare_trick_no_filter` | warning | `--lua-desync` без `--filter-tcp/udp/l7`: уедет на весь трафик очереди |
 | `unknown_lua_function` | **error** | имени нет в карте этого устройства |
-| `blob_unknown` | **error** | `blob=NAME` не объявлен и не известен реестру |
+| `blob_unknown` | **error** | `blob=NAME` не объявлен и не известен реестру (имя из `tls_client_hello_clone:blob=NAME` считается объявленным только в своём профиле и только после шага clone) |
 | `blob_file_missing` | **error** | объявлен, но файла нет — ПУСТОЙ fake |
 | `blob_declared_after_new` | **error** | `--blob=` после `--new` (декларации глобальны, §2 инв. 6) |
 | `lua_init_order` | **error** | `zapret-lib.lua` грузится не первым (§2 инв. 1) |
@@ -1289,6 +1290,7 @@ TTL отсчитывается от старта прогона и покрыв�
 | `no_desync_action` | warning | в argv нет ни одного `--lua-desync` |
 | `engine_owned_option` | **error** | в стратегии опция, которой владеет GUI (`--user`/`--uid`/`--qnum`/`--fwmark`/`--pidfile`/`--daemon`/`--writable`/`--intercept`/`--dry-run`, `--debug=@файл`) — сборщик её вырежет |
 | `ttl_fake_on_udp` | warning | UDP/QUIC-профиль с `ip_ttl`/`ip6_ttl`/`ip_autottl` в `--lua-desync`: ICMP time-exceeded от узла, где умер фейк, NAT доставляет клиенту — Safari/Network.framework рвут QUIC, Chrome нет (приём d2k, `d2k_icmpguard.h`). Одна находка на профиль; у TCP — мягкая ошибка, не ругаемся |
+| `tcp_ts_only_fooling` | warning | TCP-шаг `--lua-desync`, у которого `tcp_ts=` — единственная маскировка: Windows по умолчанию меток TCP не шлёт, и фейк уходит серверу настоящим пакетом. С роутера (и с Linux/Android/macOS/iOS) работает, с Windows — нет. Та же проверка — `strategy_lint.needs_tcp_timestamps`, по ней сканер ставит метку «нужны метки TCP» |
 
 ### Аргументы стратегии: чем владеет GUI
 

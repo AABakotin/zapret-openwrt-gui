@@ -383,6 +383,55 @@ DOCS = {
         "unit": "auto | off",
         "see": ["scan.sandbox_queue_num", "nfqws.desync_mark_sandbox"],
     },
+    "scan.parallel": {
+        "text": "Параллельный подбор: пачка кандидатов поднимается в одном "
+                "nfqws2 песочницы, каждый своим профилем с --filter-mark "
+                "(nfqws2 1.0.5+), пробы идут разом с разных исходных портов. "
+                "Дорожек — сколько выдержит память (128 МБ — 5, 256 МБ — "
+                "10, от 384 МБ — 15), считается перед каждой пачкой. "
+                "Находка пачки перепроверяется по одной. Нужна песочница "
+                "(scan.isolated). Поле parallel у POST /api/scan/start "
+                "главнее настройки.",
+        "unit": "off | auto | 2-15",
+        "empty": "off — по одной",
+        "see": ["scan.isolated"],
+    },
+    "scan.community": {
+        "text": "Стратегии сообщества своего провайдера первыми в подборе "
+                "(база zemidala/nfqws2-strategies по номеру AS, до 8 "
+                "штук). Подбор тогда ходит в RIPEstat (провайдер по "
+                "внешнему адресу) и на GitHub. Поле community у POST "
+                "/api/scan/start главнее настройки.",
+        "unit": "true | false",
+        "see": ["community.asn", "community.repo"],
+    },
+    "community.repo": {
+        "text": "Репозиторий базы стратегий сообщества (owner/name): "
+                "оттуда читается data/AS<номер>.json, туда ведут ссылки "
+                "«Поделиться / Подтвердить / Не сработала».",
+        "unit": "owner/name",
+        "see": ["scan.community"],
+    },
+    "community.asn": {
+        "text": "Номер AS провайдера для базы сообщества. 0 — определить "
+                "по внешнему адресу через RIPEstat и запомнить.",
+        "unit": "номер AS",
+        "empty": "0 — определить",
+        "see": ["community.provider"],
+    },
+    "community.provider": {
+        "text": "Название провайдера — подпись в форме «Поделиться».",
+        "unit": "текст",
+        "see": ["community.asn"],
+    },
+    "community.transport": {
+        "text": "Через что качать базу и ходить в RIPEstat: спека "
+                "core/download_transport (пусто — напрямую, awg[:iface], "
+                "singbox[:cfg], mihomo[:cfg]).",
+        "unit": "спека транспорта",
+        "empty": "напрямую",
+        "see": ["scan.community"],
+    },
     "scan.sandbox_queue_num": {
         "text": "Очередь NFQUEUE песочницы подбора. С основной "
                 "(nfqws.queue_num) совпасть не может — тогда берётся "
@@ -443,6 +492,20 @@ DOCS = {
                 "связи. Выключать имеет смысл, только если у вас "
                 "действительно бывает, что заблокированы все цели сразу.",
         "see": ["healthcheck.control_domain"],
+    },
+    "healthcheck.autopick.mode": {
+        "text": "Автоподбор, когда сайт мониторинга перестал открываться "
+                "(core/autopick.py): off — нет; suggest — подобрать в "
+                "песочнице и предложить; apply — применить «с проверкой» "
+                "без человека (остаётся, только если сайт открылся и "
+                "ничего не сломалось; только при стратегии из одного "
+                "профиля, иначе — предложение).",
+        "see": ["healthcheck.autopick.min_interval_h"],
+    },
+    "healthcheck.autopick.min_interval_h": {
+        "text": "Не подбирать для одного сайта чаще раза в столько часов: "
+                "подбор нагружает роутер и сеть.",
+        "unit": "часы",
     },
     "healthcheck.history_size": {
         "text": "Сколько последних результатов проверок держать в памяти "

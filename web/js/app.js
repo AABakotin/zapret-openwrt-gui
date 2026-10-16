@@ -17,6 +17,7 @@ const App = (() => {
         blobs:       BlobsPage,
         hosts:       HostsPage,
         diagnostics: DiagnosticsPage,
+        history:     HistoryPage,
         // «Диагностика блокировок» — вкладки «Тест доступности»
         // (BlockcheckPage) и «Мониторинг DNS» (BlockDetectorPage).
         blockcheck:  BlockcheckHubPage,
@@ -89,6 +90,10 @@ const App = (() => {
 
         // Загружаем версию GUI в sidebar
         loadSidebarVersion();
+
+        // Баннер «Применение с проверкой» — если проверка шла до
+        // перезагрузки страницы, он появится сразу.
+        if (typeof SafeApply !== 'undefined') SafeApply.init();
 
         // Слушаем изменение hash
         window.addEventListener('hashchange', onHashChange);

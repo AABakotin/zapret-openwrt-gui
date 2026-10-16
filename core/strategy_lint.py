@@ -59,6 +59,7 @@ CODE_L7_WITHOUT_PORTS = "l7_filter_without_ports"
 CODE_NO_DESYNC = "no_desync_action"
 CODE_ENGINE_OPTION = "engine_owned_option"
 CODE_TTL_FAKE_UDP = "ttl_fake_on_udp"
+CODE_TCP_TS_ONLY = "tcp_ts_only_fooling"
 
 # Опции nfqws2, которыми владеет GUI, а не стратегия. Первые четыре —
 # базовые аргументы (``NFQWSManager._build_base_args``): стратегия идёт
@@ -159,6 +160,13 @@ RULES = (
         "section": "скил nfqws2-strategies §8.8 (ip_ttl/ip_autottl) и "
                    "§15.4 (QUIC)",
     },
+    {
+        "code": CODE_TCP_TS_ONLY,
+        "severity": SEVERITY_WARNING,
+        "title": "единственная маскировка фейка — tcp_ts (нужны метки TCP)",
+        "section": "скил nfqws2-strategies §8 (fooling) и README, "
+                   "«Вопросы» (Windows и временные метки TCP)",
+    },
 )
 
 _BY_CODE = {item["code"]: item for item in RULES}
@@ -178,6 +186,8 @@ _BLOB_REF_RE = re.compile(r"(?<!-)blob=([A-Za-z0-9_]+)")
 
 # Декларация blob'а: `--blob=NAME:@файл` или `--blob=NAME:0xHEX`.
 _BLOB_DECL_RE = re.compile(r"^--blob=([^:]+):")
+_CLONE_BLOB_RE = re.compile(
+    r"^--lua-desync=tls_client_hello_clone:(?:.*:)?blob=([A-Za-z0-9_]+)")
 
 # Фильтры, которые реально сужают поток. `--filter-l3` (версия IP) и
 # `--hostlist` сюда не входят намеренно: первый не ограничивает ни порт,
@@ -297,9 +307,18 @@ def _check_blobs(profiles, known_blobs) -> list:
     out = []
     seen = set()
     for index, args in enumerate(profiles):
+        # tls_client_hello_clone:blob=X сам готовит blob X в desync
+        # соединения — ссылки на X законны дальше по ЭТОМУ профилю, но
+        # не раньше шага clone и не в соседних профилях.
+        cloned = set()
         for arg in args:
-            for name in _BLOB_REF_RE.findall(arg):
-                if name in _BUILTIN_BLOBS or name in declared or name in seen:
+            clone = _CLONE_BLOB_RE.match(arg)
+            refs = _BLOB_REF_RE.findall(arg)
+            if clone:
+                refs = [n for n in refs if n != clone.group(1)]
+            for name in refs:
+                if name in _BUILTIN_BLOBS or name in declared \
+                        or name in cloned or name in seen:
                     continue
                 if name.startswith("0x"):
                     # Инлайновый hex (`blob=0x0000…`) — это не имя, а само
@@ -324,6 +343,8 @@ def _check_blobs(profiles, known_blobs) -> list:
                         "сработает. Проверить — "
                         "blobs_list(missing_only=true)" % name,
                         where=arg, profile=index))
+            if clone:
+                cloned.add(clone.group(1))
     return out
 
 
@@ -436,6 +457,73 @@ def _check_ttl_fake_udp(profiles) -> list:
     return out
 
 
+# Маскировки (fooling) шагов --lua-desync. tcp_ts правит опцию TCP
+# timestamp — если клиент её не шлёт (Windows по умолчанию), править
+# нечего, и фейк уходит серверу настоящим пакетом. Остальные маскировки
+# от клиента не зависят. Только IPv4-годные: ip6_* на IPv4-пакет не
+# действуют, и с ними IPv4 остаётся замаскированным одним tcp_ts.
+# badseq — не из zapret-lib (apply_fooling его не знает), но его понимают
+# наши функции (custom_funcs.lua, fakemultidisorder.lua): считаем, чтобы
+# не ругаться на рабочую стратегию, но в совет не включаем.
+_TS_FOOLING_RE = re.compile(r"(?:^|:)tcp_ts=")
+_OTHER_FOOLING_RE = re.compile(
+    r"(?:^|:)(?:ip_(?:auto)?ttl=|tcp_seq=|tcp_ack=|tcp_md5(?:=|:|$)|"
+    r"tcp_flags_(?:set|unset)=|badsum(?::|$)|badseq(?::|$)|fool=)")
+
+
+def _ts_only_step(arg: str) -> bool:
+    """Шаг --lua-desync, у которого tcp_ts — единственная маскировка."""
+    return bool(_LUA_DESYNC_RE.match(arg) and _TS_FOOLING_RE.search(arg)
+                and not _OTHER_FOOLING_RE.search(arg))
+
+
+def _udp_only_profile(args) -> bool:
+    """Профиль только про UDP/QUIC — меток TCP он не касается."""
+    udp = any(_FILTER_UDP_RE.match(a) or _QUIC_MARK_RE.match(a)
+              for a in args)
+    return udp and not any(a.startswith("--filter-tcp=") for a in args)
+
+
+def needs_tcp_timestamps(argv) -> bool:
+    """Есть ли в TCP-профиле шаг, у которого tcp_ts — единственная маскировка.
+
+    Такая стратегия работает с роутера и с Linux/Android/macOS/iOS (метки
+    TCP включены), а с Windows — нет: Windows по умолчанию меток не шлёт
+    (``netsh interface tcp set global timestamps=enabled``). Сканер и
+    подбор идут с роутера и этого не видят — отсюда «с роутера
+    открывается, с ПК нет». Зеркало — ``Nfqws2Lint.needsTcpTimestamps``.
+    """
+    for args in split_profiles([str(a) for a in (argv or ())]):
+        if _udp_only_profile(args):
+            continue
+        if any(_ts_only_step(a) for a in args):
+            return True
+    return False
+
+
+def _check_tcp_ts_only(profiles) -> list:
+    """Шаг, у которого tcp_ts — единственная маскировка (см. выше)."""
+    out = []
+    for index, args in enumerate(profiles):
+        if _udp_only_profile(args):
+            continue
+        for arg in args:
+            if not _ts_only_step(arg):
+                continue
+            out.append(_finding(
+                CODE_TCP_TS_ONLY,
+                "профиль %d маскирует фейк только через tcp_ts: это правка "
+                "временной метки TCP, а Windows по умолчанию меток не шлёт — "
+                "там фейк уйдёт серверу настоящим пакетом. С роутера и с "
+                "Linux/Android/macOS/iOS работает, с Windows — нет. Добавьте "
+                "вторую маскировку (tcp_md5, ip_autottl, tcp_seq) или включите "
+                "метки в Windows: netsh interface tcp set global "
+                "timestamps=enabled" % index,
+                where=arg, profile=index))
+            break
+    return out
+
+
 def engine_owned(argv) -> list:
     """Аргументы стратегии, которые движку от неё передавать нельзя.
 
@@ -517,6 +605,7 @@ def lint(argv, known_functions=None, known_blobs=None) -> list:
     findings.extend(_check_bare_trick(profiles))
     findings.extend(_check_l7_without_ports(profiles))
     findings.extend(_check_ttl_fake_udp(profiles))
+    findings.extend(_check_tcp_ts_only(profiles))
 
     # Ошибки первыми: окно ответа у модели конечное, и обрезать надо
     # предупреждения, а не то, из-за чего стратегия не работает.

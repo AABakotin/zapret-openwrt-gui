@@ -274,6 +274,9 @@ class SingboxWatchdog:
                 source="singbox")
             return
 
+        from core import notify
+        notify.event("tunnel", "🔁 sing-box %s: %s — перезапускаю"
+                     % (name, reason))
         log.warning("singbox-watchdog: %s — %s; рестартую" % (name, reason),
                     source="singbox")
         try:

@@ -14,6 +14,9 @@ API подбора стратегий (Strategy Scanner).
   POST /api/scan/freeze/stop    — остановить пробу
   GET  /api/scan/freeze         — ход пробы или итог прошлой
   POST /api/scan/freeze/apply   — приём сети профилем на её IP-список
+  GET  /api/scan/community      — стратегии сообщества своего провайдера
+  POST /api/scan/community/share — ссылка на issue «Поделиться/Подтвердить/
+                                  Не сработала»
 """
 
 from bottle import request, response
@@ -131,6 +134,7 @@ def register(app):
             custom=custom,
             # Нет в запросе — по настройке scan.parallel.
             parallel=_flag(body.get("parallel")),
+            community=_flag(body.get("community")),
         )
 
         if not started:
@@ -205,6 +209,40 @@ def register(app):
             body = {}
         from core import freeze_probe
         res = freeze_probe.apply_network(str(body.get("asn") or ""))
+        if not res.get("ok"):
+            response.status = 400
+        return res
+
+    @app.route("/api/scan/community")
+    def api_scan_community():
+        """База сообщества: ?force=1 — скачать заново, ?detect=1 —
+        определить провайдера по внешнему адресу (RIPEstat)."""
+        response.content_type = "application/json; charset=utf-8"
+        from core import community_strategies
+        return {"ok": True, **community_strategies.overview(
+            force=request.query.get("force") == "1",
+            detect=request.query.get("detect") == "1")}
+
+    @app.post("/api/scan/community/share")
+    def api_scan_community_share():
+        """Предзаполненная issue для базы сообщества — отправляет человек.
+
+        Body: {"outcome": "works"|"fails", "args": "…" | [...],
+               "host": "сайт", "community": "id записи базы",
+               "result": "3/3", "proto": "tls"|"http"}
+        """
+        response.content_type = "application/json; charset=utf-8"
+        try:
+            body = request.json or {}
+        except Exception:
+            body = {}
+        from core import community_strategies
+        res = community_strategies.share(
+            "fails" if body.get("outcome") == "fails" else "works",
+            body.get("args") or [], host=str(body.get("host") or ""),
+            community=str(body.get("community") or ""),
+            result=str(body.get("result") or ""),
+            proto="http" if body.get("proto") == "http" else "tls")
         if not res.get("ok"):
             response.status = 400
         return res

@@ -209,12 +209,12 @@ def entries(candidates: list, protocol: str = "tcp") -> list:
             name=c.get("name") or "Своя стратегия %d" % n,
             description=c.get("description") or "вставлена пользователем",
             author="user",
-            label="custom",
+            label=c.get("label") or "custom",
             blobs=[],
             args="\n".join(c["args"]),
             protocol=protocol,
             level="custom",
-            source_file="custom",
+            source_file=c.get("source_file") or "custom",
         ))
     return out
 

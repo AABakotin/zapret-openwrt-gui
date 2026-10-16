@@ -283,6 +283,20 @@ DEFAULT_CONFIG = {
         # пачками, сколько выдержит память, число 2-15 — не больше стольких.
         # Галка в форме подбора главнее.
         "parallel": "off",
+        # Стратегии сообщества своего провайдера первыми в подборе
+        # (core/community_strategies.py). Выключено: подбор тогда ходит в
+        # RIPEstat (провайдер по внешнему адресу) и на GitHub.
+        "community": False,
+    },
+    # База стратегий сообщества (core/community_strategies.py): репозиторий
+    # (owner/name), AS и название провайдера (пусто — определить по
+    # внешнему адресу и запомнить), транспорт скачивания
+    # (core/download_transport).
+    "community": {
+        "repo": "zemidala/nfqws2-strategies",
+        "asn": 0,
+        "provider": "",
+        "transport": "",
     },
 
     # --- Healthcheck (фоновый watchdog для autocircular) ---

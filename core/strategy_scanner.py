@@ -205,6 +205,10 @@ class StrategyScanner:
         self._memory_ids: list[str] = []
         # Находки пробы обрыва 16 КБ, поставленные первыми (для resume).
         self._freeze: list[dict] = []
+        # Стратегии сообщества, поставленные первыми, и что о базе сказать.
+        self._community: list[dict] = []
+        self._community_info: dict = {}
+        self._community_req = None
         # Записи каталога прогона по id — для перепроверки.
         self._entries_by_id: dict[str, CatalogEntry] = {}
         # Профиль цели (см. core/scan_targets.py)
@@ -267,6 +271,7 @@ class StrategyScanner:
         require_isolation: bool = False,
         custom: Optional[list] = None,
         parallel: Optional[bool] = None,
+        community: Optional[bool] = None,
     ) -> bool:
         """
         Запустить сканирование стратегий в фоновом потоке.
@@ -292,6 +297,9 @@ class StrategyScanner:
             parallel:    Проверять пачками в одной песочнице
                          (core/scan_parallel.py); None — по настройке
                          ``scan.parallel``.
+            community:   Стратегии сообщества своего провайдера первыми
+                         (core/community_strategies.py); None — по
+                         настройке ``scan.community``.
 
         Returns:
             True если сканирование запущено.
@@ -341,6 +349,8 @@ class StrategyScanner:
             self._require_isolation = bool(require_isolation)
             self._custom = custom
             self._parallel_req = parallel
+            self._community_req = community
+            self._community, self._community_info = [], {}
             self._parallel, self._parallel_note = 0, ""
             self._stopped_early = False
             self._rules_reapplied = 0
@@ -445,6 +455,9 @@ class StrategyScanner:
                 # Параллельно: сколько дорожек (0 — по одной) и почему нет.
                 "parallel": self._parallel,
                 "parallel_note": self._parallel_note,
+                # База сообщества: AS, сколько записей, ошибка.
+                "community": dict(self._community_info),
+                "community_first": len(self._community),
             }
 
     def _probe_kind_name(self) -> str:
@@ -1036,6 +1049,7 @@ class StrategyScanner:
         # пользователю важна рабочая стратегия, и шанс у этих выше.
         entries = self._memory_first(entries)
         entries = self._freeze_first(entries, family)
+        entries = self._community_first(entries, family)
 
         # Применяем start_index для resume
         if self._start_index > 0 and self._start_index < len(entries):
@@ -1104,6 +1118,55 @@ class StrategyScanner:
         log.info("Проба обрыва 16 КБ: первыми проверим %d её находок"
                  % len(front), source="scanner")
         # Те же шаги из каталога второй раз не пробуем.
+        have = {tuple(e.get_args_list()) for e in front}
+        return front + [e for e in entries
+                        if tuple(e.get_args_list()) not in have]
+
+    def _community_first(self, entries: list, family: str) -> list:
+        """Стратегии сообщества своего провайдера (core/community_strategies)
+        — первыми, если пользователь включил базу.
+
+        TLS и HTTP: база других не знает. Сеть (RIPEstat, GitHub) — только
+        здесь, в потоке сканера. Для resume — сохранённый список.
+        """
+        self._community, self._community_info = [], {}
+        req = getattr(self, "_community_req", None)
+        if req is None:
+            try:
+                from core.config_manager import get_config_manager
+                req = bool(get_config_manager().get("scan", "community",
+                                                    default=False))
+            except Exception:                   # noqa: BLE001 — граница
+                req = False
+        if not req or self._protocol != "tcp" \
+                or family not in ("tls", "http"):
+            return entries
+        try:
+            if self._start_index > 0:
+                saved = self._load_resume_state().get("community")
+                found = saved if isinstance(saved, list) else []
+                info = {}
+            else:
+                from core import community_strategies
+                self._set_phase("Стратегии сообщества для вашего провайдера")
+                found, info = community_strategies.scan_candidates(
+                    self._target, family)
+            from core.custom_candidates import entries as custom_entries
+            front = custom_entries(found, self._protocol)
+        except Exception as e:                  # noqa: BLE001 — граница
+            log.warning("База сообщества недоступна: %s" % e,
+                        source="scanner")
+            self._community_info = {"error": str(e)[:200]}
+            return entries
+        self._community_info = info
+        if info.get("error"):
+            log.info("Сообщество: %s" % info["error"], source="scanner")
+        if not front:
+            return entries
+        self._community = found
+        log.info("Сообщество: первыми проверим %d стратегий абонентов "
+                 "AS%s" % (len(front), info.get("asn", "?")),
+                 source="scanner")
         have = {tuple(e.get_args_list()) for e in front}
         return front + [e for e in entries
                         if tuple(e.get_args_list()) not in have]
@@ -2787,6 +2850,7 @@ class StrategyScanner:
                 "dpi_type": self._dpi_type,
                 "memory_ids": list(self._memory_ids),
                 "freeze": list(getattr(self, "_freeze", []) or []),
+                "community": list(getattr(self, "_community", []) or []),
                 "next_index": next_index,
                 "timestamp": time.time(),
                 "working_count": len(

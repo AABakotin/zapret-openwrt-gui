@@ -152,6 +152,10 @@ const ScanPage = (() => {
                                     <input type="checkbox" id="scan-parallel">
                                     Проверять несколько разом (быстрее)
                                 </label>
+                                <label class="checkbox-option" title="До 8 стратегий, которые сработали у абонентов вашего провайдера (открытая база zemidala/nfqws2-strategies по номеру AS). Подбор узнает провайдера по внешнему адресу через RIPEstat и скачает базу с GitHub.">
+                                    <input type="checkbox" id="scan-community">
+                                    Сначала стратегии сообщества для моего провайдера
+                                </label>
                             </div>
                         </div>
 
@@ -240,6 +244,16 @@ const ScanPage = (() => {
                     </div>
                     <div id="scan-freeze-result" style="margin-top:8px; font-size:13px;"></div>
                 </div>
+
+                <div class="card" id="scan-community">
+                    <div class="card-title">Стратегии сообщества</div>
+                    <p class="form-hint">Открытая база стратегий по провайдерам (номер AS): что сработало у абонентов
+                        вашего провайдера. Провайдер определяется по внешнему адресу через RIPEstat, база читается с GitHub.
+                        Поделиться своей находкой — кнопкой у результата подбора: откроется заполненная форма, отправляете вы сами.</p>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="ScanPage.communityLoad(false)">Показать для моего провайдера</button>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="ScanPage.communityLoad(true)">Обновить</button>
+                    <div id="scan-community-list" style="margin-top:8px; font-size:13px;"></div>
+                </div>
             </div>
         `;
 
@@ -257,6 +271,8 @@ const ScanPage = (() => {
                               && data.config.scan.parallel) || 'off').toLowerCase();
             const el = document.getElementById('scan-parallel');
             if (el && !el.disabled) el.checked = v === 'auto' || v === 'on' || parseInt(v, 10) > 1;
+            const comm = document.getElementById('scan-community');
+            if (comm && !comm.disabled) comm.checked = !!(data.config.scan && data.config.scan.community);
         } catch (_e) { /* без фатала */ }
     }
 
@@ -423,6 +439,7 @@ const ScanPage = (() => {
             stop_after: parseInt(document.getElementById('scan-stop-after')?.value || '0', 10) || 0,
             confirm: !!document.getElementById('scan-confirm')?.checked,
             parallel: !!document.getElementById('scan-parallel')?.checked,
+            community: !!document.getElementById('scan-community')?.checked,
         };
         if (resume) body.resume = true;
         if (body.mode === 'custom') {
@@ -584,7 +601,7 @@ const ScanPage = (() => {
         setElText('scan-btn-resume-label',
                   data.stopped_early ? 'Искать дальше' : 'Продолжить с места остановки');
 
-        ['scan-target', 'scan-protocol', 'scan-mode', 'scan-stop-after', 'scan-confirm', 'scan-parallel', 'scan-custom'].forEach(id => {
+        ['scan-target', 'scan-protocol', 'scan-mode', 'scan-stop-after', 'scan-confirm', 'scan-parallel', 'scan-community', 'scan-custom'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.disabled = isRunning;
         });
@@ -687,6 +704,15 @@ const ScanPage = (() => {
                 : ['warn', 'Обход сети на время подбора остановлен'
                     + (data.isolation_note ? ' (' + data.isolation_note + ')' : '') + '.']);
         }
+        if (data.community_first > 0) {
+            notes.push(['info', (data.status === 'running' ? 'Сначала проверяем ' : 'Первыми проверили ')
+                + plural(data.community_first, 'стратегию', 'стратегии', 'стратегий')
+                + ' сообщества для вашего провайдера (AS' + ((data.community || {}).asn || '?') + ').']);
+        } else if (data.community && data.community.error) {
+            notes.push(['info', 'Стратегии сообщества не проверялись: ' + data.community.error + '.']);
+        } else if (data.community && data.community.asn && data.status !== 'running') {
+            notes.push(['info', 'Для вашего провайдера (AS' + data.community.asn + ') в базе сообщества стратегий пока нет — поделитесь найденной.']);
+        }
         if (data.status === 'running' && data.parallel > 0) {
             notes.push(['info', 'Проверяем до ' + data.parallel + ' стратегий разом (по памяти роутера); находки перепроверяются по одной.']);
         } else if (data.status === 'running' && data.parallel_note) {
@@ -771,9 +797,12 @@ const ScanPage = (() => {
         return 'Что можно сделать: ' + tips.join('; ') + '.';
     }
 
+    let shareItems = [];
+
     function renderWorking(working, report) {
         const el = document.getElementById('scan-results-list');
         if (!el) return;
+        shareItems = [];
         if (!working.length) { el.innerHTML = ''; return; }
         const kind = (report && report.probe_kind) || 'tls+body';
         const bestId = report && report.best_strategy && report.best_strategy.strategy_id;
@@ -793,6 +822,7 @@ const ScanPage = (() => {
             if (w.from_memory) badges.push('<span class="bc-badge" style="background:rgba(59,130,246,0.15); color:var(--accent);" title="Уже помогала на этом сайте в вашей сети">Уже работала у вас</span>');
             if (raw.is_full_preset) badges.push('<span class="bc-badge bc-badge-skip" title="Готовый набор со своими фильтрами">Готовый пресет</span>');
             if (raw.label === 'recommended') badges.push('<span class="bc-badge bc-badge-skip">Рекомендуемая</span>');
+            if (raw.label === 'community') badges.push('<span class="bc-badge" title="' + escapeHtml(w.description || 'Из базы сообщества') + '">Сообщество</span>');
             // Единственная маскировка — tcp_ts: с роутера работает, с Windows
             // нет (Windows не шлёт метки TCP). Подбор идёт с роутера и этого
             // не видит — предупреждаем здесь.
@@ -823,6 +853,7 @@ const ScanPage = (() => {
                             ${name} ${badges.join(' ')}
                         </div>
                         <div class="scan-result-meta">
+                            ${kind === 'tls+body' ? shareButton(w, true) : ''}
                             <button class="btn btn-primary btn-sm" onclick="ScanPage.applyStrategy(${i})">Применить</button>
                         </div>
                     </div>
@@ -849,11 +880,82 @@ const ScanPage = (() => {
         const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([code, n]) =>
             `<li><span class="scan-reason-count">${n}</span> ${escapeHtml(REASONS[code] || 'другая причина')}
              <span class="scan-reason-code">${escapeHtml(code)}</span></li>`).join('');
+        // Из базы сообщества, но не сработала — можно отметить в базе.
+        const comm = failed.filter(f => (f.raw_data || {}).label === 'community');
+        const commRows = comm.map(f => `<li>${escapeHtml(f.strategy_name || f.strategy_id)} ${shareButton(f, false)}</li>`).join('');
         el.innerHTML = `
+            ${comm.length ? `<div style="margin-top:8px;">Из базы сообщества у вас не сработали:<ul>${commRows}</ul></div>` : ''}
             <details class="scan-failures">
                 <summary>Почему не подошли остальные (${failed.length})</summary>
                 <ul>${rows}</ul>
             </details>`;
+    }
+
+    /* ───────── база сообщества ───────── */
+
+    async function communityLoad(force) {
+        const out = document.getElementById('scan-community-list');
+        if (!out) return;
+        out.textContent = 'Загружаем…';
+        let d;
+        try {
+            d = await API.get('/api/scan/community?detect=1' + (force ? '&force=1' : ''));
+        } catch (err) {
+            out.textContent = err.message;
+            return;
+        }
+        if (!d.asn) {
+            out.textContent = d.error || 'Провайдер не определён — впишите номер AS в настройке community.asn.';
+            return;
+        }
+        const head = 'AS' + escapeHtml(d.asn) + (d.provider ? ' · ' + escapeHtml(d.provider) : '')
+            + ' — ' + plural(d.items.length, 'стратегия', 'стратегии', 'стратегий')
+            + (d.error ? ' · ' + escapeHtml(d.error) : '');
+        const rows = d.items.map(x => '<tr' + (x.skipped ? ' style="opacity:.55"' : '') + '><td><code>'
+            + escapeHtml(x.steps.join(' ')) + '</code></td><td>подтвердили ' + x.reports
+            + (x.fails ? ', не сработала у ' + x.fails : '') + '</td><td>' + escapeHtml(x.last || '—')
+            + (x.fresh ? '' : ' (давно)') + (x.skipped ? ' · не пробуется' : '') + '</td></tr>').join('');
+        out.innerHTML = '<div>' + head + ' · <a href="' + escapeHtml(d.page || d.repo)
+            + '" target="_blank" rel="noopener">в репозитории</a></div>'
+            + (rows ? '<table class="table" style="margin-top:6px;"><tbody>' + rows + '</tbody></table>'
+                : '<div style="margin-top:4px;">Для вашего провайдера в базе пока ничего нет — поделитесь найденной в подборе.</div>');
+    }
+
+    /** «Поделиться» (своя находка), «Подтвердить» / «Не сработала» (из базы). */
+    function shareButton(r, works) {
+        const raw = r.raw_data || {};
+        const fromBase = raw.label === 'community';
+        if (!works && !fromBase) return '';
+        const idx = shareItems.push({ r, works }) - 1;
+        const [text, title] = !works
+            ? ['Не сработала', 'Отметить в базе сообщества: роутеры будут пробовать её позже других']
+            : fromBase
+                ? ['Подтвердить', 'Сработала и у вас — подтвердите в базе, это поднимет её для других']
+                : ['Поделиться', 'Отправить в базу сообщества: её будут пробовать абоненты вашего провайдера'];
+        return `<button class="btn btn-ghost btn-sm" title="${escapeHtml(title)}" onclick="ScanPage.share(${idx})">${text}</button>`;
+    }
+
+    async function share(idx) {
+        const item = shareItems[idx];
+        if (!item) return;
+        const r = item.r;
+        const raw = r.raw_data || {};
+        const src = String(raw.source_file || '');
+        const body = {
+            outcome: item.works ? 'works' : 'fails',
+            args: raw.args_preview || '',
+            host: (lastStatus && lastStatus.target) || '',
+            community: src.startsWith('community:') ? src.slice(10) : '',
+            result: r.checks > 1 ? r.passes + '/' + r.checks : (item.works ? '1/1' : '0/1'),
+        };
+        try {
+            const res = await API.post('/api/scan/community/share', body);
+            if (!res.ok) return;
+            if (!confirm('Откроется форма issue на GitHub — отправляете вы сами. В ней будет:\n\n' + res.text)) return;
+            window.open(res.url, '_blank', 'noopener');
+        } catch (err) {
+            Toast.error(err.message);
+        }
     }
 
     /* ───────── helpers ───────── */
@@ -902,5 +1004,5 @@ const ScanPage = (() => {
     /* ───────── public ───────── */
 
     return { render, destroy, start, stop, applyStrategy, pickTarget, refreshHints,
-             toggleCustom, checkCustom, refine, freezeStart, freezeStop, freezeApply };
+             toggleCustom, checkCustom, refine, freezeStart, freezeStop, freezeApply, share, communityLoad };
 })();

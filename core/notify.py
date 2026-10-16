@@ -110,17 +110,25 @@ def _save_queue(queue: list) -> None:
 # ─────────────────────────── постановка ────────────────────────────
 
 def _host() -> str:
+    """Имя роутера (без get_system_info — тот ещё гоняет ``ip route``)."""
     try:
-        from core.system_info import get_system_info
-        return get_system_info().get("hostname") or ""
-    except Exception:                               # noqa: BLE001
-        return ""
+        with open("/etc/hostname", encoding="utf-8") as f:
+            name = f.read().strip()
+        if name:
+            return name
+    except OSError:
+        pass
+    import platform
+    return platform.node() or ""
 
 
-def event(kind: str, text: str) -> bool:
+def event(kind: str, text: str, dedup: bool = True) -> bool:
     """Поставить уведомление, если включено и этот вид не выключен.
 
     Безопасно звать откуда угодно: ничего не бросает и не ждёт сети.
+    ``dedup=False`` — для источника, который сам шлёт только переходы
+    состояния (healthcheck): там одинаковый текст через пять минут —
+    новое событие, а не повтор.
     """
     try:
         st = settings()
@@ -133,9 +141,10 @@ def event(kind: str, text: str) -> bool:
             for k in [k for k, ts in _recent.items()
                       if now - ts > DEDUP_SEC]:
                 _recent.pop(k, None)
-            if text in _recent:
-                return False
-            _recent[text] = now
+            if dedup:
+                if text in _recent:
+                    return False
+                _recent[text] = now
             queue = _load_queue()
             queue.append({"ts": now, "kind": kind, "text": text})
             _save_queue(queue)
@@ -157,6 +166,12 @@ def _opener(st: dict):
     return build_opener(st["transport"]) or urllib.request.build_opener()
 
 
+class Rejected(RuntimeError):
+    """Telegram ответил 400 — не примет это сообщение никогда (длина,
+    разметка). Повторять бессмысленно, держать в голове очереди —
+    значит задержать всё, что за ним."""
+
+
 def _call(st: dict, method: str, payload: dict | None = None) -> dict:
     """Вызов Bot API. Ошибка — RuntimeError без токена в тексте."""
     url = "%s/bot%s/%s" % (API, st["token"], method)
@@ -171,7 +186,9 @@ def _call(st: dict, method: str, payload: dict | None = None) -> dict:
             body = json.loads(e.read().decode("utf-8", "replace") or "{}")
         except ValueError:
             body = {}
-        raise RuntimeError("Telegram: %s %s" % (
+        cls = Rejected if e.code == 400 and method == "sendMessage" \
+            else RuntimeError
+        raise cls("Telegram: %s %s" % (
             e.code, body.get("description") or e.reason)) from None
     except Exception as e:                          # noqa: BLE001
         raise RuntimeError(_scrub(str(e) or type(e).__name__,
@@ -240,9 +257,35 @@ def chats_from_updates(updates) -> list:
     return out
 
 
+_flush_lock = threading.Lock()
+
+
 def flush() -> dict:
     """Отправить очередь по порядку; первая неудача — стоп до следующей
-    попытки (порядок сообщений важнее скорости)."""
+    попытки (порядок сообщений важнее скорости).
+
+    Одновременно — одна отправка (поток и кнопка «отправить сейчас»
+    иначе отправили бы голову очереди дважды). Сообщение, которое
+    Telegram отверг (400), выбрасывается, а не держит очередь.
+    """
+    if not _flush_lock.acquire(blocking=False):
+        return {"ok": True, "sent": 0, "busy": True,
+                "pending": len(_load_queue())}
+    try:
+        return _flush()
+    finally:
+        _flush_lock.release()
+
+
+def _drop(msg: dict) -> None:
+    with _lock:
+        queue = [m for m in _load_queue()
+                 if not (m.get("ts") == msg["ts"]
+                         and m.get("text") == msg["text"])]
+        _save_queue(queue)
+
+
+def _flush() -> dict:
     st = settings()
     sent, error = 0, ""
     if not st["enabled"] or not st["token"] or not st["chat_id"]:
@@ -265,15 +308,15 @@ def flush() -> dict:
                 "chat_id": st["chat_id"],
                 "text": format_text(msg["text"] + late, host),
                 "disable_web_page_preview": True})
+        except Rejected as e:
+            log.warning("уведомление отвергнуто и выброшено: %s" % e,
+                        source="notify")
+            _drop(msg)
+            continue
         except RuntimeError as e:
             error = str(e)
             break
-        with _lock:
-            queue = _load_queue()
-            queue = [m for m in queue
-                     if not (m.get("ts") == msg["ts"]
-                             and m.get("text") == msg["text"])]
-            _save_queue(queue)
+        _drop(msg)
         sent += 1
     return {"ok": not error, "sent": sent, "error": error,
             "pending": len(_load_queue())}

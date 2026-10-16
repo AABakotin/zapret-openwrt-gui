@@ -399,10 +399,7 @@ const SettingsPage = (() => {
 
     let notifyEvents = {};
 
-    function escapeHtml(t) {
-        return String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
+    const escapeHtml = s => SetupUI.escAttr(s);
 
     function renderNotifyBlock() {
         return `
@@ -426,6 +423,8 @@ const SettingsPage = (() => {
                     <input class="form-input" id="ntf-token" type="password" autocomplete="off"
                            placeholder="123456:ABC…">
                     <div class="form-hint" id="ntf-token-hint"></div>
+                    <button class="btn btn-ghost btn-sm" id="ntf-token-clear" style="display:none;"
+                            onclick="SettingsPage.notifyClearToken()">Удалить сохранённый токен</button>
                 </div>
                 <div class="form-group">
                     <label class="form-label">Чат (chat_id)</label>
@@ -488,6 +487,8 @@ const SettingsPage = (() => {
             const hint = document.getElementById('ntf-token-hint');
             if (hint) hint.textContent = st.has_token
                 ? 'Токен сохранён. Оставьте поле пустым, чтобы его не менять.' : '';
+            const clr = document.getElementById('ntf-token-clear');
+            if (clr) clr.style.display = st.has_token ? '' : 'none';
             const evBox = document.getElementById('ntf-events');
             if (evBox) {
                 evBox.innerHTML = Object.keys(notifyEvents).map(k =>
@@ -545,12 +546,30 @@ const SettingsPage = (() => {
                 box.textContent = 'Чатов нет: напишите боту что-нибудь и повторите.';
                 return;
             }
+            // id — в data-атрибуте, не в тексте onclick: экранирование
+            // HTML внутри JS-строки атрибута не защищает.
             box.innerHTML = r.chats.map(c =>
-                '<button class="btn btn-ghost btn-sm" style="margin:2px;" onclick="SettingsPage.notifyPickChat(\''
-                + escapeHtml(c.id) + '\')">' + escapeHtml(c.title) + ' (' + escapeHtml(c.id) + ')</button>').join('');
+                '<button class="btn btn-ghost btn-sm" style="margin:2px;" data-chat="'
+                + escapeHtml(c.id) + '">' + escapeHtml(c.title) + ' (' + escapeHtml(c.id) + ')</button>').join('');
+            box.querySelectorAll('button[data-chat]').forEach(b => {
+                b.addEventListener('click', () => notifyPickChat(b.dataset.chat));
+            });
         } catch (e) {
             if (box) box.textContent = e.message;
         }
+    }
+
+    async function notifyClearToken() {
+        if (!confirm('Удалить токен бота? Уведомления перестанут отправляться.')) return;
+        try {
+            const form = notifyForm();
+            form.token = '';
+            form.clear_token = true;
+            form.enabled = false;
+            const r = await API.post('/api/notify/settings', form);
+            if (r.ok) { Toast.success('Токен удалён'); loadNotify(); }
+            else Toast.error(r.error || 'Не удалось');
+        } catch (e) { Toast.error(e.message); }
     }
 
     function notifyPickChat(id) {
@@ -1387,5 +1406,6 @@ const SettingsPage = (() => {
         notifyTest,
         notifyFindChats,
         notifyPickChat,
+        notifyClearToken,
     };
 })();

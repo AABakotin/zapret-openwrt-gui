@@ -43,8 +43,10 @@ _instance_lock = threading.Lock()
 
 
 def _notify(kind: str, text: str) -> None:
+    # Переходы считает сам healthcheck — склейка повторов по тексту
+    # проглотила бы «упал» после быстрого «упал → поднялся».
     from core import notify
-    notify.event(kind, text)
+    notify.event(kind, text, dedup=False)
 
 
 def get_healthcheck():
@@ -72,6 +74,9 @@ class HealthcheckDaemon:
         # Состояние «подряд провалов» по сервисам, чтобы триггерить reset
         # после consecutive_failures штук, а не на одном случайном.
         self._fail_streak = {}     # service_name → int
+        # О каких сервисах уже сообщили «не открывается» (core/notify):
+        # следующее сообщение — только «снова открывается».
+        self._notified_down = set()
 
         # Идёт ли прямо сейчас проверка (для индикатора в GUI и защиты от
         # параллельных run_now). Отдельный поток для неблокирующего run_now.
@@ -376,7 +381,12 @@ class HealthcheckDaemon:
         for entry in results:
             name = entry["service"]
             if entry["ok"]:
-                if self._fail_streak.get(name, 0) >= threshold:
+                # Сообщаем о переходах, а не о счётчике: авто-сброс
+                # обнуляет streak на пороге, и по нему «снова открывается»
+                # не пришло бы никогда, а «не открывается» — каждые
+                # threshold проверок.
+                if name in self._notified_down:
+                    self._notified_down.discard(name)
                     _notify("site_up", "✅ %s снова открывается"
                             % entry["display"])
                 self._fail_streak[name] = 0
@@ -391,7 +401,9 @@ class HealthcheckDaemon:
 
             self._fail_streak[name] = self._fail_streak.get(name, 0) + 1
             entry["fail_streak"] = self._fail_streak[name]
-            if self._fail_streak[name] == threshold:
+            if (self._fail_streak[name] >= threshold
+                    and name not in self._notified_down):
+                self._notified_down.add(name)
                 _notify("site_down", "⚠️ %s не открывается (%d проверки "
                         "подряд)%s" % (entry["display"], threshold,
                                        ": %s" % entry["error"]

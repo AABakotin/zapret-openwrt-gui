@@ -95,6 +95,71 @@ class TestQueue(NotifyCase):
         self.assertEqual(q[-1]["text"], "m%d" % (notify.MAX_QUEUE + 9))
 
 
+class TestReviewEdges(NotifyCase):
+
+    def test_rejected_message_dropped_queue_continues(self):
+        notify.event("update", "too long")
+        notify.event("tunnel", "next")
+
+        def _call(st, method, payload=None):
+            if payload["text"].endswith("too long"):
+                raise notify.Rejected("Telegram: 400 message is too long")
+            self.sent.append(payload["text"])
+            return {"ok": True}
+        with mock.patch.object(notify, "_call", _call):
+            r = notify.flush()
+        self.assertEqual(r["sent"], 1)
+        self.assertEqual(notify._load_queue(), [])
+
+    def test_flush_single_flight(self):
+        notify.event("tunnel", "one")
+        self.assertTrue(notify._flush_lock.acquire(blocking=False))
+        try:
+            r = notify.flush()
+        finally:
+            notify._flush_lock.release()
+        self.assertTrue(r.get("busy"))
+        self.assertEqual(len(notify._load_queue()), 1)
+
+    def test_no_dedup_for_transitions(self):
+        self.assertTrue(notify.event("site_down", "X", dedup=False))
+        self.assertTrue(notify.event("site_down", "X", dedup=False))
+
+    def test_api_clear_token(self):
+        from api.notify import _merged
+        self.assertEqual(_merged({"token": ""})["token"], "111:SECRET")
+        self.assertEqual(_merged({"clear_token": True})["token"], "")
+
+    def test_config_get_masks_token(self):
+        from api.config_api import _mask_notify_token
+        data = {"notify": {"telegram": {"token": "111:SECRET"}}}
+        _mask_notify_token(data)
+        self.assertEqual(data["notify"]["telegram"]["token"], "***")
+
+
+class TestHealthcheckTransitions(NotifyCase):
+
+    def test_down_once_then_up_with_auto_reset(self):
+        from core import healthcheck as hc
+        self.cfg.set("healthcheck", "services", [])
+        self.cfg.set("healthcheck", "custom_domains", ["x.test"])
+        self.cfg.set("healthcheck", "consecutive_failures", 2)
+        self.cfg.set("healthcheck", "auto_reset", True)
+        self.cfg.set("healthcheck", "outage_guard", False)
+        h = hc.HealthcheckDaemon()
+        events = []
+        results = iter([False] * 6 + [True, True])
+        with mock.patch("core.diagnostics.check_http",
+                        lambda url, timeout=8: {"ok": next(results)}), \
+                mock.patch.object(hc, "_notify",
+                                  lambda k, t: events.append(k)), \
+                mock.patch("core.strategy_state.clear_host",
+                           lambda host, flush=False: {"removed": 0}):
+            for _ in range(8):
+                h._tick()
+        self.assertEqual(events, ["site_down", "site_up"])
+
+
 class TestPure(unittest.TestCase):
 
     def test_chats_from_updates(self):

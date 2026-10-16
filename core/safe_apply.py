@@ -135,8 +135,8 @@ def active() -> bool:
 # ─────────────────────────── замеры ────────────────────────────
 
 def _targets() -> list:
-    from core.healthcheck import HealthCheck
-    return HealthCheck._build_targets(_cfg())
+    from core.healthcheck import HealthcheckDaemon
+    return HealthcheckDaemon._build_targets(_cfg())
 
 
 def probe() -> dict:

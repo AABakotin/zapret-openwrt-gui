@@ -283,6 +283,15 @@ class TestReviewEdges(HistoryCase):
 
 class TestSafeApplyCompare(unittest.TestCase):
 
+    def test_targets_from_healthcheck(self):
+        # Настоящая функция, без подмены: имя класса мониторинга менялось.
+        with mock.patch.object(sa, "_cfg") as cfg:
+            cfg.return_value.get.side_effect = (
+                lambda *k, default=None: ["x.test"]
+                if k == ("healthcheck", "custom_domains") else default)
+            self.assertEqual([t["display"] for t in sa._targets()],
+                             ["x.test"])
+
     def test_broken_all(self):
         v = sa.compare({"sites": {"a": True, "b": True, "c": False}},
                        {"sites": {"a": False, "b": False, "c": True}})

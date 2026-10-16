@@ -4,8 +4,8 @@ REST API уведомлений в Telegram (core/notify.py).
 
   GET  /api/notify             — настройки (без токена: has_token) и очередь
   POST /api/notify/settings    — сохранить {enabled, token?, chat_id,
-                                 transport, proxy, events}; пустой token —
-                                 оставить прежний
+                                 transport, proxy, events, clear_token?};
+                                 пустой token — оставить прежний
   POST /api/notify/test        — отправить пробное сообщение сразу
                                  (значения из тела важнее сохранённых —
                                  проверить можно до сохранения)
@@ -30,6 +30,9 @@ def _merged(body: dict) -> dict:
     for key in ("token", "chat_id", "transport", "proxy"):
         if key in body and (key != "token" or str(body[key]).strip()):
             st[key] = str(body[key] or "").strip()
+    # Пустое поле токена — «не менять»; удалить — явным флагом.
+    if body.get("clear_token"):
+        st["token"] = ""
     return st
 
 
@@ -79,6 +82,7 @@ def register(app):
         from core import notify
         st = _merged(_json_body())
         if not _proxy_ok(st["proxy"]):
+            response.status = 400
             return {"ok": False, "error": "прокси — http://хост:порт"}
         return notify.send_now("Проверка уведомлений: связь есть ✅", st)
 
@@ -88,6 +92,7 @@ def register(app):
         from core import notify
         st = _merged(_json_body())
         if not _proxy_ok(st["proxy"]):
+            response.status = 400
             return {"ok": False, "error": "прокси — http://хост:порт"}
         return notify.find_chats(st)
 

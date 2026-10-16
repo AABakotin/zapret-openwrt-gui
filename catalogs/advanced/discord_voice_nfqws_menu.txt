@@ -1,0 +1,51 @@
+# Приёмы голоса Discord из rndnaame/nfqws-menu (strategies/nfqws2, коммит
+# 424708d): порты стратегий zapret-discord-youtube 1.10.3 (Flowseal)
+# и личные конфиги из чата nfqws2-keenetic. Взяты только приёмы, которых
+# у нас ещё нет: дубликаты по эффективным аргументам (параметры lua без
+# учёта порядка, блобы — по содержимому файла, strategy=N и dir=out
+# отброшены) уже лежат в других каталогах. Полные пресеты этих конфигов —
+# builtin/nfqws_menu.txt. Сканер оборачивает их под цель (порты голоса, --filter-l7=discord,stun).
+
+[nm_voice_uvvi2_s1]
+name = nfqws-menu Uvvi2 · №1: fake discord_udp autottl ×12
+author = Uvvi (rndnaame/nfqws-menu)
+label = experimental
+description = Приём голоса Discord из «Uvvi2: дефолт nfqws2-keenetic + голос Discord» (стратегия 1 из circular).
+--lua-desync=fake:blob=discord_udp:ip_autottl=-1,3-20:repeats=12
+
+[nm_voice_uvvi2_s2]
+name = nfqws-menu Uvvi2 · №2: fake discord_udp ×12
+author = Uvvi (rndnaame/nfqws-menu)
+label = experimental
+description = Приём голоса Discord из «Uvvi2: дефолт nfqws2-keenetic + голос Discord» (стратегия 2 из circular).
+--lua-desync=fake:blob=discord_udp:repeats=12
+
+[nm_voice_alt]
+name = nfqws-menu ALT: fake discord_udp ×6
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём голоса Discord из «ALT: fake + fakedsplit, ts».
+--lua-desync=fake:blob=discord_udp:repeats=6
+
+[nm_voice_alt12]
+name = nfqws-menu ALT12: fake stun ×3 + fake discord_udp ×3 + fake discord_udp ×3
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём голоса Discord из «ALT12: ALT11 + hostfakesplit для Google».
+--lua-desync=fake:payload=discord_ip_discovery:blob=stun:repeats=3
+--lua-desync=fake:payload=discord_ip_discovery:blob=discord_udp:repeats=3
+--lua-desync=fake:payload=stun:blob=discord_udp:repeats=3
+
+[nm_voice_alt13]
+name = nfqws-menu ALT13: fake discord_udp ×5
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = Приём голоса Discord из «ALT13: fake + hostfakesplit mail.ru, ts».
+--lua-desync=fake:blob=discord_udp:repeats=5
+
+[nm_voice_eduncey]
+name = nfqws-menu eduncey: fake quic_dbankcloud ×6
+author = eduncey (rndnaame/nfqws-menu)
+label = experimental
+description = Приём голоса Discord из «eduncey: дефолт nfqws2-keenetic + 4-й приём и Discord».
+--lua-desync=fake:blob=quic_dbankcloud:repeats=6

@@ -4,6 +4,23 @@
 
 ### Добавлено
 
+- **Стратегии nfqws-menu.** Из
+  [rndnaame/nfqws-menu](https://github.com/rndnaame/nfqws-menu)
+  (`strategies/nfqws2`) — 27 полных пресетов «nfqws-menu · …»
+  (`catalogs/builtin/nfqws_menu.txt`: 21 порт zapret-discord-youtube
+  1.10.3, alt4_mod и пять личных конфигов из чата nfqws2-keenetic) и 80
+  новых приёмов для подбора (`catalogs/advanced/{tcp,http80,udp,discord_voice}_nfqws_menu.txt`).
+  84 приёма не взяты: те же эффективные аргументы уже есть в каталогах
+  (сравнение — параметры lua без учёта порядка, блобы по содержимому
+  файла). При переносе: `tls_max` nfqws-menu — это ClientHello
+  www.onetrust.com (664 байта), а не наш max.ru, поэтому он зовётся
+  `tls_clienthello_www_onetrust_com`; `seqovl_pattern=` ссылается на
+  файл `tls_clienthello`, а не на `tls_google` из init_vars.lua (у того
+  другой размер); профили по ipset-спискам авторов, которых у нас нет,
+  убраны; исправлены обрезанный `tcp_ts_up` в alt4_mod и nfqws1-ключи
+  `altorder=`/`fool=`/`cutoff=` в eduncey. Новые блобы `quic_5ka`,
+  `quic_lordfilm`, `tls_lordfilm`, `quic_dbankcloud`.
+
 - **Стратегии сообщества по провайдеру.** Галка в подборе «Сначала
   стратегии сообщества для моего провайдера»: до 8 стратегий абонентов
   того же AS из открытой базы nfqws2-ui (свежие и открывавшие этот сайт

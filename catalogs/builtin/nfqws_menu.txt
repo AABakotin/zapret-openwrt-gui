@@ -1,0 +1,1052 @@
+# ─────────────────────────────────────────────────────────────
+#  Полные пресеты из rndnaame/nfqws-menu
+#
+#  Источник: github.com/rndnaame/nfqws-menu (strategies/nfqws2, коммит 424708d).
+#  21 стратегия — порты zapret-discord-youtube 1.10.3 (Flowseal, winws1)
+#  на nfqws2 под пакет nfqws2-keenetic, плюс личные конфиги участников
+#  чата (MartinBacker, Uvvi2, eduncey, hardcorp74, krushaaa) и alt4_mod.
+#
+#  Перенос в наш формат:
+#    • профили собраны в порядке пакета: NFQWS_ARGS_CUSTOM → UDP → QUIC →
+#      HTTPS. Специфичные профили (discord.media, список Google) идут
+#      первыми, иначе их перехватил бы общий профиль 80,443;
+#    • NFQWS_EXTRA_ARGS (режим list/auto/all) и NFQWS_ARGS_IPSET у нас —
+#      «Фильтрация» в GUI, поэтому ни хостлистов режима, ни ipset-копий
+#      HTTPS/QUIC-профилей в пресетах нет;
+#    • google.list из nfqws-menu (list-google бандла + play.google.com,
+#      fonts.googleapis.com, www.gstatic.com, google.ru, youtube.googleapis.com)
+#      вписан как --hostlist-domains — пресет не зависит от файла;
+#    • --blob= не нужны: имена приведены к нашему реестру по содержимому
+#      файлов. stun_fake/stun2_fake → stun/stun2, tls_clienthello_sochi_park
+#      → tls_sochi, а tls_max nfqws-menu (664 байта) — это ClientHello
+#      www.onetrust.com, не наш tls_max (max.ru, 193 байта): отсюда
+#      tls_clienthello_www_onetrust_com, иначе seqovl=664 перекрывал бы
+#      чужим узором. discord_udp/game_udp nfqws-menu (QUIC Initial
+#      steamcommunity.com/4pda.to) побайтово совпадают с нашими
+#      ACTIVE_DISCORD_UDP/ACTIVE_GAME_UDP. Новые блобы quic_5ka,
+#      quic_lordfilm, tls_lordfilm, quic_dbankcloud — в import/bin;
+#    • игровой фильтр (в оригиналах закомментирован) не переносится;
+#    • профили по ipset-спискам авторов (ipset_do, ipset_cf_full,
+#      ipset_amazon, ipset_ovh, ipset_as_*) убраны: этих списков у нас нет.
+#
+#  ⚠️ ts-фулинг (tcp_ts=…:tcp_ts_up) работает, только если клиент шлёт
+#  TCP timestamps; в Windows они выключены по умолчанию
+#  (netsh interface tcp set global timestamps=enabled).
+#  ⚠️ Порты: 2053,2083,2087,2096,8443 (discord.media), 1984/5222 (MTProto,
+#  XMPP) и UDP 19294-19344,50000-50100 должны быть в «Настройки → nfqws2 →
+#  TCP/UDP-порты», иначе профиль не увидит ни одного пакета.
+# ─────────────────────────────────────────────────────────────
+
+[nfqws_menu_martinbacker]
+name = nfqws-menu · MartinBacker: circular из 7 приёмов + профили YouTube
+author = MartinBacker (rndnaame/nfqws-menu)
+label = experimental
+description = Личный конфиг из nfqws-menu на базе дефолта nfqws2-keenetic: circular перебирает 7 приёмов для TLS/MTProto (в т.ч. условные фейки per_instance_condition — ts, если клиент шлёт timestamps, иначе TTL), отдельные профили googlevideo.com (fake + hostfakesplit www.google.com, QUIC fake ×11) и mobatek.net. Профили по ipset-спискам автора убраны — этих списков у нас нет.
+--hostlist-domains=googlevideo.com
+--filter-tcp=443
+--filter-l7=tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+--lua-desync=hostfakesplit:host=www.google.com:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+--new
+--hostlist-domains=googlevideo.com
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_initial:repeats=11
+--new
+--hostlist-domains=mobatek.net
+--filter-tcp=443
+--filter-l7=tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:tcp_md5:tls_mod=rnd,dupsid,padencap:repeats=1
+--lua-desync=multisplit:pos=2
+--payload=empty
+--out-range=<s1
+--lua-desync=send:tcp_md5
+--new
+--filter-udp=590-600,1400,3478-3481,5349,19294-19344,49152-65535
+--filter-l7=wireguard,stun,discord,mtproto,unknown
+--out-range=<n2
+--payload=wireguard_initiation,wireguard_response,wireguard_cookie,stun,discord_ip_discovery,mtproto_initial,unknown
+--out-range=-s34228
+--in-range=-s5556
+--lua-desync=circular:fails=2:time=300:retrans=3:nld=2
+--in-range=x
+--lua-desync=fake:blob=quic_initial:repeats=6:strategy=1
+--lua-desync=fake:repeats=6:strategy=2
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_initial:repeats=11
+--new
+--filter-tcp=443,80,1984,5222
+--filter-l7=http,tls,mtproto
+--payload=tls_client_hello,mtproto_initial
+--out-range=-s34228
+--in-range=-s5556
+--lua-desync=circular:fails=2:time=300:retrans=3:nld=2
+--in-range=x
+--lua-desync=fake:blob=tls_clienthello:tls_mod=rnd,dupsid,sni=fonts.google.com:tcp_seq=10000:strategy=1
+--lua-desync=multisplit:pos=1,midsld:seqovl=1:seqovl_pattern=tls_clienthello:tcp_ts_up:strategy=1
+--lua-desync=fake:blob=0x00000000:tcp_ack=-66000:tls_mod=rnd,dupsid,sni=www.google.com:repeats=2:strategy=2
+--lua-desync=multisplit:pos=1,midsld:strategy=2
+--lua-desync=hostfakesplit:host=ozon.ru:midhost=host-2:seqovl=sniext+3:seqovl_pattern=tls_clienthello:badsum:tcp_md5:tcp_ts_up:strategy=3
+--lua-desync=hostfakesplit:tcp_md5:tcp_ts_up:strategy=3
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:tcp_ts=-1000:strategy=4
+--lua-desync=multidisorder:pos=1,midsld,sniext+1,endhost-2,-10:seqovl=1:seqovl_pattern=tls_clienthello:tcp_ts_up:strategy=4
+--lua-desync=per_instance_condition:strategy=5
+--lua-desync=fake:blob=tls_clienthello:tcp_ts=-1000:cond=cond_tcp_has_ts:strategy=5
+--lua-desync=fake:blob=tls_clienthello:ip_ttl=7:ip6_ttl=4:cond=cond_tcp_has_ts:cond_neg:strategy=5
+--lua-desync=multidisorder:pos=1,midsld,sniext+1,endhost-2,-10:seqovl=1:seqovl_pattern=tls_clienthello:tcp_ts_up:strategy=5
+--lua-desync=per_instance_condition:strategy=6
+--lua-desync=fake:blob=tls_clienthello:tls_mod=rnd,dupsid,sni=fonts.google.com:tcp_ts=-1000:cond=cond_tcp_has_ts:strategy=6
+--lua-desync=fake:blob=tls_clienthello:ip_ttl=7:ip6_ttl=4:cond=cond_tcp_has_ts:cond_neg:strategy=6
+--lua-desync=multisplit:pos=1:seqovl=336:seqovl_pattern=tls_clienthello:tcp_ts_up:strategy=6
+--lua-desync=multisplit:pos=1:seqovl=582:seqovl_pattern=stun:strategy=7
+--payload=http_req
+--lua-desync=http_methodeol:badsum
+
+[nfqws_menu_uvvi2]
+name = nfqws-menu · Uvvi2: дефолт nfqws2-keenetic + голос Discord
+author = Uvvi (rndnaame/nfqws-menu)
+label = experimental
+description = Сток nfqws2-keenetic 1.2.6 (circular из трёх приёмов для TLS/MTProto, HTTP — http_methodeol, QUIC — fake ×11) с прицельным голосовым профилем Discord вместо общего UDP: circular из fake ACTIVE_DISCORD_UDP ×12 с autottl и без него.
+--filter-udp=3478-3481,5349,19294-19344,49152-65535
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=circular:fails=2:time=200:retrans=2:nld=2
+--lua-desync=fake:blob=discord_udp:ip_autottl=-1,3-20:repeats=12:strategy=1
+--lua-desync=fake:blob=discord_udp:repeats=12:strategy=2
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_initial:repeats=11
+--new
+--filter-tcp=443,80,1984,5222
+--filter-l7=http,tls,mtproto
+--payload=tls_client_hello,mtproto_initial
+--lua-desync=circular:fails=2:time=300:retrans=3:nld=2
+--lua-desync=fake:blob=tls_clienthello:tls_mod=rnd,dupsid,sni=fonts.google.com:tcp_seq=10000:strategy=1
+--lua-desync=multisplit:pos=1,midsld:seqovl=1:seqovl_pattern=tls_clienthello:tcp_ts_up:strategy=1
+--lua-desync=fake:blob=0x00000000:tcp_ack=-66000:tls_mod=rnd,dupsid,sni=www.google.com:repeats=2:strategy=2
+--lua-desync=multisplit:pos=1,midsld:strategy=2
+--lua-desync=hostfakesplit:host=ozon.ru:midhost=host-2:seqovl=sniext+3:seqovl_pattern=tls_clienthello:badsum:tcp_md5:tcp_ts_up:strategy=3
+--lua-desync=hostfakesplit:tcp_md5:tcp_ts_up:strategy=3
+--payload=http_req
+--lua-desync=http_methodeol:badsum
+
+[nfqws_menu_alt]
+name = nfqws-menu · ALT: fake + fakedsplit, ts
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (ALT) из zapret-discord-youtube 1.10.3: TLS — fake stun + fake tls_google + fakedsplit (×6, ts-фулинг), HTTP — fake tls_max + fakedsplit; QUIC — fake quic_google ×6; голос Discord — fake ×6. Отдельные профили для discord.media (порты 2053…8443) и списка Google/YouTube (ip_id=zero).
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fakedsplit:pattern=0x00:repeats=6:tcp_ts=-600000:tcp_ts_up
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=6:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fakedsplit:pattern=0x00:repeats=6:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=6
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=stun:repeats=6:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fakedsplit:pattern=0x00:repeats=6:tcp_ts=-600000:tcp_ts_up
+--payload=http_req
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=6:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fakedsplit:pattern=0x00:repeats=6:tcp_ts=-600000:tcp_ts_up
+
+[nfqws_menu_alt10]
+name = nfqws-menu · ALT10: fake 4pda, ts
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (ALT10): только fake — stun + ClientHello 4pda.to ×6 (ts-фулинг); HTTP — fake tls_max.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_ts=-600000:tcp_ts_up
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=6:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=6
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=stun:repeats=6:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fake:blob=tls_4pda:repeats=6:tcp_ts=-600000:tcp_ts_up
+--payload=http_req
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=6:tcp_ts=-600000:tcp_ts_up
+
+[nfqws_menu_alt11]
+name = nfqws-menu · ALT11: fake + multisplit seqovl=664
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (ALT11): fake stun + fake tls_max ×8 (ts), затем multisplit pos=1 с перекрытием 664 байта из того же блоба; QUIC — fake ×11.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=8:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n:ip_id=zero
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=11
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=stun2:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=664:seqovl_pattern=tls_clienthello_www_onetrust_com
+--payload=http_req
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=664:seqovl_pattern=tls_clienthello_www_onetrust_com
+
+[nfqws_menu_alt12]
+name = nfqws-menu · ALT12: ALT11 + hostfakesplit для Google
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (ALT12): как ALT11, но список Google/YouTube идёт через hostfakesplit host=www.google.com; голос Discord — два фейка на discord_ip_discovery и один на stun.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=hostfakesplit:host=www.google.com:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery
+--lua-desync=fake:blob=stun:repeats=3
+--lua-desync=fake:blob=discord_udp:repeats=3
+--payload=stun
+--lua-desync=fake:blob=discord_udp:repeats=3
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=11
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=stun:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=664:seqovl_pattern=tls_clienthello_www_onetrust_com
+--payload=http_req
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=664:seqovl_pattern=tls_clienthello_www_onetrust_com
+
+[nfqws_menu_alt13]
+name = nfqws-menu · ALT13: fake + hostfakesplit mail.ru, ts
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (ALT13): fake tls_sochi + fake stun2 ×5 и hostfakesplit host=mail.ru (ts); Google — hostfakesplit www.google.com; QUIC — fake ×11.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=7:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=hostfakesplit:host=www.google.com:tcp_ts=-600000:tcp_ts_up
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=5
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=11
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_sochi:repeats=5:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fake:blob=stun2:repeats=5:tcp_ts=-600000:tcp_ts_up
+--lua-desync=hostfakesplit:host=mail.ru:tcp_ts=-600000:tcp_ts_up
+--payload=http_req
+--lua-desync=fake:blob=tls_sochi:repeats=5:tcp_ts=-600000:tcp_ts_up
+--lua-desync=hostfakesplit:host=mail.ru:tcp_ts=-600000:tcp_ts_up
+
+[nfqws_menu_alt2]
+name = nfqws-menu · ALT2: multisplit seqovl=652
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (ALT2): multisplit pos=2 с перекрытием 652 байта из ClientHello Google — без фейков и TTL, только сплит. QUIC — fake ×6, голос Discord — fake ×6.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=multisplit:pos=2:seqovl=652:seqovl_pattern=tls2n
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=multisplit:pos=2:seqovl=652:seqovl_pattern=tls2n:ip_id=zero
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=6
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=multisplit:pos=2:seqovl=652:seqovl_pattern=tls2n
+--payload=http_req
+--lua-desync=multisplit:pos=2:seqovl=652:seqovl_pattern=tls2n
+
+[nfqws_menu_alt3]
+name = nfqws-menu · ALT3: fake + hostfakesplit, ts
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (ALT3): fake с SNI ya.ru + hostfakesplit host=ya.ru (ts-фулинг); для Google и discord.media — то же с www.google.com. altorder=1 оригинала в nfqws2 не переносится.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:tcp_ts=-600000:tcp_ts_up
+--lua-desync=hostfakesplit:host=www.google.com:tcp_ts=-600000:tcp_ts_up
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+--lua-desync=hostfakesplit:host=www.google.com:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=6
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=ya.ru:tcp_ts=-600000:tcp_ts_up
+--lua-desync=hostfakesplit:host=ya.ru:tcp_ts=-600000:tcp_ts_up
+--payload=http_req
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:tcp_ts=-600000:tcp_ts_up
+--lua-desync=hostfakesplit:host=ya.ru:tcp_ts=-600000:tcp_ts_up
+
+[nfqws_menu_alt4]
+name = nfqws-menu · ALT4: fake + multisplit, badseq +1000
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (ALT4): fake stun + fake tls_google ×6 со сдвигом seq +1000 и плохим ack (badseq), затем multisplit по умолчанию (pos=2).
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_seq=1000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multisplit
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=6:ip_id=zero:tcp_seq=1000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multisplit:ip_id=zero
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=6
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=stun:repeats=6:tcp_seq=1000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_seq=1000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multisplit
+--payload=http_req
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=6:tcp_seq=1000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multisplit
+
+[nfqws_menu_alt4_mod]
+name = nfqws-menu · ALT4 mod: badseq +1000, HTTP через hostfakesplit
+author = rndnaame/nfqws-menu
+label = experimental
+description = Вариант ALT4 из nfqws-menu: TLS как в ALT4 (badseq +1000 + multisplit), HTTP — fake tls_sochi ×5 + hostfakesplit host=mail.ru (ts). Отдельного профиля для списка Google нет. Правки при переносе: обрезанный «tcp_ts=-600000:tc» в оригинале → «tcp_ts=-600000:tcp_ts_up».
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_seq=1000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multisplit
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=6
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=stun:repeats=6:tcp_seq=1000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_seq=1000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multisplit
+--payload=http_req
+--lua-desync=fake:blob=tls_sochi:repeats=5:tcp_ts=-600000:tcp_ts_up
+--lua-desync=hostfakesplit:host=mail.ru:tcp_ts=-600000:tcp_ts_up
+
+[nfqws_menu_alt5]
+name = nfqws-menu · ALT5: syndata + multidisorder
+author = Flowseal → rndnaame/nfqws-menu
+label = experimental
+description = general (ALT5): данные в SYN (syndata) + multidisorder, только IPv4. syndata срабатывает до того, как известно имя хоста, — с хостлистом работает лишь при --ipcache-hostname; multidisorder бесполезен против Windows-серверов.
+--filter-l3=ipv4
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls,http
+--payload=tls_client_hello,http_req
+--lua-desync=syndata
+--lua-desync=multidisorder
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=6
+--new
+--filter-l3=ipv4
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=syndata
+--lua-desync=multidisorder
+
+[nfqws_menu_alt6]
+name = nfqws-menu · ALT6: multisplit seqovl=681 pos=1
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (ALT6): multisplit pos=1 с перекрытием 681 байт (полный ClientHello Google) — без фейков.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n:ip_id=zero
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=6
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n
+--payload=http_req
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n
+
+[nfqws_menu_alt7]
+name = nfqws-menu · ALT7: multisplit pos=2,sniext+1 seqovl=679
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (ALT7): multisplit по 2 и sniext+1 с перекрытием 679 байт из ClientHello Google. В оригинале ipset-профиль использовал другой приём — здесь один вариант для всех.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=multisplit:pos=2,sniext+1:seqovl=679:seqovl_pattern=tls2n
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=multisplit:pos=2,sniext+1:seqovl=679:seqovl_pattern=tls2n:ip_id=zero
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=6
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=multisplit:pos=2,sniext+1:seqovl=679:seqovl_pattern=tls2n
+--payload=http_req
+--lua-desync=multisplit:pos=2,sniext+1:seqovl=679:seqovl_pattern=tls2n
+
+[nfqws_menu_alt8]
+name = nfqws-menu · ALT8: встроенный fake, badseq +2
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (ALT8): только fake — встроенный ClientHello (HTTP — tls_max) ×6 со сдвигом seq +2 и плохим ack.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:repeats=6:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:repeats=6:ip_id=zero:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=6
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:repeats=6:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+--payload=http_req
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=6:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+
+[nfqws_menu_alt9]
+name = nfqws-menu · ALT9: hostfakesplit ozon.ru, ts + md5sig
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (ALT9): hostfakesplit с фейковым хостом ozon.ru ×4 (ts + md5sig); для Google и discord.media — www.google.com.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=hostfakesplit:host=www.google.com:repeats=4:tcp_ts=-600000:tcp_ts_up
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=hostfakesplit:host=www.google.com:repeats=4:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=6
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=hostfakesplit:host=ozon.ru:repeats=4:tcp_ts=-600000:tcp_md5:tcp_ts_up
+--payload=http_req
+--lua-desync=hostfakesplit:host=ozon.ru:repeats=4:tcp_ts=-600000:tcp_md5:tcp_ts_up
+
+[nfqws_menu_eduncey]
+name = nfqws-menu · eduncey: дефолт nfqws2-keenetic + 4-й приём и Discord
+author = eduncey (rndnaame/nfqws-menu)
+label = experimental
+description = Личный конфиг из nfqws-menu: circular дефолта nfqws2-keenetic плюс четвёртый приём (fake + hostfakesplit www.google.com) на портах 443/80/1984/5222 и Cloudflare 2053…8443; голос Discord и STUN — fake с QUIC Initial dbankcloud.ru ×6, неизвестный UDP тех же портов — ×12 на первые 3 пакета. Правки при переносе: cutoff=n3 (ключ nfqws1) → --out-range=<n3; nfqws1-ключи altorder=/fool=ts у hostfakesplit: altorder убран (в nfqws2 его нет), fool=ts → tcp_ts=-600000:tcp_ts_up.
+--filter-udp=3478-3481,19294-19344,50000-50100
+--filter-l7=discord,stun
+--lua-desync=fake:blob=quic_dbankcloud:repeats=6
+--new
+--filter-udp=3478-3481,19294-19344,50000-50100
+--filter-l7=unknown
+--out-range=<n3
+--lua-desync=fake:blob=quic_dbankcloud:repeats=12
+--new
+--filter-udp=590-600,1400,5349,49152-49999,50101-65535
+--filter-l7=wireguard,mtproto,unknown
+--out-range=<n2
+--payload=wireguard_initiation,wireguard_response,wireguard_cookie,mtproto_initial,unknown
+--lua-desync=circular:fails=2:time=300:retrans=3:nld=2
+--lua-desync=fake:repeats=6:strategy=1
+--lua-desync=fake:blob=quic_initial:repeats=6:strategy=2
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_initial:repeats=11
+--new
+--filter-tcp=443,80,1984,2053,2083,2087,2096,5222,8443
+--filter-l7=http,tls,mtproto
+--payload=tls_client_hello,mtproto_initial
+--lua-desync=circular:fails=2:time=300:retrans=3:nld=2
+--lua-desync=fake:blob=tls_clienthello:tls_mod=rnd,dupsid,sni=fonts.google.com:tcp_seq=10000:strategy=1
+--lua-desync=multisplit:pos=1,midsld:seqovl=1:seqovl_pattern=tls_clienthello:tcp_ts_up:strategy=1
+--lua-desync=fake:blob=0x00000000:tcp_ack=-66000:tls_mod=rnd,dupsid,sni=www.google.com:repeats=2:strategy=2
+--lua-desync=multisplit:pos=1,midsld:strategy=2
+--lua-desync=hostfakesplit:host=ozon.ru:midhost=host-2:seqovl=sniext+3:seqovl_pattern=tls_clienthello:badsum:tcp_md5:tcp_ts_up:strategy=3
+--lua-desync=hostfakesplit:tcp_md5:tcp_ts_up:strategy=3
+--lua-desync=fake:blob=tls_clienthello:tls_mod=rnd,dupsid,sni=www.google.com:strategy=4
+--lua-desync=hostfakesplit:host=www.google.com:tcp_ts=-600000:tcp_ts_up:strategy=4
+--payload=http_req
+--lua-desync=http_methodeol:badsum
+
+[nfqws_menu_exp]
+name = nfqws-menu · EXP: fake + multisplit seqovl=480 (stun2)
+author = Flowseal → rndnaame/nfqws-menu
+label = experimental
+description = general (EXP): fake tls_max ×4 (ts) + multisplit pos=1 с перекрытием 480 байт узором stun2; голос Discord и неизвестный UDP на тех же портах — фейки quic_google и discord_udp ×4.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=hostfakesplit:host=www.google.com:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun,unknown
+--payload=discord_ip_discovery
+--lua-desync=fake:blob=quic_google:repeats=4
+--lua-desync=fake:blob=discord_udp:repeats=4
+--payload=stun
+--lua-desync=fake:blob=discord_udp:repeats=4
+--payload=unknown
+--lua-desync=fake:blob=quic_google:payload=unknown:repeats=4
+--lua-desync=fake:blob=discord_udp:payload=unknown:repeats=4
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=11
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=4:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=480:seqovl_pattern=stun2
+--payload=http_req
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=4:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=480:seqovl_pattern=stun2
+
+[nfqws_menu_fake_tls_auto]
+name = nfqws-menu · FAKE TLS AUTO: fake ×11 + multidisorder
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (FAKE TLS AUTO): нулевой fake и fake с SNI www.google.com ×11 (badseq), затем multidisorder по 1,midsld; QUIC — fake ×11. multidisorder бесполезен против Windows-серверов.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=fake:blob=0x00000000:repeats=11:tcp_seq=-10000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=11:tcp_seq=-10000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multidisorder:pos=1,midsld
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=fake:blob=0x00000000:repeats=11:tcp_seq=-10000:tcp_ack=-66000:tcp_ts_up:ip_id=zero
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=11:tcp_seq=-10000:tcp_ack=-66000:tcp_ts_up:ip_id=zero
+--lua-desync=multidisorder:pos=1,midsld:ip_id=zero
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=11
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=0x00000000:repeats=11:tcp_seq=-10000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=11:tcp_seq=-10000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multidisorder:pos=1,midsld
+--payload=http_req
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=11:tcp_seq=-10000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multidisorder:pos=1,midsld
+
+[nfqws_menu_fake_tls_auto_alt]
+name = nfqws-menu · FAKE TLS AUTO ALT: fake + fakedsplit pos=1
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (FAKE TLS AUTO ALT): fake с SNI www.google.com ×8 (seq +2, плохой ack) + fakedsplit pos=1 с тем же фулингом.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=8:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+--lua-desync=fakedsplit:pos=1:repeats=8:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=8:tcp_seq=2:tcp_ack=-66000:tcp_ts_up:ip_id=zero
+--lua-desync=fakedsplit:pos=1:repeats=8:tcp_seq=2:tcp_ack=-66000:tcp_ts_up:ip_id=zero
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=11
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=8:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+--lua-desync=fakedsplit:pos=1:repeats=8:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+--payload=http_req
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=8:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+--lua-desync=fakedsplit:pos=1:repeats=8:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+
+[nfqws_menu_fake_tls_auto_alt2]
+name = nfqws-menu · FAKE TLS AUTO ALT2: fake + multisplit, badseq 10000000
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (FAKE TLS AUTO ALT2): fake с SNI www.google.com ×8 со сдвигом seq +10000000, затем multisplit pos=1 с перекрытием 681 байт.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=8:tcp_seq=10000000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=8:tcp_seq=10000000:tcp_ack=-66000:tcp_ts_up:ip_id=zero
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n:ip_id=zero
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=11
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=8:tcp_seq=10000000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n
+--payload=http_req
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=8:tcp_seq=10000000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n
+
+[nfqws_menu_fake_tls_auto_alt3]
+name = nfqws-menu · FAKE TLS AUTO ALT3: fake + multisplit, ts
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (FAKE TLS AUTO ALT3): как ALT2, но фулинг фейка — ts вместо badseq.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=8:tcp_ts=-600000:tcp_ts_up:ip_id=zero
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n:ip_id=zero
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=11
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n
+--payload=http_req
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls2n
+
+[nfqws_menu_hardcorp74]
+name = nfqws-menu · hardcorp74: circular с ClientHello sochi.park
+author = hardcorp74 (rndnaame/nfqws-menu)
+label = experimental
+description = Личный конфиг из nfqws-menu: circular из трёх приёмов на ClientHello sochi.park (fake + hostfakesplit ozon.ru + multisplit seqovl; то же с фейком stun; multidisorder + fake rzd.ru), HTTP — fake + hostfakesplit mail.ru; QUIC и UDP — fake QUIC Initial 5ka.ru ×6; Google/YouTube — multidisorder + fake rzd.ru. Профиль по ipset'ам хостингов автора убран — этих списков у нас нет.
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=multidisorder:pos=1,sniext+1,host+1,midsld-2,midsld,midsld+2,endhost-1
+--lua-desync=fake:blob=tls_sochi:optional:tcp_seq=-10000:tcp_ack=-66000:badsum:tls_mod=rnd,dupsid,sni=rzd.ru:tcp_ts_up:repeats=4
+--new
+--filter-udp=590-600,1400,3478-3481,5349,19294-19344,49152-65535
+--filter-l7=wireguard,stun,discord,mtproto,unknown
+--out-range=<n2
+--payload=wireguard_initiation,wireguard_response,wireguard_cookie,stun,discord_ip_discovery,mtproto_initial,unknown
+--lua-desync=fake:blob=quic_5ka:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_5ka:repeats=6
+--new
+--filter-tcp=443,80,1984,5222
+--filter-l7=http,tls,mtproto
+--payload=tls_client_hello,mtproto_initial
+--lua-desync=circular:fails=2:time=300:retrans=2:nld=2
+--lua-desync=fake:blob=tls_sochi:tls_mod=rnd,dupsid:tcp_ts=-1500:badsum:strategy=1
+--lua-desync=hostfakesplit:host=ozon.ru:midhost=host-2:seqovl=sniext+3:seqovl_pattern=tls_clienthello:badsum:tcp_md5:tcp_ts_up:strategy=1
+--lua-desync=multisplit:pos=1,sniext-2:seqovl=1:seqovl_pattern=tls_sochi:strategy=1
+--lua-desync=fake:blob=stun:tcp_ts=-1500:badsum:strategy=2
+--lua-desync=fake:blob=tls_sochi:tls_mod=rnd,dupsid:tcp_ts=-1500:badsum:strategy=2
+--lua-desync=multisplit:pos=1,sniext-2:seqovl=1:seqovl_pattern=tls_sochi:strategy=2
+--lua-desync=hostfakesplit:midhost=host-2:seqovl=sniext+3:seqovl_pattern=tls_clienthello:badsum:tcp_md5:strategy=2
+--lua-desync=multidisorder:pos=1,sniext+1,host+1,midsld-2,midsld,midsld+2,endhost-1:strategy=3
+--lua-desync=fake:blob=tls_sochi:optional:tcp_seq=-10000:tcp_ack=-66000:badsum:tls_mod=rnd,dupsid,sni=rzd.ru:repeats=4:strategy=3
+--payload=http_req
+--lua-desync=fake:blob=tls_sochi:repeats=5:tcp_ts=-600000:tcp_ts_up
+--lua-desync=hostfakesplit:host=mail.ru:tcp_ts=-600000:tcp_ts_up
+
+[nfqws_menu_krushaaa]
+name = nfqws-menu · krushaaa: fakedsplit + multisplit на блобах lordfilm
+author = krushaaa (rndnaame/nfqws-menu)
+label = experimental
+description = Личный конфиг из nfqws-menu: fake stun2 ×8 (ts) + fakedsplit midsld с перекрытием 417 байт, затем fake ClientHello lordfilm ×8 + multisplit по 100,midsld-2,endhost-4 с перекрытием 681; QUIC — fake QUIC Initial lordfilm ×11 на первые 8 пакетов; голос Discord — fake ×6 (порты 50000-65535).
+--filter-udp=19294-19344,50000-65535
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--out-range=-n8
+--payload=quic_initial
+--lua-desync=fake:blob=quic_lordfilm:repeats=11
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=stun:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fakedsplit:pos=midsld:tcp_ack=-66000:tcp_ts_up:seqovl=417:seqovl_pattern=0x1603010000
+--lua-desync=fake:blob=tls_lordfilm:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=100,midsld-2,endhost-4:repeats=8:seqovl=681:seqovl_pattern=tls2n
+--payload=http_req
+--lua-desync=fake:blob=stun:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fakedsplit:pos=midsld:tcp_ack=-66000:tcp_ts_up:seqovl=417:seqovl_pattern=0x1603010000
+--lua-desync=fake:blob=tls_lordfilm:repeats=8:tcp_ts=-600000:tcp_ts_up
+--lua-desync=multisplit:pos=100,midsld-2,endhost-4:repeats=8:seqovl=681:seqovl_pattern=tls2n
+
+[nfqws_menu_simple_fake]
+name = nfqws-menu · SIMPLE FAKE: fake tls_google, ts
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (SIMPLE FAKE): только fake ClientHello Google ×6 (ts); HTTP — fake tls_max; Google/YouTube — hostfakesplit host=www.google.com.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_ts=-600000:tcp_ts_up
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=hostfakesplit:host=www.google.com:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=6
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_ts=-600000:tcp_ts_up
+--payload=http_req
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=6:tcp_ts=-600000:tcp_ts_up
+
+[nfqws_menu_simple_fake_alt]
+name = nfqws-menu · SIMPLE FAKE ALT: только fake, badseq +2
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (SIMPLE FAKE ALT): fake stun + fake tls_google ×6 со сдвигом seq +2 и плохим ack, без сплита.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=6:ip_id=zero:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=6
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=stun2:repeats=6:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+--payload=http_req
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=6:tcp_seq=2:tcp_ack=-66000:tcp_ts_up
+
+[nfqws_menu_simple_fake_alt2]
+name = nfqws-menu · SIMPLE FAKE ALT2: только fake (max.ru), ts
+author = Flowseal → rndnaame/nfqws-menu
+label = stable
+description = general (SIMPLE FAKE ALT2): fake stun + fake tls_max ×6 (ts), без сплита.
+--filter-tcp=2053,2083,2087,2096,8443
+--filter-l7=tls
+--hostlist-domains=discord.media
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=6:tcp_ts=-600000:tcp_ts_up
+--new
+--filter-tcp=443
+--filter-l7=tls
+--hostlist-domains=yt3.ggpht.com,yt4.ggpht.com,yt3.googleusercontent.com,googlevideo.com,jnn-pa.googleapis.com,stable.dl2.discordapp.net,wide-youtube.l.google.com,youtube-nocookie.com,youtube-ui.l.google.com,youtube.com,youtubeembeddedplayer.googleapis.com,youtubekids.com,youtube.googleapis.com,youtubei.googleapis.com,youtu.be,yt-video-upload.l.google.com,ytimg.com,ytimg.l.google.com,play.google.com,fonts.googleapis.com,www.gstatic.com,google.ru
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:repeats=6:ip_id=zero:tcp_ts=-600000:tcp_ts_up
+--new
+--filter-udp=19294-19344,50000-50100
+--filter-l7=discord,stun
+--payload=discord_ip_discovery,stun
+--lua-desync=fake:blob=discord_udp:repeats=6
+--new
+--filter-udp=443
+--filter-l7=quic
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=6
+--new
+--filter-tcp=80,443
+--filter-l7=http,tls
+--payload=tls_client_hello
+--lua-desync=fake:blob=stun2:repeats=6:tcp_ts=-600000:tcp_ts_up
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=6:tcp_ts=-600000:tcp_ts_up
+--payload=http_req
+--lua-desync=fake:blob=tls_clienthello_www_onetrust_com:repeats=6:tcp_ts=-600000:tcp_ts_up

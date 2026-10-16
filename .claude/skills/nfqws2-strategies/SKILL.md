@@ -931,6 +931,19 @@ YouTube, голос Discord, Wardogs) и `advanced/{tcp,http80,udp}_nfqws2_keene
 (`repeat=` → `repeats=`, голый `padencap` у multisplit убран — это
 значение `tls_mod`, а не ключ).
 
+Из rndnaame/nfqws-menu (`strategies/nfqws2`, коммит 424708d):
+`builtin/nfqws_menu.txt` (27 полных пресетов — порты Flowseal
+zapret-discord-youtube 1.10.3 и личные конфиги чата nfqws2-keenetic) и
+`advanced/{tcp,http80,udp,discord_voice}_nfqws_menu.txt` (только приёмы,
+которых не было: дубликат = те же `--lua-desync` с параметрами без учёта
+порядка, блобы по sha256 файла, без `strategy=N`/`dir=out`). Грабли
+переноса: их `tls_max` — 664-байтный ClientHello **www.onetrust.com**
+(не наш max.ru 193 б) → `tls_clienthello_www_onetrust_com`;
+`seqovl_pattern=tls_google` без `blob=tls_google` в той же стратегии у нас
+берёт **переменную init_vars.lua** (fake_default_tls с SNI google, другой
+размер), а не файл — поэтому паттерны ссылаются на `tls_clienthello`.
+Их `discord_udp`/`game_udp` побайтово равны нашим ACTIVE_*_UDP.
+
 Эвристика «полный пресет vs приём» — `_is_full_preset_args()` в
 `strategy_scanner.py`: наличие `--filter-*`/`--new`/`--hostlist`/`--ipset`/
 `--blob` ⇒ полный пресет.

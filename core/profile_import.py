@@ -49,11 +49,6 @@ _LIST_OPTS = ("--hostlist", "--hostlist-exclude", "--hostlist-auto",
 _IPSET_OPTS = ("--ipset", "--ipset-exclude")
 
 
-def _engine_owned():
-    from core.strategy_lint import ENGINE_OWNED_OPTIONS, TAKES_VALUE
-    return ENGINE_OWNED_OPTIONS, TAKES_VALUE
-
-
 def detect(text: str) -> str:
     """Что вставили: zapret2 / keenetic / zapret1 / args / unknown."""
     names = {m.group(1) for m in _VAR_RE.finditer(text or "")}
@@ -84,6 +79,7 @@ def _sources(text: str, kind: str) -> tuple:
     for m in _VAR_RE.finditer(text or ""):
         name = m.group(1)
         value = next((g for g in m.group(2, 3, 4) if g is not None), "")
+        value = value.replace("\\\n", " ")
         if name in _IFACE_VARS:
             ifaces[name] = value
         elif re.search(r"(?:^|\s)--[a-z]", value):
@@ -91,10 +87,45 @@ def _sources(text: str, kind: str) -> tuple:
     if kind == "args" or not found:
         body = re.sub(r"^\s*(?:\S*/)?(?:nfqws2?|winws2?)(?:\s|$)", "",
                       text or "", flags=re.M | re.I)
-        body = "\n".join(line for line in body.splitlines()
-                         if not line.lstrip().startswith("#"))
+        # Комментарии: строка целиком и хвост «  # рабочая» после опций.
+        body = "\n".join(re.sub(r"(?:^|\s)#.*$", "", line)
+                         for line in body.replace("\\\n", " ").splitlines())
         found = [("", body.replace("\\\n", " "))]
     return found, ifaces
+
+
+_MARKER_RE = re.compile(r"<[A-Z_]+>")
+_DECL = ("--blob=", "--lua-init=")
+# Опции с путём: getopt_long принимает и `--hostlist /путь` двумя токенами.
+_PATH_OPTS = _LIST_OPTS + ("--lua-init", "--blob")
+
+
+def _merge_split_values(tokens: list) -> list:
+    """``--hostlist /путь`` → ``--hostlist=/путь`` (чтобы перенести путь)."""
+    out, i = [], 0
+    while i < len(tokens):
+        t = tokens[i]
+        if (t in _PATH_OPTS and i + 1 < len(tokens)
+                and not tokens[i + 1].startswith("-")):
+            out.append("%s=%s" % (t, tokens[i + 1]))
+            i += 2
+            continue
+        out.append(t)
+        i += 1
+    return out
+
+
+def _strip_owned(tokens: list, dropped: list, notes: list) -> list:
+    """Опции движка — вон (тем же правилом, что линтер и сборщик)."""
+    from core.strategy_lint import engine_owned
+    bad = engine_owned(tokens)
+    for item in bad:
+        dropped.append(item["arg"])
+        if item["reason"] not in notes and not item["reason"].startswith(
+                "значение "):
+            notes.append(item["reason"])
+    skip = {item["index"] for item in bad}
+    return [t for i, t in enumerate(tokens) if i not in skip]
 
 
 def _split_new(tokens: list) -> list:
@@ -120,14 +151,7 @@ def adapt_token(tok: str, env: dict) -> tuple:
 
     ``env``: lua_path, bin_path, lists_path, ipset_path и ``exists(path)``.
     """
-    owned, _ = _engine_owned()
     opt, eq, val = tok.partition("=")
-    if opt in owned:
-        return None, "опция движка %s — её ставит GUI" % opt
-    if tok.startswith("--debug=@"):
-        return None, "%s — журнал движка пишет GUI" % opt
-    if re.fullmatch(r"<[A-Z_]+>", tok):
-        return None, ""
     exists = env.get("exists") or os.path.exists
     if opt == "--lua-init" and val.startswith("@") and "/" in val:
         name = os.path.basename(val[1:])
@@ -172,73 +196,67 @@ def convert(text: str, env: dict) -> dict:
                 "интерфейс GUI берёт из своих настроек"
                 % (", ".join(missing), var))
 
-    _, takes_value = _engine_owned()
-    groups, extra = [], []
+    groups, extra, notes = [], [], []
+    has_marker = False
     for var, value in sources:
-        tokens = tokenize_args(value)
-        # `--qnum 200` двумя токенами: значение уходит вместе с опцией.
-        clean, skip = [], False
-        for t in tokens:
-            if skip:
-                skip = False
-                continue
-            if t in takes_value:
-                dropped.append(t)
-                skip = True
-                continue
-            clean.append(t)
-        if _is_lists_only(clean):
-            extra += clean
+        tokens = _merge_split_values(tokenize_args(value))
+        if any(_MARKER_RE.fullmatch(t) for t in tokens):
+            has_marker = True
+        tokens = [t for t in tokens if not _MARKER_RE.fullmatch(t)]
+        tokens = _strip_owned(tokens, dropped, notes)
+        if _is_lists_only(tokens):
+            extra += tokens
             continue
-        for part in _split_new(clean):
+        for part in _split_new(tokens):
             groups.append((var, part))
 
-    profiles, notes, has_marker = [], [], False
-    carry = []          # глобальные --blob/--lua-init до первого профиля
+    profiles = []
+    carry = []          # глобальные --blob/--lua-init — к следующему профилю
     for var, part in groups:
-        part = carry + part
-        carry = []
         if any(t.startswith("--dpi-desync") for t in part):
             warnings.append("%sстратегия nfqws v1 (--dpi-desync) — для "
                             "nfqws2 её надо переписать на --lua-desync"
                             % ("%s: " % var if var else ""))
+            carry += [t for t in part if t.startswith(_DECL)]
             continue
         if not any(t.startswith("--lua-desync=") for t in part):
-            # Только объявления (blob, lua-init) — едут к следующему профилю.
-            if all(t.startswith(("--blob=", "--lua-init=")) for t in part):
-                carry = list(part)
-                continue
-            rest = []
-            for t in part:
-                new_tok, note = adapt_token(t, env)
-                if new_tok is None:
-                    if note and note not in notes:
-                        notes.append(note)
-                    if not re.fullmatch(r"<[A-Z_]+>", t):
-                        dropped.append(t)
-                else:
-                    rest.append(new_tok)
+            # Объявления (blob, lua-init) — едут к следующему профилю.
+            carry += [t for t in part if t.startswith(_DECL)]
+            rest = [t for t in part if not t.startswith(_DECL)]
             if rest:
                 warnings.append("часть без --lua-desync пропущена: %s"
                                 % " ".join(rest)[:120])
             continue
+        part, carry = carry + part, []
+        # Повторы внутри профиля НЕ схлопываем: у nfqws2 порядок опций —
+        # смысл (--payload перед каждым --lua-desync). Не дублируем только
+        # общие списки, если профиль уже их несёт.
+        part += [t for t in extra if t not in part]
         args = []
-        for t in part + extra:
-            if re.fullmatch(r"<[A-Z_]+>", t):
-                has_marker = True
+        for t in part:
             new_tok, note = adapt_token(t, env)
             if note and note not in notes:
                 notes.append(note)
-            if new_tok is None:
-                if not re.fullmatch(r"<[A-Z_]+>", t):
-                    dropped.append(t)
-                continue
-            if new_tok not in args:
-                args.append(new_tok)
+            args.append(new_tok)
         n = len(profiles) + 1
         profiles.append({"id": "import%d" % n,
                          "name": _profile_name(args, n, var),
                          "enabled": True, "args": " ".join(args)})
+    if carry:
+        if profiles:
+            # Глобальные объявления после последнего --new: nfqws2 читает
+            # их до первого профиля — ставим в начало первого.
+            first = profiles[0]
+            decl = []
+            for t in carry:
+                new_tok, note = adapt_token(t, env)
+                if note and note not in notes:
+                    notes.append(note)
+                decl.append(new_tok)
+            first["args"] = " ".join(decl + [first["args"]])
+        else:
+            warnings.append("объявления без профиля пропущены: %s"
+                            % " ".join(carry)[:120])
     if has_marker:
         notes.append("маркеры <HOSTLIST> убраны: списки подставит режим "
                      "фильтра GUI (Настройки → nfqws)")

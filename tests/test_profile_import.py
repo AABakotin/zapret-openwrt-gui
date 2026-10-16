@@ -116,6 +116,41 @@ class TestArgs(unittest.TestCase):
         self.assertIn("v1", r["warnings"][0])
         self.assertIn("zapret v1", r["error"])
 
+    def test_repeated_payload_kept_in_order(self):
+        args = ("--filter-tcp=443 --payload=tls_client_hello "
+                "--lua-desync=fake --payload=http_req --lua-desync=multisplit "
+                "--payload=tls_client_hello --lua-desync=multidisorder")
+        r = conv(args)
+        self.assertEqual(r["profiles"][0]["args"], args)
+
+    def test_globals_mixed_with_engine_options_carried(self):
+        r = conv('NFQWS_BASE_ARGS="--qnum=200 --lua-init=@/opt/x/zapret-lib.lua"\n'
+                 'NFQWS_ARGS="--filter-tcp=443 --lua-desync=fake"')
+        self.assertTrue(r["profiles"][0]["args"].startswith(
+            "--lua-init=@lua/zapret-lib.lua"))
+        self.assertFalse(any("пропущена" in w for w in r["warnings"]))
+
+    def test_trailing_blob_moved_to_first_profile(self):
+        r = conv('NFQWS2_OPT="--filter-tcp=443 --lua-desync=fake:blob=y '
+                 '--new --blob=y:@/a/y.bin"')
+        self.assertTrue(r["profiles"][0]["args"].startswith(
+            "--blob=y:@bin/y.bin"))
+
+    def test_line_continuation_in_value(self):
+        r = conv('NFQWS2_OPT="--filter-tcp=443 \\\n --lua-desync=fake"')
+        self.assertEqual(r["profiles"][0]["args"],
+                         "--filter-tcp=443 --lua-desync=fake")
+
+    def test_two_token_path(self):
+        r = conv("nfqws2 --hostlist /opt/x/l.txt --filter-tcp=443 "
+                 "--lua-desync=fake")
+        self.assertIn("--hostlist=lists/l.txt", r["profiles"][0]["args"])
+
+    def test_inline_comment(self):
+        r = conv("nfqws2 --filter-tcp=443 --lua-desync=fake  # рабочая")
+        self.assertEqual(r["profiles"][0]["args"],
+                         "--filter-tcp=443 --lua-desync=fake")
+
     def test_builder_resolves_imported_paths(self):
         from core.catalog_loader import CatalogManager
         r = conv(ZAPRET2)

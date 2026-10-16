@@ -2317,16 +2317,34 @@ const StrategiesPage = (() => {
     // Сначала — разбор на сервере (core/profile_import.py): конфиг другого
     // роутера, пути к lua/блобам/спискам переносятся на наши, опции
     // движка убираются. Не вышло — прежний разбор здесь же.
+    let pasteBusy = false;
+
     async function _openPasteEditor(text) {
+        // Пока сервер разбирает, второй Ctrl+V не открывает второй редактор.
+        if (pasteBusy) return;
+        pasteBusy = true;
+        try {
+            await _openPasteEditorInner(text);
+        } finally {
+            pasteBusy = false;
+        }
+    }
+
+    async function _openPasteEditorInner(text) {
         let profiles = [];
         let res = null;
         try {
             res = await API.post('/api/strategies/import', { text });
-            if (res && res.ok) profiles = res.profiles || [];
         } catch (_e) { res = null; }
-        if (!profiles.length) profiles = _parseStrategyArgs(text);
-        if (!profiles.length) {
-            Toast.warning((res && res.error) || 'В буфере нет распознаваемой стратегии');
+        if (res && !res.ok) {
+            // Сервер разобрал и отказал по делу (v1, нет --lua-desync) —
+            // сырой текст в редактор не тащим.
+            Toast.warning(res.error || 'В буфере нет распознаваемой стратегии');
+            return;
+        }
+        profiles = res ? (res.profiles || []) : _parseStrategyArgs(text);
+        if (!profiles.length || _anyModalOpen()) {
+            if (!profiles.length) Toast.warning('В буфере нет распознаваемой стратегии');
             return;
         }
         const imported = res && res.ok && res.kind && res.kind !== 'args';
@@ -2347,17 +2365,13 @@ const StrategiesPage = (() => {
             box.className = 'alert alert-warning';
             box.style.marginBottom = '12px';
             box.innerHTML = '<div class="alert-title">Что поменяно при вставке</div><ul style="margin:4px 0 0 18px; padding:0;">'
-                + notes.map(n => '<li>' + _escHtml(n) + '</li>').join('') + '</ul>';
+                + notes.map(n => '<li>' + escapeHtml(n) + '</li>').join('') + '</ul>';
             body.prepend(box);
         }
         Toast.info('Стратегия из буфера — задайте ID/имя, проверьте и сохраните');
     }
 
-    function _escHtml(t) {
-        const d = document.createElement('div');
-        d.textContent = String(t == null ? '' : t);
-        return d.innerHTML;
-    }
+
 
     // Копирование в буфер с fallback на execCommand (работает и по http,
     // где navigator.clipboard недоступен).

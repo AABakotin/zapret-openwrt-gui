@@ -447,6 +447,8 @@ def site_trace(args: dict) -> dict:
                       resolve=bool(args.get("resolve", True)))
     if result.get("ok"):
         result["note"] = NOTE
+    else:
+        result["hint"] = "передайте домен, например youtube.com"
     return result
 
 

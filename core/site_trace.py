@@ -45,7 +45,9 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import gzip
 import socket
+import threading
 
 # Потоки, которые проверяем: имя → (протокол, порт, l7).
 FLOWS = (
@@ -276,17 +278,23 @@ def pick_profile(profiles, flow: tuple, domain: str, ips,
 
 # ─────────────────────────── сбор ────────────────────────────
 
-def _resolve(domain: str, timeout: float = 2.0) -> list:
-    old = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(timeout)
-    try:
-        infos = socket.getaddrinfo(domain, 443, socket.AF_INET,
-                                   socket.SOCK_STREAM)
-        return sorted({i[4][0] for i in infos})
-    except OSError:
-        return []
-    finally:
-        socket.setdefaulttimeout(old)
+def _resolve(domain: str, timeout: float = 3.0) -> list:
+    """Адреса из системного DNS роутера. getaddrinfo таймаутов не знает
+    (а ``setdefaulttimeout`` — общий на процесс), поэтому ждём его в
+    отдельном потоке не дольше ``timeout``."""
+    box = []
+
+    def run():
+        try:
+            infos = socket.getaddrinfo(domain, 443, socket.AF_INET,
+                                       socket.SOCK_STREAM)
+            box.append(sorted({i[4][0] for i in infos}))
+        except OSError:
+            box.append([])
+    t = threading.Thread(target=run, name="site-trace-dns", daemon=True)
+    t.start()
+    t.join(timeout)
+    return box[0] if box else []
 
 
 def _list_reader():
@@ -303,7 +311,9 @@ def _list_reader():
         if path not in cache:
             items = set()
             try:
-                with open(path, encoding="utf-8", errors="replace") as f:
+                opener = gzip.open if path.endswith(".gz") else open
+                with opener(path, "rt", encoding="utf-8",
+                            errors="replace") as f:
                     for line in f:
                         line = line.strip().lower()
                         if line and not line.startswith("#"):
@@ -341,6 +351,7 @@ def _dns_layer(domain: str) -> list:
 def _unified_layer(domain: str) -> list:
     from core.routing import domain_match
     from core.unified import storage
+    from core.unified.applier import active_method
     from core.unified.model import is_tunnel_method
     out = []
     for route in storage.load_routes() or []:
@@ -360,23 +371,32 @@ def _unified_layer(domain: str) -> list:
                     break
         maybe = not hit and bool(route.destination.geosite)
         if hit or maybe:
+            method = active_method(route)
             out.append({"id": getattr(route, "id", ""), "name": route.name,
-                        "method": route.method,
-                        "tunnel": is_tunnel_method(route.method),
+                        "method": method,
+                        "failover": method != route.method,
+                        "devices": [d.get("hostname") or d.get("ip") or
+                                    d.get("mac") or "?"
+                                    for d in route.devices or []],
+                        "tunnel": is_tunnel_method(method),
                         "match": hit or "geosite: %s" % ", ".join(
                             route.destination.geosite),
                         "maybe": maybe})
     return out
 
 
-def _lists_layer(domain: str) -> dict:
+def _lists_layer(domain: str, read=None) -> dict:
+    """Где домен уже есть. Файлы читает тот же кеширующий ``read``, что и
+    профили, — большой список не читается дважды; ``get_hostlist`` не
+    годится — он ещё и создаёт встроенный список, которого нет."""
     from core.hostlist_manager import get_hostlist_manager
     from core import named_lists
     hm = get_hostlist_manager()
+    read = read or _list_reader()
     hostlists = []
     for name in hm.list_names():
-        hit = domain_hit(domain, {d.lower() for d in
-                                  hm.get_hostlist(name) or []})
+        path = hm._file_path(name)
+        hit = domain_hit(domain, read(path)) if os.path.exists(path) else ""
         if hit:
             hostlists.append({"name": name, "match": hit})
     named = []
@@ -390,10 +410,15 @@ def _lists_layer(domain: str) -> dict:
 
 
 def _firewall_ports() -> dict:
+    """Порты перехвата так, как их ставит ``firewall.apply_rules``: те же
+    умолчания и без портов управления."""
     from core.config_manager import get_config_manager
+    from core.firewall import strip_management_ports
     cfg = get_config_manager()
-    return {"tcp": parse_ports(cfg.get("nfqws", "ports_tcp", default="")),
-            "udp": parse_ports(cfg.get("nfqws", "ports_udp", default=""))}
+    tcp = cfg.get("nfqws", "ports_tcp", default="80,443") or "80,443"
+    udp = cfg.get("nfqws", "ports_udp", default="443") or "443"
+    tcp, _dropped = strip_management_ports(tcp, cfg)
+    return {"tcp": parse_ports(tcp), "udp": parse_ports(udp)}
 
 
 def _safe(fn, *args):
@@ -420,6 +445,15 @@ def normalize(domain: str) -> str:
     return d.strip(".").lstrip("^")
 
 
+def _is_block_ip(ip: str) -> bool:
+    """0.0.0.0, ::, 127.x — запись hosts, которая «глушит» сайт."""
+    try:
+        a = ipaddress.ip_address(str(ip).strip())
+    except ValueError:
+        return False
+    return a.is_unspecified or a.is_loopback
+
+
 class _NoStrategy(Exception):
     """Стратегия не выбрана — профилей нет вовсе."""
 
@@ -431,8 +465,14 @@ def trace(domain: str, resolve: bool = True) -> dict:
         return {"ok": False, "error": "нужно имя сайта, например youtube.com"}
     errors = {}
     out = {"ok": True, "domain": domain}
+    read = None
+    try:
+        read = _list_reader()
+    except Exception:                               # noqa: BLE001
+        pass
     for key, fn in (("hosts", _hosts_layer), ("dns", _dns_layer),
-                    ("routes", _unified_layer), ("lists", _lists_layer)):
+                    ("routes", _unified_layer),
+                    ("lists", lambda d: _lists_layer(d, read))):
         val, err = _safe(fn, domain)
         out[key] = val if val is not None else ([] if key != "lists"
                                                 else {})
@@ -441,23 +481,28 @@ def trace(domain: str, resolve: bool = True) -> dict:
     ips = _resolve(domain) if resolve else []
     if out["hosts"]:
         ips = [h["ip"] for h in out["hosts"]]
+        out["blocked"] = all(_is_block_ip(ip) for ip in ips)
     out["ips"] = ips
 
     nfq = {"running": False, "strategy": "", "flows": {}}
     try:
         from core.config_manager import get_config_manager
-        from core.list_lint import _current_argv
+        from core.list_lint import _strategy_argv
+        from core.unified import nfqws_hostlist
         from core.nfqws_manager import get_nfqws_manager
         from core.strategy_lint import split_profiles
         nfq["running"] = bool(get_nfqws_manager().is_running())
         nfq["strategy"] = get_config_manager().get(
             "strategy", "current_name", default="") or ""
-        argv = _current_argv()
+        # Как compose_command: hostlist единого слоя ДО профилей стратегии —
+        # он входит в первый профиль, а не в последний.
+        argv = _strategy_argv()
         if not argv:
             nfq["no_strategy"] = True
             raise _NoStrategy()
-        profiles = split_profiles(argv)
-        read = _list_reader()
+        profiles = split_profiles(
+            list(nfqws_hostlist.compose_extra_args() or []) + argv)
+        read = read or _list_reader()
         fw = _firewall_ports()
         for flow in FLOWS:
             name, proto, port, _l7 = flow
@@ -489,18 +534,30 @@ def summarize(t: dict) -> list:
                          % (d["server"], d["rule"]))
     tunnels = [r for r in t.get("routes") or [] if r["tunnel"]
                and not r["maybe"]]
-    for r in t.get("routes") or []:
-        lines.append("Единый слой: «%s» → %s (%s)%s" % (
-            r["name"] or r["id"], r["method"], r["match"],
-            " — возможно, решает движок по geosite" if r["maybe"] else ""))
-    if len({r["method"] for r in tunnels}) > 1:
-        lines.append("Внимание: домен попал в несколько маршрутов с "
-                     "разными туннелями — какой победит, зависит от "
-                     "порядка правил")
-    if tunnels:
-        lines.append("Итог: трафик уходит в туннель %s — nfqws2 его не "
-                     "видит" % tunnels[0]["method"])
+    if t.get("blocked"):
+        lines.append("Итог: hosts отправляет сайт в никуда — он не "
+                     "откроется, обход тут ни при чём")
         return lines
+    for r in t.get("routes") or []:
+        lines.append("Единый слой: «%s» → %s (%s)%s%s%s" % (
+            r["name"] or r["id"], r["method"], r["match"],
+            " — сейчас запасной метод" if r.get("failover") else "",
+            " — только для устройств: %s" % ", ".join(r["devices"])
+            if r.get("devices") else "",
+            " — возможно, решает движок по geosite" if r["maybe"] else ""))
+    methods = sorted({r["method"] for r in tunnels})
+    if len(methods) > 1:
+        lines.append("Итог: трафик уходит в один из туннелей (%s) — "
+                     "какой победит, зависит от приоритета маршрутов; "
+                     "nfqws2 его не видит" % ", ".join(methods))
+        return lines
+    if tunnels:
+        scoped = all(r.get("devices") for r in tunnels)
+        lines.append("Итог: трафик %sуходит в туннель %s — nfqws2 его не "
+                     "видит" % ("указанных устройств " if scoped else "",
+                                methods[0]))
+        if not scoped:
+            return lines
     nfq = t.get("nfqws") or {}
     if not nfq.get("running"):
         lines.append("nfqws2 не запущен — обхода DPI нет")

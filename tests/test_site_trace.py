@@ -139,13 +139,79 @@ class TestTrace(unittest.TestCase):
         with mock.patch.object(st, "_hosts_layer", boom), \
                 mock.patch.object(st, "_dns_layer", lambda d: []), \
                 mock.patch.object(st, "_unified_layer", lambda d: []), \
-                mock.patch.object(st, "_lists_layer", lambda d: {}), \
-                mock.patch("core.list_lint._current_argv", lambda: []):
+                mock.patch.object(st, "_lists_layer", lambda d, r=None: {}), \
+                mock.patch("core.list_lint._strategy_argv", lambda: []):
             r = st.trace("youtube.com", resolve=False)
         self.assertTrue(r["ok"])
         self.assertIn("hosts", r["errors"])
         self.assertTrue(r["nfqws"]["no_strategy"])
         self.assertIsInstance(r["summary"], list)
+
+    def test_unified_hostlist_goes_into_first_profile(self):
+        # compose_command ставит hostlist единого слоя ДО профилей.
+        argv = ["--filter-tcp=443", "--lua-desync=fake", "--new",
+                "--filter-tcp=443", "--lua-desync=multisplit"]
+        with mock.patch.object(st, "_hosts_layer", lambda d: []), \
+                mock.patch.object(st, "_dns_layer", lambda d: []), \
+                mock.patch.object(st, "_unified_layer", lambda d: []), \
+                mock.patch.object(st, "_lists_layer", lambda d, r=None: {}), \
+                mock.patch.object(st, "_list_reader",
+                                  lambda: reader({"/u.txt": ["a.com"]})), \
+                mock.patch.object(st, "_firewall_ports", lambda: {
+                    "tcp": st.parse_ports("80,443"),
+                    "udp": st.parse_ports("443")}), \
+                mock.patch("core.list_lint._strategy_argv", lambda: argv), \
+                mock.patch("core.unified.nfqws_hostlist.compose_extra_args",
+                           lambda: ["--hostlist=/u.txt"]):
+            r = st.trace("youtube.com", resolve=False)
+        https = r["nfqws"]["flows"]["https"]
+        self.assertEqual(https["profile"], 2)
+        self.assertEqual(https["actions"], ["multisplit"])
+
+
+class TestSummary(unittest.TestCase):
+
+    def test_blocked_by_hosts(self):
+        lines = st.summarize({"hosts": [{"ip": "0.0.0.0", "system": False}],
+                              "blocked": True})
+        self.assertIn("в никуда", lines[-1])
+
+    def test_several_tunnels_not_definite(self):
+        routes = [{"id": "1", "name": "a", "method": "awg:wg0",
+                   "match": "x", "tunnel": True, "maybe": False},
+                  {"id": "2", "name": "b", "method": "singbox:tun0",
+                   "match": "x", "tunnel": True, "maybe": False}]
+        lines = st.summarize({"routes": routes})
+        self.assertIn("один из туннелей", lines[-1])
+
+    def test_device_scoped_tunnel_keeps_nfqws_part(self):
+        routes = [{"id": "1", "name": "a", "method": "awg:wg0",
+                   "match": "x", "tunnel": True, "maybe": False,
+                   "devices": ["tv"]}]
+        lines = st.summarize({"routes": routes, "nfqws": {
+            "running": False}})
+        self.assertTrue(any("nfqws2 не запущен" in x for x in lines))
+
+    def test_block_ip(self):
+        self.assertTrue(st._is_block_ip("0.0.0.0"))
+        self.assertTrue(st._is_block_ip("127.0.0.1"))
+        self.assertFalse(st._is_block_ip("1.2.3.4"))
+
+
+class TestReader(unittest.TestCase):
+
+    def test_gzip_list(self):
+        import gzip
+        import os
+        import tempfile
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "l.txt.gz")
+        with gzip.open(path, "wt", encoding="utf-8") as f:
+            f.write("# c\nYouTube.com\n")
+        with mock.patch("core.config_manager.get_config_manager") as g:
+            g.return_value.get.return_value = d
+            read = st._list_reader()
+            self.assertEqual(read(path), {"youtube.com"})
 
 
 if __name__ == "__main__":

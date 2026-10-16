@@ -37,7 +37,7 @@ class TestBrief(unittest.TestCase):
     def test_stopped_with_strategy_is_bad(self):
         b = brief(data(status={"nfqws": {"running": False, "exit_code": 1}}))
         self.assertEqual(b["level"], "bad")
-        self.assertIn("код выхода 1", b["line"])
+        self.assertIn("упал (код выхода 1)", b["line"])
         self.assertEqual(b["blocks"]["nfqws"]["level"], "bad")
         self.assertEqual(b["problems"][0]["page"], "control")
 
@@ -80,6 +80,25 @@ class TestBrief(unittest.TestCase):
         self.assertEqual(b["blocks"]["vpn"]["level"], "ok")
         b = brief(data(awg={"total": 1, "active": 0}))
         self.assertEqual(b["blocks"]["vpn"]["text"], "туннели не подняты")
+
+    def test_user_stop_is_warn_not_crash(self):
+        b = brief(data(status={"nfqws": {"running": False, "exit_code": -15}}))
+        self.assertEqual(b["level"], "warn")
+        self.assertNotIn("код выхода", b["line"])
+
+    def test_autostart_unsupported_not_nagged(self):
+        b = brief(data(status={"autostart": {"enabled": False,
+                                             "method": "unsupported"}}))
+        self.assertEqual(b["level"], "ok")
+
+    def test_running_without_strategy_no_placeholder(self):
+        b = brief(data(status={"strategy": {"id": "", "name": "Не выбрана"}}))
+        self.assertEqual(b["blocks"]["nfqws"]["text"], "nfqws2 работает")
+
+    def test_monitoring_without_sites(self):
+        b = brief(data(healthcheck=hc([])))
+        self.assertNotIn("все 0", b["line"])
+        self.assertIn("сайтов в нём нет", b["blocks"]["monitoring"]["text"])
 
     def test_empty_input(self):
         b = brief({})

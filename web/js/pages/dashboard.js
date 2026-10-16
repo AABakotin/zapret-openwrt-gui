@@ -15,6 +15,7 @@ const DashboardPage = (() => {
     const VIEW_KEY = 'zapret-gui-dash-view';
 
     function render(container) {
+        Object.keys(manualBlocks).forEach(k => delete manualBlocks[k]);
         container.innerHTML = `
             <div class="page-header">
                 <h1 class="page-title">Главная</h1>
@@ -36,9 +37,6 @@ const DashboardPage = (() => {
                     <button type="submit" class="btn btn-primary btn-sm">Разобраться</button>
                 </form>
             </div>
-
-            <!-- Другие обходчики DPI: вдвоём с nfqws2 мешают друг другу -->
-            <div id="dash-rivals" style="display:none; margin-bottom:12px;"></div>
 
             <details class="dash-block" data-block="nfqws" open>
             <summary class="dash-block-head">
@@ -320,7 +318,6 @@ const DashboardPage = (() => {
                 updateEngineCards({awg: res.awg, singbox: res.singbox,
                                    mihomo: res.mihomo});
                 updateMonitoringCards(res.block_detector, res.healthcheck);
-                renderRivals(res.rivals || []);
                 renderBrief(res.brief);
                 renderLogs(res.logs || []);
             }
@@ -652,25 +649,6 @@ const DashboardPage = (() => {
         if (!head) return;
         const block = head.parentElement && head.parentElement.dataset.block;
         if (block) manualBlocks[block] = true;
-    }
-
-    function renderRivals(rivals) {
-        const el = document.getElementById('dash-rivals');
-        if (!el) return;
-        if (!rivals.length) {
-            el.style.display = 'none';
-            el.innerHTML = '';
-            return;
-        }
-        const names = rivals.map(r => escapeHtml(r.name)).join(', ');
-        el.innerHTML = `
-            <div class="alert alert-danger" data-action="hash-diagnostics" style="cursor:pointer;">
-                <div class="alert-title">Работает другой обходчик: ${names}</div>
-                <div>Он меняет те же пакеты, что nfqws2, и они мешают друг
-                другу: стратегия срабатывает через раз. Оставьте что-то одно.
-                Подробности — в «Диагностике».</div>
-            </div>`;
-        el.style.display = '';
     }
 
     function renderLogs(entries) {

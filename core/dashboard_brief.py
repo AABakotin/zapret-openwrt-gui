@@ -51,8 +51,9 @@ def _nfqws_block(st: dict, rivals: list) -> tuple:
     chosen = bool(strategy.get("id"))
 
     if rivals:
-        problems.append(("bad", "работает другой обходчик DPI (%s) — "
-                         "они мешают друг другу"
+        problems.append(("bad", "работает другой обходчик DPI (%s): он "
+                         "меняет те же пакеты, что nfqws2, и стратегия "
+                         "срабатывает через раз — оставьте что-то одно"
                          % _names([r.get("name") or "?" for r in rivals]),
                          "diagnostics"))
     if zapret and not zapret.get("installed", True):
@@ -60,20 +61,27 @@ def _nfqws_block(st: dict, rivals: list) -> tuple:
     elif not chosen:
         problems.append(("warn", "стратегия не выбрана", "strategies"))
     elif not running:
+        # Положительный код — движок упал сам; отрицательный (сигнал) или
+        # пусто — его остановили, обхода нет, но это не авария.
         code = nfq.get("exit_code")
-        problems.append(("bad", "nfqws2 остановлен%s" % (
-            " (код выхода %s)" % code if code not in (None, 0) else ""),
-            "control"))
-    if running and not autostart.get("enabled"):
+        crashed = isinstance(code, int) and code > 0
+        problems.append(("bad" if crashed else "warn",
+                         "nfqws2 %s" % ("упал (код выхода %d)" % code
+                                        if crashed else "остановлен"),
+                         "control"))
+    if running and not autostart.get("enabled") \
+            and autostart.get("method") != "unsupported":
         problems.append(("warn", "автозапуск выключен — после "
                          "перезагрузки обход не поднимется", "autostart"))
 
     level = "ok"
     for lv, _t, _p in problems:
         level = _worse(level, lv)
-    if running:
+    if running and chosen:
         text = "nfqws2 работает, стратегия «%s»" % (
-            strategy.get("name") or strategy.get("id") or "?")
+            strategy.get("name") or strategy.get("id"))
+    elif running:
+        text = "nfqws2 работает"
     elif chosen:
         text = "nfqws2 остановлен"
     else:
@@ -119,6 +127,8 @@ def _monitor_block(data: dict) -> tuple:
         return "ok", "мониторинг включён, проверок ещё не было", []
     total = int(last.get("total") or 0)
     ok = int(last.get("ok") or 0)
+    if not total:
+        return "ok", "мониторинг включён, но сайтов в нём нет", []
     if last.get("global_outage"):
         return "bad", "не открывается ни один сайт", [(
             "bad", "не открывается ни один сайт из мониторинга — похоже, "

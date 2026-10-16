@@ -322,6 +322,9 @@ const DiagnosticsPage = (() => {
         // Пришли с главной («Сайт не открывается?»): сразу «Куда пойдёт сайт».
         const site = new URLSearchParams((location.hash.split('?')[1]) || '').get('site');
         if (site) {
+            // Параметр — разовый: перезагрузка или «Назад» не должны
+            // запускать проверку снова.
+            try { history.replaceState(null, '', '#diagnostics'); } catch (_) {}
             const input = document.getElementById('diag-trace-domain');
             if (input) input.value = site;
             document.getElementById('diag-trace-card')?.scrollIntoView({ block: 'start' });

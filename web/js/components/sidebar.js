@@ -282,6 +282,15 @@ const Sidebar = (() => {
             // Элементы (с поддержкой вложенных children). В простом меню
             // дерево не раскрывается: дочерние разделы — у полного.
             items.forEach(item => {
+                // Простое меню и открыт дочерний раздел — показываем его
+                // самого (с именем родителя), чтобы активный пункт был виден.
+                const activeChild = simple && !item.simple
+                    && (item.children || []).find(c => c.id === currentPage);
+                if (activeChild) {
+                    _renderLeaf(nav, Object.assign({}, activeChild,
+                        { label: `${item.label} · ${activeChild.label}` }), false);
+                    return;
+                }
                 if (item.children && item.children.length && !simple) {
                     _renderParent(nav, item);
                 } else {

@@ -454,6 +454,7 @@ class StrategyScanner:
                 return None
             results = list(self._results)
             entries = dict(self._entries_by_id)
+            target, protocol = self._target, self._protocol
         pool = [r for r in results if r.success] if lighter \
             else [r for r in results if not r.success and r.score > 0]
         if not pool:
@@ -465,7 +466,7 @@ class StrategyScanner:
             return None
         return {"strategy_id": best.strategy_id, "name": best.strategy_name,
                 "args": entry.get_args_list(), "score": best.score,
-                "target": self._target, "protocol": self._protocol}
+                "target": target, "protocol": protocol}
 
     def get_working_strategies(self) -> list[dict[str, Any]]:
         """Получить список работающих стратегий."""

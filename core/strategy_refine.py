@@ -28,7 +28,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 
 MAX_VARIANTS = 20
@@ -75,28 +74,80 @@ def _blob_of(opts: list) -> str:
     return ""
 
 
-def split_base(args: list) -> tuple:
-    """(объявления blob, шаги --lua-desync) из argv стратегии."""
-    decls = [a for a in args if str(a).startswith("--blob=")]
-    steps = [a for a in args if str(a).startswith("--lua-desync=")]
-    return decls, steps
+# Что из профиля базы переносится в варианты. Фильтры (порты, l7,
+# списки) подбор ставит свои; а --payload/--in-range/--out-range решают,
+# к каким пакетам применяется шаг, — без них вариант отличался бы от базы
+# не тем, что написано в его названии.
+_KEEP_OPTS = ("--payload", "--in-range", "--out-range")
 
 
-def _variants_heavier(steps: list, protocol: str) -> list:
+def _profile_of(args: list, protocol: str) -> list:
+    """Профиль базы под протокол подбора (база бывает пресетом из
+    нескольких профилей через ``--new``)."""
+    from core.strategy_lint import split_profiles
+    profiles = [p for p in split_profiles([str(a) for a in args or []])
+                if any(a.startswith("--lua-desync=") for a in p)]
+    if not profiles:
+        return []
+    other = "udp" if protocol == "tcp" else "tcp"
+    for p in profiles:
+        if any(a.startswith("--filter-%s=" % protocol) for a in p):
+            return p
+    for p in profiles:
+        if not any(a.startswith("--filter-%s=" % other) for a in p):
+            return p
+    return profiles[0]
+
+
+def split_base(args: list, protocol: str = "tcp") -> tuple:
+    """(объявления blob, [[префикс, шаг], …]) профиля базы.
+
+    Префикс шага — опции из :data:`_KEEP_OPTS`, стоящие перед ним: они
+    едут вместе с шагом и переходят к следующему, если шаг убран.
+    """
+    prof = _profile_of(args, protocol)
+    decls = [a for a in args or [] if str(a).startswith("--blob=")]
+    segs, prefix = [], []
+    for a in prof:
+        if a.startswith("--lua-desync="):
+            segs.append([prefix, a])
+            prefix = []
+        elif a.split("=", 1)[0] in _KEEP_OPTS:
+            prefix.append(a)
+    return decls, segs
+
+
+def _flat(segs: list) -> list:
     out = []
-    fake_idx = [i for i, s in enumerate(steps) if _split(s)[0] in _FAKE_FNS]
+    for prefix, step in segs:
+        out += list(prefix) + [step]
+    return out
+
+
+def _replace(segs: list, i: int, step: str) -> list:
+    return segs[:i] + [[segs[i][0], step]] + segs[i + 1:]
+
+
+def _variants_heavier(segs: list, protocol: str) -> list:
+    out = []
+    steps = [st for _p, st in segs]
+    fake_idx = [i for i, st in enumerate(steps) if _split(st)[0] in _FAKE_FNS]
     if not fake_idx:
-        # Фейка нет вовсе — сначала пробуем его добавить.
+        # Фейка нет — добавляем его и перебираем уже его параметры.
         blob = "fake_default_quic" if protocol == "udp" else "fake_default_tls"
         extra = "repeats=6" if protocol == "udp" else "tcp_md5:repeats=6"
-        out.append(("добавить фейк", ["--lua-desync=fake:blob=%s:%s"
-                                      % (blob, extra)] + steps))
+        added = [[segs[0][0] if segs else [],
+                  "--lua-desync=fake:blob=%s:%s" % (blob, extra)]]
+        added += [[[] if n == 0 else p, st] for n, (p, st) in enumerate(segs)]
+        out.append(("добавить фейк", added))
+        out += [("фейк, " + label, var)
+                for label, var in _variants_heavier(added, protocol)]
         return out
     i = fake_idx[0]
     fn, opts = _split(steps[i])
 
     def with_step(new_step):
-        return steps[:i] + [new_step] + steps[i + 1:]
+        return _replace(segs, i, new_step)
 
     cur_rep = next((o.split("=", 1)[1] for o in opts
                     if _key(o) == "repeats"), "")
@@ -121,7 +172,8 @@ def _variants_heavier(steps: list, protocol: str) -> list:
                      "fallback=%s" % (CLONE_BLOB, fallback))
             cloned = _join(fn, _set(opts, "blob", CLONE_BLOB))
             out.append(("ClientHello клиента вместо заготовки",
-                        steps[:i] + [clone, cloned] + steps[i + 1:]))
+                        segs[:i] + [[segs[i][0], clone], [[], cloned]]
+                        + segs[i + 1:]))
             # Самое сильное сочетание — одним вариантом.
             strong = _set(_set(base, "tcp_md5"), "repeats", 11)
             strong = _set(strong, "tls_mod", "rnd,dupsid,sni=%s" % FAKE_SNI)
@@ -130,14 +182,17 @@ def _variants_heavier(steps: list, protocol: str) -> list:
     return out
 
 
-def _variants_lighter(steps: list) -> list:
+def _variants_lighter(segs: list) -> list:
     out = []
-    if len(steps) > 1:
-        for i, s in enumerate(steps):
-            rest = steps[:i] + steps[i + 1:]
-            out.append(("без шага %s" % _split(s)[0], rest))
-    for i, s in enumerate(steps):
-        fn, opts = _split(s)
+    if len(segs) > 1:
+        for i, (prefix, st) in enumerate(segs):
+            rest = [[p, x] for p, x in segs[:i] + segs[i + 1:]]
+            # Префикс убранного шага (--payload…) переходит к следующему.
+            if i < len(segs) - 1:
+                rest[i] = [list(prefix) + list(rest[i][0]), rest[i][1]]
+            out.append(("без шага %s" % _split(st)[0], rest))
+    for i, (_prefix, st) in enumerate(segs):
+        fn, opts = _split(st)
         rep = next((o.split("=", 1)[1] for o in opts
                     if _key(o) == "repeats"), "")
         if rep.isdigit() and int(rep) > 1:
@@ -146,39 +201,45 @@ def _variants_lighter(steps: list) -> list:
             if lower > 1:
                 new = _set(new, "repeats", lower)
             out.append(("%s: повторов %d вместо %s" % (fn, lower, rep),
-                        steps[:i] + [_join(fn, new)] + steps[i + 1:]))
+                        _replace(segs, i, _join(fn, new))))
         if any(_key(o) == "tls_mod" for o in opts):
-            out.append(("%s без tls_mod" % fn, steps[:i] + [_join(
-                fn, [o for o in opts if _key(o) != "tls_mod"])]
-                + steps[i + 1:]))
+            out.append(("%s без tls_mod" % fn, _replace(segs, i, _join(
+                fn, [o for o in opts if _key(o) != "tls_mod"]))))
     return out
+
+
+_NAME_REF_RE = re.compile(r"(?:blob|fallback)=([A-Za-z0-9_]+)")
 
 
 def mutations(args: list, protocol: str = "tcp", lighter: bool = False,
               limit: int = MAX_VARIANTS) -> list:
     """Варианты стратегии: [{"label", "args"}]. Чистая функция.
 
-    ``args`` — argv стратегии; берутся объявления blob'ов и шаги
-    ``--lua-desync`` (фильтр подбор поставит сам). Дубли и сама база —
-    вне выдачи.
+    ``args`` — argv стратегии (из пресета — профиль под протокол);
+    переносятся шаги ``--lua-desync`` с их ``--payload``/``--*-range`` и
+    нужные им объявления blob'ов; фильтр подбор поставит сам. Дубли и
+    сама база — вне выдачи. В режиме ``lighter`` первой идёт сама база:
+    рабочая не должна пропасть из итогов, если облегчённые не сработают.
     """
     protocol = "udp" if protocol == "udp" else "tcp"
-    decls, steps = split_base([str(a) for a in args or []])
-    if not steps:
+    decls, segs = split_base(args, protocol)
+    if not segs:
         return []
-    raw = (_variants_lighter(steps) if lighter
-           else _variants_heavier(steps, protocol))
-    seen = {tuple(steps)}
+    raw = (_variants_lighter(segs) if lighter
+           else _variants_heavier(segs, protocol))
+    if lighter:
+        raw = [("как есть", segs)] + raw
+    seen = set() if lighter else {tuple(_flat(segs))}
     out = []
     for label, var in raw:
-        if not var or tuple(var) in seen:
+        flat = _flat(var)
+        if not var or tuple(flat) in seen:
             continue
-        seen.add(tuple(var))
-        used = {n for s in var for n in re.findall(r"blob=([A-Za-z0-9_]+)",
-                                                   s)}
+        seen.add(tuple(flat))
+        used = {n for s in flat for n in _NAME_REF_RE.findall(s)}
         keep = [d for d in decls
                 if d[len("--blob="):].split(":", 1)[0] in used]
-        out.append({"label": label, "args": keep + var})
+        out.append({"label": label, "args": keep + flat})
         if len(out) >= limit:
             break
     return out
@@ -186,12 +247,9 @@ def mutations(args: list, protocol: str = "tcp", lighter: bool = False,
 
 def candidates(variants: list) -> list:
     """Варианты → кандидаты сканера (как у «своей стратегии»)."""
-    out = []
-    for v in variants:
-        digest = hashlib.sha1(" ".join(v["args"]).encode()).hexdigest()
-        out.append({"id": "custom_" + digest[:10], "args": v["args"],
-                    "name": "Уточнение: %s" % v["label"]})
-    return out
+    from core.custom_candidates import sid
+    return [{"id": sid(v["args"]), "args": v["args"],
+             "name": "Уточнение: %s" % v["label"]} for v in variants]
 
 
 # ───────────────────────────── запуск ─────────────────────────────
@@ -212,7 +270,9 @@ def base_from_scan(lighter: bool) -> dict:
 def start(lighter: bool = False, stop_after: int = 3) -> dict:
     """Запустить уточнение по итогам последнего подбора."""
     from core import custom_candidates, lint_env
-    from core.strategy_scanner import get_strategy_scanner
+    from core.strategy_scanner import STATUS_RUNNING, get_strategy_scanner
+    if get_strategy_scanner().get_status().get("status") == STATUS_RUNNING:
+        return {"ok": False, "error": "подбор уже выполняется"}
     base = base_from_scan(lighter)
     if base.get("error"):
         return {"ok": False, "error": base["error"]}

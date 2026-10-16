@@ -1282,7 +1282,7 @@ TTL отсчитывается от старта прогона и покрыв�
 |---|---|---|
 | `bare_trick_no_filter` | warning | `--lua-desync` без `--filter-tcp/udp/l7`: уедет на весь трафик очереди |
 | `unknown_lua_function` | **error** | имени нет в карте этого устройства |
-| `blob_unknown` | **error** | `blob=NAME` не объявлен и не известен реестру |
+| `blob_unknown` | **error** | `blob=NAME` не объявлен и не известен реестру (имя из `tls_client_hello_clone:blob=NAME` считается объявленным только в своём профиле и только после шага clone) |
 | `blob_file_missing` | **error** | объявлен, но файла нет — ПУСТОЙ fake |
 | `blob_declared_after_new` | **error** | `--blob=` после `--new` (декларации глобальны, §2 инв. 6) |
 | `lua_init_order` | **error** | `zapret-lib.lua` грузится не первым (§2 инв. 1) |

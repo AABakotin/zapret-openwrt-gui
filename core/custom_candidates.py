@@ -117,7 +117,8 @@ def split_parts(text: str) -> tuple:
     return [p for p in parts if p["desync"] or p["v1"]], blobs
 
 
-def _sid(desync: list) -> str:
+def sid(desync: list) -> str:
+    """id кандидата: ``custom_`` + отпечаток argv (его же берёт уточнение)."""
     digest = hashlib.sha1(" ".join(desync).encode("utf-8")).hexdigest()
     return "custom_" + digest[:10]
 
@@ -187,7 +188,7 @@ def check(text: str, protocol: str = "tcp", known_functions=None,
         if len(candidates) >= MAX_CANDIDATES:
             dropped += 1
             continue
-        candidates.append({"id": _sid(args), "args": args, "index": index})
+        candidates.append({"id": sid(args), "args": args, "index": index})
     out = {"ok": bool(candidates), "candidates": candidates,
            "rejected": rejected, "dropped": dropped,
            "protocol": protocol}

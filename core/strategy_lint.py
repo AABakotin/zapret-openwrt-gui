@@ -303,18 +303,22 @@ def _check_blobs(profiles, known_blobs) -> list:
             match = _BLOB_DECL_RE.match(arg)
             if match:
                 declared.add(match.group(1).strip())
-            # tls_client_hello_clone:blob=X сам готовит blob X (в desync
-            # соединения) — ссылки на X дальше по профилю законны.
-            match = _CLONE_BLOB_RE.match(arg)
-            if match:
-                declared.add(match.group(1))
 
     out = []
     seen = set()
     for index, args in enumerate(profiles):
+        # tls_client_hello_clone:blob=X сам готовит blob X в desync
+        # соединения — ссылки на X законны дальше по ЭТОМУ профилю, но
+        # не раньше шага clone и не в соседних профилях.
+        cloned = set()
         for arg in args:
-            for name in _BLOB_REF_RE.findall(arg):
-                if name in _BUILTIN_BLOBS or name in declared or name in seen:
+            clone = _CLONE_BLOB_RE.match(arg)
+            refs = _BLOB_REF_RE.findall(arg)
+            if clone:
+                refs = [n for n in refs if n != clone.group(1)]
+            for name in refs:
+                if name in _BUILTIN_BLOBS or name in declared \
+                        or name in cloned or name in seen:
                     continue
                 if name.startswith("0x"):
                     # Инлайновый hex (`blob=0x0000…`) — это не имя, а само
@@ -339,6 +343,8 @@ def _check_blobs(profiles, known_blobs) -> list:
                         "сработает. Проверить — "
                         "blobs_list(missing_only=true)" % name,
                         where=arg, profile=index))
+            if clone:
+                cloned.add(clone.group(1))
     return out
 
 

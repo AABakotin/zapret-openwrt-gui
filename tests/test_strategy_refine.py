@@ -37,16 +37,20 @@ class TestHeavier(unittest.TestCase):
     def test_clone_variant(self):
         vs = sr.mutations(BASE, "tcp")
         v = next(v for v in vs if "ClientHello" in v["label"])
-        self.assertEqual(v["args"][0],
+        self.assertEqual(v["args"][1],
                          "--lua-desync=tls_client_hello_clone:blob=ch_clone:"
                          "fallback=tls_google")
-        self.assertIn("blob=ch_clone", v["args"][1])
-        # Декларация tls_google больше не нужна: фейк берёт клон.
-        self.assertFalse(any(a.startswith("--blob=") for a in v["args"]))
+        self.assertIn("blob=ch_clone", v["args"][2])
+        # Декларация tls_google остаётся: на неё ссылается fallback=.
+        self.assertEqual(v["args"][0], BASE[1])
 
     def test_no_fake_adds_one(self):
         vs = sr.mutations(["--lua-desync=multisplit:pos=1"], "tcp")
-        self.assertEqual(labels(vs), ["добавить фейк"])
+        ls = labels(vs)
+        self.assertEqual(ls[0], "добавить фейк")
+        # Остальное — те же уточнения поверх добавленного фейка.
+        self.assertTrue(all(l.startswith("фейк, ") for l in ls[1:]))
+        self.assertLessEqual(len(vs), sr.MAX_VARIANTS)
         vs = sr.mutations(["--lua-desync=multisplit"], "udp")
         self.assertIn("fake_default_quic", vs[0]["args"][0])
 
@@ -63,11 +67,26 @@ class TestLighter(unittest.TestCase):
     def test_drop_steps_and_halve_repeats(self):
         vs = sr.mutations(BASE, "tcp", lighter=True)
         ls = labels(vs)
+        self.assertEqual(ls[0], "как есть")
         self.assertIn("без шага fake", ls)
         self.assertIn("без шага multisplit", ls)
         self.assertIn("fake: повторов 3 вместо 6", ls)
         no_fake = next(v for v in vs if v["label"] == "без шага fake")
         self.assertEqual(no_fake["args"], ["--lua-desync=multisplit:pos=1,midsld"])
+
+
+class TestPayloadPrefix(unittest.TestCase):
+
+    def test_payload_prefix_kept(self):
+        base = ["--payload=tls_client_hello",
+                "--lua-desync=fake:blob=fake_default_tls",
+                "--payload=all", "--lua-desync=multisplit:pos=1"]
+        vs = sr.mutations(base, "tcp", lighter=True)
+        no_fake = next(v for v in vs if v["label"] == "без шага fake")
+        # Префикс снятого шага переходит к следующему.
+        self.assertIn("--lua-desync=multisplit:pos=1", no_fake["args"])
+        self.assertTrue(any(a.startswith("--payload=")
+                            for a in no_fake["args"]))
 
 
 class TestLinterClone(unittest.TestCase):

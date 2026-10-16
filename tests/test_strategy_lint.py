@@ -437,3 +437,25 @@ class TestCatalogIsNotNoisy(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_clone_blob_valid_only_after_clone_in_same_profile():
+    from core import strategy_lint
+    kb = {"tls_google": True}
+    ok = ["--filter-tcp=443",
+          "--lua-desync=tls_client_hello_clone:blob=ch_clone",
+          "--lua-desync=fake:blob=ch_clone"]
+    codes = [f["code"] for f in strategy_lint.lint(
+        ok, known_functions=None, known_blobs=kb)]
+    assert "blob_unknown" not in codes
+    # Ссылка до шага clone — blob ещё не готов.
+    early = ["--filter-tcp=443", "--lua-desync=fake:blob=ch_clone",
+             "--lua-desync=tls_client_hello_clone:blob=ch_clone"]
+    assert "blob_unknown" in [f["code"] for f in strategy_lint.lint(
+        early, known_functions=None, known_blobs=kb)]
+    # Соседний профиль clone не видит.
+    other = ["--filter-tcp=443",
+             "--lua-desync=tls_client_hello_clone:blob=ch_clone",
+             "--new", "--filter-tcp=80", "--lua-desync=fake:blob=ch_clone"]
+    assert "blob_unknown" in [f["code"] for f in strategy_lint.lint(
+        other, known_functions=None, known_blobs=kb)]

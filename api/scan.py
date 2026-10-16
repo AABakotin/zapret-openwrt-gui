@@ -10,6 +10,10 @@ API подбора стратегий (Strategy Scanner).
   POST /api/scan/apply/<idx>    — применить найденную стратегию по индексу
   POST /api/scan/custom/check   — разобрать «свою стратегию» до запуска
   POST /api/scan/refine         — «уточнение» лучшей попытки / вариант полегче
+  POST /api/scan/freeze/start   — проба «обрыв на 16 КБ» по сетям хостингов
+  POST /api/scan/freeze/stop    — остановить пробу
+  GET  /api/scan/freeze         — ход пробы или итог прошлой
+  POST /api/scan/freeze/apply   — приём сети профилем на её IP-список
 """
 
 from bottle import request, response
@@ -165,6 +169,42 @@ def register(app):
         if not res.get("ok"):
             response.status = 409 if "выполняется" in res.get("error", "") \
                 else 400
+        return res
+
+    @app.post("/api/scan/freeze/start")
+    def api_scan_freeze_start():
+        """Проба «обрыв на 16 КБ»: где обрыв и какое имя в фейке его снимает."""
+        response.content_type = "application/json; charset=utf-8"
+        from core import freeze_probe
+        res = freeze_probe.start()
+        if not res.get("ok"):
+            response.status = 409
+        return res
+
+    @app.post("/api/scan/freeze/stop")
+    def api_scan_freeze_stop():
+        response.content_type = "application/json; charset=utf-8"
+        from core import freeze_probe
+        return freeze_probe.stop()
+
+    @app.route("/api/scan/freeze")
+    def api_scan_freeze():
+        response.content_type = "application/json; charset=utf-8"
+        from core import freeze_probe
+        return {"ok": True, **freeze_probe.status()}
+
+    @app.post("/api/scan/freeze/apply")
+    def api_scan_freeze_apply():
+        """«Применить для сети». Body: {"asn": "24940"}."""
+        response.content_type = "application/json; charset=utf-8"
+        try:
+            body = request.json or {}
+        except Exception:
+            body = {}
+        from core import freeze_probe
+        res = freeze_probe.apply_network(str(body.get("asn") or ""))
+        if not res.get("ok"):
+            response.status = 400
         return res
 
     @app.post("/api/scan/custom/check")

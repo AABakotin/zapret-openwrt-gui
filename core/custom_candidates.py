@@ -207,7 +207,7 @@ def entries(candidates: list, protocol: str = "tcp") -> list:
         out.append(CatalogEntry(
             section_id=c["id"],
             name=c.get("name") or "Своя стратегия %d" % n,
-            description="вставлена пользователем",
+            description=c.get("description") or "вставлена пользователем",
             author="user",
             label="custom",
             blobs=[],

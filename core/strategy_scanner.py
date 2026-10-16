@@ -203,6 +203,8 @@ class StrategyScanner:
         self._confirm_total = 0
         # id стратегий, поднятых в начало памятью подбора.
         self._memory_ids: list[str] = []
+        # Находки пробы обрыва 16 КБ, поставленные первыми (для resume).
+        self._freeze: list[dict] = []
         # Записи каталога прогона по id — для перепроверки.
         self._entries_by_id: dict[str, CatalogEntry] = {}
         # Профиль цели (см. core/scan_targets.py)
@@ -1007,6 +1009,7 @@ class StrategyScanner:
         # То, что уже срабатывало на этой цели в этой сети, — первым:
         # пользователю важна рабочая стратегия, и шанс у этих выше.
         entries = self._memory_first(entries)
+        entries = self._freeze_first(entries, family)
 
         # Применяем start_index для resume
         if self._start_index > 0 and self._start_index < len(entries):
@@ -1044,6 +1047,36 @@ class StrategyScanner:
                 "уже срабатывали на %s в этой сети"
                 % (len(front), self._target), source="scanner")
         return front + [e for e in entries if e.section_id not in taken]
+
+    def _freeze_first(self, entries: list, family: str) -> list:
+        """Находки пробы «обрыв на 16 КБ» (core/freeze_probe) — первыми.
+
+        Только для TLS: приёмы пробы — на ClientHello. Для resume берётся
+        сохранённый список, а не свежий файл: «продолжить» обязано идти по
+        тому же порядку.
+        """
+        self._freeze = []
+        if self._protocol != "tcp" or family != "tls":
+            return entries
+        try:
+            if self._start_index > 0:
+                saved = self._load_resume_state().get("freeze")
+                found = saved if isinstance(saved, list) else []
+            else:
+                from core import freeze_probe
+                found = freeze_probe.candidates(freeze_probe.load())
+            from core.custom_candidates import entries as custom_entries
+            front = custom_entries(found, self._protocol)
+        except Exception as e:                  # noqa: BLE001 — граница
+            log.debug("Находки пробы обрыва недоступны: %s" % e,
+                      source="scanner")
+            return entries
+        if not front:
+            return entries
+        self._freeze = found
+        log.info("Проба обрыва 16 КБ: первыми проверим %d её находок"
+                 % len(front), source="scanner")
+        return front + entries
 
     def _remembered_ids(self) -> list:
         """id стратегий из памяти: для resume — сохранённые, иначе свежие."""
@@ -2556,6 +2589,7 @@ class StrategyScanner:
                 "mode": self._mode,
                 "dpi_type": self._dpi_type,
                 "memory_ids": list(self._memory_ids),
+                "freeze": list(getattr(self, "_freeze", []) or []),
                 "next_index": next_index,
                 "timestamp": time.time(),
                 "working_count": len(

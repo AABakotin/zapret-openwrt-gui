@@ -1045,6 +1045,15 @@ TLS-only без body считается псевдо-успехом (отсев 
 Аналог в `blockcheck2.sh` — env `CURL_HTTPS_GET=1` (GUI-галка «Качать полное
 тело»): HTTPS-проба делает GET всего тела вместо HEAD (`-I`).
 
+**Обрыв по сетям хостингов** (`core/freeze_probe.py`, карточка в «Подборе»):
+не по сайту, а по ASN — адреса из `data/tcp_targets.json` качаются до 25 КБ
+мимо очереди; для сетей с обрывом в песочнице перебираются шаблоны
+`hostfakesplit:…:host=NAME` и `fake:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=NAME`
+с «безопасными» именами (ya.ru, hcaptcha.com, vk.com…), засчитывается 3 из 3.
+Фильтр пробы — `--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello`.
+Находки — первыми в подборе (`_freeze_first`, только TLS-цели), «Применить для
+сети» — профиль с `--ipset=lists/asn<N>.txt` ПЕРВЫМ в стратегии `net16k-…`.
+
 ### 13.4 Предварительная проверка предпосылок
 
 `StrategyScanner._check_prerequisites()` (`:550`) вызывает

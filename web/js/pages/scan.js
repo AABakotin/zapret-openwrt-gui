@@ -221,16 +221,140 @@ const ScanPage = (() => {
                         <div id="scan-failures"></div>
                     </div>
                 </div>
+
+                <div class="card" id="scan-freeze">
+                    <div class="card-title">Обрыв на 16 КБ по сетям хостингов</div>
+                    <p class="form-hint">Провайдер может обрывать загрузку с адресов Hetzner, OVH, Cloudflare и других
+                        хостингов на 16–20 КБ — у всех сайтов на них сразу. Проба проверит ~20 сетей без обхода, а где
+                        обрыв есть — подберёт имя для фейка, которое его снимает (в песочнице, обход сети не трогается,
+                        до 15 минут). Находки пойдут в подбор первыми, а «Применить для сети» поставит приём только на
+                        адреса этой сети.</p>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <button type="button" class="btn btn-ghost btn-sm" id="scan-freeze-start" onclick="ScanPage.freezeStart()">Проверить сети</button>
+                        <button type="button" class="btn btn-ghost btn-sm hidden" id="scan-freeze-stop" onclick="ScanPage.freezeStop()">Остановить</button>
+                        <span id="scan-freeze-progress" style="font-size:13px; color:var(--text-muted);"></span>
+                    </div>
+                    <div id="scan-freeze-result" style="margin-top:8px; font-size:13px;"></div>
+                </div>
             </div>
         `;
 
         refreshHints();
         fetchStatus();
+        freezeFetch();
     }
 
     function destroy() {
         stopPolling();
+        freezeStopPolling();
         lastStatus = null;
+    }
+
+    /* ───────── проба «обрыв на 16 КБ» ───────── */
+
+    let freezeTimer = null;
+
+    function freezeStopPolling() {
+        if (freezeTimer) clearInterval(freezeTimer);
+        freezeTimer = null;
+    }
+
+    async function freezeFetch() {
+        let s;
+        try {
+            s = await API.get('/api/scan/freeze');
+        } catch (err) {
+            return;
+        }
+        renderFreeze(s);
+        const running = s.state === 'running';
+        if (running && !freezeTimer) freezeTimer = setInterval(freezeFetch, 3000);
+        if (!running) freezeStopPolling();
+    }
+
+    async function freezeStart() {
+        try {
+            const res = await API.post('/api/scan/freeze/start', {});
+            if (res.ok) {
+                Toast.success('Проба запущена');
+                freezeFetch();
+            }
+        } catch (err) {
+            Toast.error(err.message);
+        }
+    }
+
+    async function freezeStop() {
+        try {
+            await API.post('/api/scan/freeze/stop', {});
+        } catch (err) {
+            Toast.error(err.message);
+        }
+    }
+
+    async function freezeApply(asn) {
+        if (!confirm('Поставить найденный приём профилем на адреса AS' + asn
+            + '? Текущая стратегия сохранится под ним, применение — с проверкой и откатом.')) return;
+        try {
+            const res = await API.post('/api/scan/freeze/apply', { asn: String(asn) });
+            if (res.ok) {
+                Toast.success('Применяем с проверкой: адресов в списке ' + res.ipset + ' — ' + res.prefixes);
+            }
+        } catch (err) {
+            Toast.error(err.message);
+        }
+    }
+
+    const FREEZE_END = {
+        stopped: 'остановлена', time: 'вышло время (15 минут)', error: 'ошибка',
+    };
+
+    function renderFreeze(s) {
+        const prog = document.getElementById('scan-freeze-progress');
+        const out = document.getElementById('scan-freeze-result');
+        if (!prog || !out) return;
+        const running = s.state === 'running';
+        document.getElementById('scan-freeze-start')?.classList.toggle('hidden', running);
+        document.getElementById('scan-freeze-stop')?.classList.toggle('hidden', !running);
+        const nets = Array.isArray(s.nets) ? s.nets : [];
+        if (running) {
+            const phase = s.phase === 'names' ? 'подбор имени' : 'замер без обхода';
+            prog.textContent = phase + ' · ' + (s.done || 0) + '/' + (s.total || 0)
+                + (s.current ? ' · ' + s.current : '');
+        } else if (s.state && s.state !== 'idle') {
+            const when = s.finished ? new Date(s.finished * 1000).toLocaleString() : '';
+            prog.textContent = 'Прошлая проба: ' + when
+                + (FREEZE_END[s.state] ? ' · ' + FREEZE_END[s.state] : '')
+                + (s.error ? ' · ' + s.error : '');
+        } else {
+            prog.textContent = '';
+        }
+        if (!nets.length) {
+            out.innerHTML = '';
+            return;
+        }
+        const frozen = nets.filter(n => n.verdict === 'freeze');
+        const okCount = nets.filter(n => n.verdict === 'ok').length;
+        const errCount = nets.filter(n => n.verdict === 'error').length;
+        let html = '<div>Без обхода: открываются ' + okCount + ', обрыв — ' + frozen.length
+            + (errCount ? ', не ответили — ' + errCount : '') + '.</div>';
+        if (frozen.length) {
+            html += '<table class="table" style="margin-top:6px;"><tbody>' + frozen.map(n => {
+                const name = 'AS' + escapeHtml(n.asn) + ' ' + escapeHtml(n.provider);
+                let what;
+                if (n.found) {
+                    what = 'снимает: <code>' + escapeHtml(n.found.steps.join(' ')) + '</code> '
+                        + '<button type="button" class="btn btn-primary btn-sm" onclick="ScanPage.freezeApply(\''
+                        + escapeHtml(n.asn) + '\')">Применить для сети</button>';
+                } else if (running && s.phase === 'names') {
+                    what = 'подбираем… (проверено ' + (n.tried || 0) + ')';
+                } else {
+                    what = 'ни одно имя не помогло' + (n.tried ? ' (проверено ' + n.tried + ')' : '');
+                }
+                return '<tr><td>' + name + '</td><td>' + what + '</td></tr>';
+            }).join('') + '</tbody></table>';
+        }
+        out.innerHTML = html;
     }
 
     /* ───────── controls ───────── */
@@ -754,5 +878,5 @@ const ScanPage = (() => {
     /* ───────── public ───────── */
 
     return { render, destroy, start, stop, applyStrategy, pickTarget, refreshHints,
-             toggleCustom, checkCustom, refine };
+             toggleCustom, checkCustom, refine, freezeStart, freezeStop, freezeApply };
 })();

@@ -365,6 +365,28 @@ class TestTcpTsOnly(unittest.TestCase):
             ["--lua-desync=fake:blob=x:tcp_ts_up"]))
 
 
+class TestBadackTsUp(unittest.TestCase):
+    """tcp_ack без tcp_ts_up у фейка — nfqws2 не поднимает метку TCP."""
+
+    def test_badack_only_warns(self):
+        found = lint.lint(["--filter-tcp=443",
+                           "--lua-desync=fake:blob=x:tcp_ack=-66000"])
+        hit = [f for f in found if f["code"] == lint.CODE_BADACK_NO_TS_UP]
+        self.assertEqual(len(hit), 1)
+        self.assertEqual(hit[0]["severity"], lint.SEVERITY_WARNING)
+        self.assertIn("tcp_ts_up", hit[0]["message"])
+
+    def test_ts_up_or_second_fooling_is_fine(self):
+        for step in ("fake:blob=x:tcp_ack=-66000:tcp_ts_up",
+                     "fake:blob=x:tcp_ack=-66000:tcp_seq=-1",
+                     "fakedsplit:tcp_ack=-66000:ip_autottl=-1,3-20",
+                     "fake:blob=x:tcp_ack=-66000:tcp_md5",
+                     # у multisplit tcp_ack — на самих данных, не на фейке
+                     "multidisorder:pos=1,midsld:tcp_ack=-66000"):
+            self.assertNotIn(lint.CODE_BADACK_NO_TS_UP, codes(
+                ["--filter-tcp=443", "--lua-desync=" + step]), step)
+
+
 class TestRuleTable(unittest.TestCase):
     """Сама таблица правил остаётся данными и остаётся полной."""
 

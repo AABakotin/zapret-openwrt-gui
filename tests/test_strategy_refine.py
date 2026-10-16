@@ -33,6 +33,10 @@ class TestHeavier(unittest.TestCase):
         self.assertEqual(md5["args"][1],
                          "--lua-desync=fake:blob=tls_google:repeats=6:tcp_md5")
         self.assertEqual(md5["args"][0], BASE[1])
+        # badack — только в паре с tcp_ts_up (линтер badack_without_ts_up).
+        ack = next(v for v in vs if "tcp_ack" in v["label"])
+        self.assertTrue(ack["args"][1].endswith(":tcp_ack=-66000:tcp_ts_up"),
+                        ack["args"][1])
 
     def test_clone_variant(self):
         vs = sr.mutations(BASE, "tcp")

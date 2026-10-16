@@ -1034,6 +1034,9 @@ class StrategyScanner:
         ids = []
         for item in found.get("items") or []:
             sid = str(item.get("strategy_id") or "")
+            # «Своя стратегия» в каталоге не живёт — по id её не поднять.
+            if sid.startswith("custom_"):
+                continue
             if (sid and sid not in ids and not item.get("stale")
                     and item.get("wins", 0) > item.get("losses", 0)):
                 ids.append(sid)
@@ -1048,7 +1051,7 @@ class StrategyScanner:
             if len(ids) >= MEMORY_FIRST_MAX:
                 break
             sid = str(item.get("strategy_id") or "")
-            if sid and sid not in ids:
+            if sid and sid not in ids and not sid.startswith("custom_"):
                 ids.append(sid)
         if len(ids) > own:
             log.info("Память подбора: %d стратегий от соседей по домену "
@@ -2108,7 +2111,9 @@ class StrategyScanner:
         ]
         if self._mode == "quick":
             return all_hosts[:1]
-        if self._mode == "standard":
+        # «Своя стратегия» — как standard: кандидатов мало, но человек
+        # ждёт ответа быстрее полного прогона.
+        if self._mode in ("standard", "custom"):
             return all_hosts[:2]
         return all_hosts[:4]
 
@@ -2514,6 +2519,10 @@ class StrategyScanner:
 
     def _save_resume_state(self, next_index: int) -> None:
         """Сохранить позицию для resume."""
+        # Свой текст не продолжить (его нет в каталоге), а файл один:
+        # не затираем позицию прерванного прогона по каталогу.
+        if self._mode == "custom":
+            return
         resume_file = self._resume_file_path()
         with self._lock:
             state = {
@@ -2623,6 +2632,10 @@ class StrategyScanner:
             probe_result.strategy_id,
             protocol=probe_result.protocol,
         )
+        if entry is None:
+            # «Своя стратегия» — не из каталога: запись этого прогона.
+            with self._lock:
+                entry = self._entries_by_id.get(probe_result.strategy_id)
 
         if entry is None:
             log.error(

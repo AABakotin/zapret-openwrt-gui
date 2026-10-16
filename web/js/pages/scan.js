@@ -324,7 +324,7 @@ const ScanPage = (() => {
     function renderCustomCheck(r) {
         const box = document.getElementById('scan-custom-check');
         if (!box || !r) return;
-        const esc = SetupUI.esc;
+        const esc = escapeHtml;
         let html = '';
         (r.candidates || []).forEach((c, i) => {
             html += '<div style="color:var(--success);">✓ Кандидат ' + (i + 1) + ': <code>'

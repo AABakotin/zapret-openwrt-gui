@@ -45,13 +45,18 @@ MAX_TEXT = 20000
 _QUOTES = "\"'`“”„«»‘’‚"
 _TOKEN_RE = re.compile(
     r"--new\b|--lua-desync=[^\s" + re.escape(_QUOTES) + r"]+"
-    r"|--filter-(?:tcp|udp)=\S*|--dpi-desync\S*")
+    r"|--blob=\S+|--filter-(?:tcp|udp|l7)=\S*|--payload=\S*"
+    r"|--dpi-desync\S*")
+# l7 / payload → протокол: по ним часть без портов тоже видно.
+_UDP_L7 = ("quic", "stun", "discord", "wireguard", "dht")
+_TCP_L7 = ("tls", "http")
+_BLOB_REF_RE = re.compile(r"(?<!-)blob=([A-Za-z0-9_]+)")
 _BLANK_RE = re.compile(r"\n[ \t]*\n")
 _REJECT_CODES = ("unknown_lua_function", "blob_unknown", "blob_file_missing")
 
 
 def _clean(text: str) -> str:
-    text = str(text or "")[:MAX_TEXT].replace("\r\n", "\n")
+    text = str(text or "").replace("\r\n", "\n")
     # «\» в конце строки — перенос команды, а не граница стратегии.
     text = re.sub(r"\\\n", " ", text)
     # --lua-desync="…": кавычка сразу после «=» — часть значения;
@@ -62,29 +67,54 @@ def _clean(text: str) -> str:
     return text
 
 
-def split_parts(text: str) -> list:
-    """Части текста: [{"desync": [...], "tcp": bool, "udp": bool, "v1": bool}].
+def _new_part() -> dict:
+    return {"desync": [], "tcp": False, "udp": False, "v1": False}
 
-    Граница — ``--new`` и пустая строка. Часть без шагов ``--lua-desync``
-    в выдачу не попадает (кроме стратегии v1 — её надо назвать).
+
+def _mark_l7(part: dict, value: str) -> None:
+    for v in value.lower().split(","):
+        if any(v.startswith(x) for x in _UDP_L7):
+            part["udp"] = True
+        elif any(v.startswith(x) for x in _TCP_L7):
+            part["tcp"] = True
+
+
+def split_parts(text: str) -> tuple:
+    """(части, blob'ы) текста.
+
+    Часть — {"desync": [...], "tcp", "udp", "v1"}; граница — ``--new`` и
+    пустая строка; часть без шагов ``--lua-desync`` в выдачу не попадает
+    (кроме стратегии v1 — её надо назвать). Протокол части — по
+    ``--filter-tcp/udp``, ``--filter-l7`` и ``--payload``.
+
+    blob'ы — объявления ``--blob=имя:…`` со всего текста (они глобальные):
+    ``{имя: аргумент}`` для инлайнового hex и ``{имя: None}`` для файла —
+    путь чужого роутера у нас ничего не значит.
     """
-    parts = []
+    parts, blobs = [], {}
     for block in _BLANK_RE.split(_clean(text)):
-        cur = {"desync": [], "tcp": False, "udp": False, "v1": False}
+        cur = _new_part()
         for tok in _TOKEN_RE.findall(block):
             if tok == "--new":
                 parts.append(cur)
-                cur = {"desync": [], "tcp": False, "udp": False, "v1": False}
+                cur = _new_part()
             elif tok.startswith("--lua-desync="):
                 cur["desync"].append(tok)
+            elif tok.startswith("--blob="):
+                name, _, value = tok[len("--blob="):].partition(":")
+                if name:
+                    blobs[name] = tok if value.lower().startswith("0x") \
+                        else None
             elif tok.startswith("--filter-tcp="):
                 cur["tcp"] = True
             elif tok.startswith("--filter-udp="):
                 cur["udp"] = True
+            elif tok.startswith(("--filter-l7=", "--payload=")):
+                _mark_l7(cur, tok.split("=", 1)[1])
             else:
                 cur["v1"] = True
         parts.append(cur)
-    return [p for p in parts if p["desync"] or p["v1"]]
+    return [p for p in parts if p["desync"] or p["v1"]], blobs
 
 
 def _sid(desync: list) -> str:
@@ -104,9 +134,15 @@ def check(text: str, protocol: str = "tcp", known_functions=None,
     from core import strategy_lint
 
     protocol = "udp" if str(protocol).lower() == "udp" else "tcp"
-    candidates, rejected, seen = [], [], set()
+    if len(str(text or "")) > MAX_TEXT:
+        return {"ok": False, "candidates": [], "rejected": [], "dropped": 0,
+                "protocol": protocol,
+                "error": "текст длиннее %d знаков — вставьте только "
+                         "стратегии" % MAX_TEXT}
+    candidates, rejected, seen = [], [], {}
     dropped = 0
-    for index, part in enumerate(split_parts(text), 1):
+    parts, blobs = split_parts(text)
+    for index, part in enumerate(parts, 1):
         args = part["desync"]
         if not args:
             rejected.append({"index": index, "args": [], "reason": (
@@ -123,8 +159,19 @@ def check(text: str, protocol: str = "tcp", known_functions=None,
             continue
         key = tuple(args)
         if key in seen:
+            rejected.append({"index": index, "args": args,
+                             "reason": "повтор части %d" % seen[key]})
             continue
-        seen.add(key)
+        seen[key] = index
+        refs = {n for a in args for n in _BLOB_REF_RE.findall(a)}
+        foreign = sorted(n for n in refs if n in blobs and blobs[n] is None)
+        if foreign:
+            rejected.append({"index": index, "args": args, "reason": (
+                "blob «%s» читается из файла чужого роутера — загрузите "
+                "его в «Блобы» и сошлитесь на имя оттуда" % foreign[0])})
+            continue
+        # Инлайновый blob (``--blob=имя:0x…``) переносим вместе с частью.
+        args = [blobs[n] for n in sorted(refs) if blobs.get(n)] + args
         findings = [f for f in strategy_lint.lint(
             args, known_functions=known_functions, known_blobs=known_blobs)
             if f.get("code") in _REJECT_CODES]
@@ -164,3 +211,10 @@ def entries(candidates: list, protocol: str = "tcp") -> list:
             source_file="custom",
         ))
     return out
+
+
+def check_on_device(text: str, protocol: str = "tcp") -> dict:
+    """:func:`check` с функциями и blob'ами ЭТОГО устройства (REST и MCP)."""
+    from core import lint_env
+    return check(text, protocol, known_functions=lint_env.known_functions(),
+                 known_blobs=lint_env.known_blobs())

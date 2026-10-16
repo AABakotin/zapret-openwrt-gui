@@ -110,11 +110,8 @@ def scan_start(args: dict) -> dict:
         dpi_type = (args.get("dpi_type") or "").strip().lower()
         custom = None
         if str(args.get("custom") or "").strip():
-            from core import custom_candidates, lint_env
-            checked = custom_candidates.check(
-                args["custom"], protocol,
-                known_functions=lint_env.known_functions(),
-                known_blobs=lint_env.known_blobs())
+            from core.custom_candidates import check_on_device
+            checked = check_on_device(args["custom"], protocol)
             if not checked["ok"]:
                 checked["hint"] = ("из текста берутся только шаги "
                                    "--lua-desync; причины — в rejected")

@@ -292,7 +292,5 @@ def register(app):
 
 def _check_custom(text, protocol) -> dict:
     """Разбор «своей стратегии» с окружением этого устройства."""
-    from core import custom_candidates, lint_env
-    return custom_candidates.check(
-        text, protocol, known_functions=lint_env.known_functions(),
-        known_blobs=lint_env.known_blobs())
+    from core.custom_candidates import check_on_device
+    return check_on_device(text, protocol)

@@ -191,6 +191,28 @@ def _apply_saved_strategy_on_boot():
             # месте или nfqws2 не запущен.
             from core.firewall import reapply_if_missing
             reapply_if_missing()
+            
+            # OpenWrt: S99zapret создаёт только zapret_gui (для WAN).
+            # Отдельная таблица zapret_lan (для LAN-клиентов) создаётся
+            # только через FirewallManager.apply_rules → _apply_lan_nftables.
+            # Вызываем её явно, чтобы после загрузки трафик LAN шёл через
+            # NFQUEUE, даже если nfqws2 запущен S99zapret.
+            if os.path.exists("/etc/openwrt_release"):
+                try:
+                    from core.firewall import get_firewall_manager
+                    fw = get_firewall_manager()
+                    fw.apply_rules()
+                    log.info(
+                        "OpenWrt: применены правила firewall "
+                        "(включая zapret_lan)",
+                        source="autostart",
+                    )
+                except Exception as e:
+                    log.warning(
+                        "OpenWrt: не удалось применить правила firewall: %s"
+                        % e,
+                        source="autostart",
+                    )
 
             cfg = get_config_manager()
             if not cfg.get("autostart", "enabled", default=False):

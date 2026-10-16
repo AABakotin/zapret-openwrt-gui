@@ -595,7 +595,14 @@ blackhole kill-switch'а возвращается в таблицу сразу �
 `handshake_timeout_sec=180`, `check_interval_sec=30`, `cooldown_sec=300`,
 `max_restarts_per_hour=6`, опциональный TCP-`probe` (host:port сквозь туннель).
 `decide_restart()`: рестарт, если возраст handshake ≥ timeout **или** probe
-падает N раз; учитывает per-iface cooldown и rate-limit.
+падает N раз **или** сработал пассивный детектор; учитывает per-iface
+cooldown и rate-limit. Пассивных детекторов два, оба по счётчикам `awg show`:
+- **rx-stall** (`eval_rx_stall`, `rx_stall_*`, 120 с): tx вырос на ≥4 КБ, а
+  rx — не больше чем на 1 КБ (keepalive-шум) → «шлёт, но не принимает»;
+- **zero-rx** (`eval_zero_rx`, `zero_rx_enabled`/`zero_rx_timeout_sec`, 60 с):
+  с подъёма rx == 0 при tx > 0 → «трафик стоит, 0 байт», сервер не ответил
+  даже на handshake. Handshake-триггер тут слеп (handshake'а не было, возраст
+  None). В простое (tx == 0) не срабатывает.
 
 **Autostart** (`awg_autostart_manager` + `awg_init_script`): флаг на конфиг в
 `config["awg"]["autostart"]`. Init-скрипт:

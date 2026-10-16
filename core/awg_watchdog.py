@@ -85,6 +85,18 @@ DEFAULT_RX_STALL_MIN_TX_BYTES = 4096  # столько надо отправит
 # срабатываний на аплоаде (ACK'и идут килобайтами), ни пропусков застоя.
 DEFAULT_RX_STALL_MIN_RX_BYTES = 1024
 
+# Детектор «0 байт приёма». Туннель поднят, наружу что-то ушло (tx > 0 — хотя
+# бы попытки handshake), а принято РОВНО 0 байт с момента подъёма: сервер не
+# ответил ни на один пакет, даже на handshake (его ответ — 92 Б). Это сильнее
+# rx-stall и ловится быстрее: handshake-триггер тут слеп (handshake'а не было
+# вообще, возраст None), а rx-stall ждёт 4 КБ «в пустоту», которых при пустом
+# туннеле может и не набраться. На простое не срабатывает: если tx тоже 0 —
+# туннель просто никто не трогал. Живой туннель, хоть раз ответивший, сюда не
+# попадает — rx у него уже больше нуля.
+DEFAULT_ZERO_RX_ENABLED     = True
+DEFAULT_ZERO_RX_TIMEOUT_SEC = 60      # WG повторяет handshake раз в 5с —
+                                      # минута без единого байта = ~12 отказов
+
 
 _SO_BINDTODEVICE = 25  # значение константы в Linux (в socket её может не быть)
 
@@ -205,9 +217,36 @@ def eval_rx_stall(state, rx_bytes, tx_bytes, now: float, *,
     return (new_state, stalled)
 
 
+def eval_zero_rx(state, rx_bytes, tx_bytes, now: float, *,
+                 timeout: int) -> tuple:
+    """
+    Детектор «0 байт приёма»: туннель отправляет (tx > 0), но не принял
+    НИ ОДНОГО байта (rx == 0) дольше `timeout` секунд подряд.
+
+    Чистая функция, как eval_rx_stall. Возвращает (new_state, stalled).
+
+      state — {"since", "tx"}: с какого момента наблюдаем «rx=0 при tx>0» и
+              какой tx видели последним; None — состояние не начато.
+
+    Отсчёт начинается с первого замера, где rx == 0 и tx > 0. Любой принятый
+    байт (rx > 0) или нулевой tx (туннель никто не трогал) сбрасывает его —
+    решение не принимается. Откат tx (рестарт демона обнулил счётчики) тоже
+    начинает отсчёт заново, чтобы не унаследовать старое время.
+    """
+    rx = int(rx_bytes or 0)
+    tx = int(tx_bytes or 0)
+    if rx > 0 or tx <= 0:
+        return (None, False)
+    if state is None or tx < int(state.get("tx", 0)):
+        return ({"since": now, "tx": tx}, False)
+    since = float(state.get("since", now))
+    return ({"since": since, "tx": tx}, (now - since) >= max(0, timeout))
+
+
 def decide_restart(*, handshake_age, handshake_timeout: int,
                    probe_enabled: bool, probe_consecutive_fails: int,
-                   probe_threshold: int, rx_stalled: bool = False) -> tuple:
+                   probe_threshold: int, rx_stalled: bool = False,
+                   zero_rx: bool = False) -> tuple:
     """
     Чистое решение «рестартить ли туннель». Возвращает (bool, reason).
 
@@ -215,8 +254,11 @@ def decide_restart(*, handshake_age, handshake_timeout: int,
                       ещё не было / нет peer'ов);
       probe_*    — активная проба через туннель (опц., может обходить туннель);
       rx_stalled — пассивный детектор «приём встал» (главный сигнал «данные
-                   не идут», см. eval_rx_stall).
+                   не идут», см. eval_rx_stall);
+      zero_rx    — с подъёма не принято ни байта при tx > 0 (eval_zero_rx).
     """
+    if zero_rx:
+        return (True, "трафик стоит: принято 0 байт, сервер не отвечает")
     if probe_enabled and probe_consecutive_fails >= max(1, probe_threshold):
         return (True, "проба через туннель не прошла %d раз подряд"
                 % probe_consecutive_fails)
@@ -294,6 +336,10 @@ def _get_settings() -> dict:
             "rx_stall_min_tx_bytes", DEFAULT_RX_STALL_MIN_TX_BYTES)),
         "rx_stall_min_rx_bytes":    int(wd.get(
             "rx_stall_min_rx_bytes", DEFAULT_RX_STALL_MIN_RX_BYTES)),
+        "zero_rx_enabled":          bool(wd.get(
+            "zero_rx_enabled", DEFAULT_ZERO_RX_ENABLED)),
+        "zero_rx_timeout_sec":      int(wd.get(
+            "zero_rx_timeout_sec", DEFAULT_ZERO_RX_TIMEOUT_SEC)),
     }
     with _settings_cache_lock:
         _settings_cache = result
@@ -354,6 +400,8 @@ class AwgWatchdog:
         self._probe_bind_warned = set()
         # Состояние пассивного rx-stall детектора: {iface: {rx, tx_at_rx, rx_ts}}
         self._rx_state     = {}
+        # Состояние детектора «0 байт приёма»: {iface: {since, tx}}
+        self._zero_state   = {}
         # iface'ы, для которых рестарт уже запущен в фоновом потоке
         self._restart_inflight: set = set()
 
@@ -492,6 +540,18 @@ class AwgWatchdog:
                                     DEFAULT_RX_STALL_MIN_RX_BYTES))
             self._rx_state[iface] = new_rx_state
 
+        # «Трафик стоит, 0 байт»: с подъёма не принято ничего при tx > 0.
+        zero_rx = False
+        if settings.get("zero_rx_enabled", DEFAULT_ZERO_RX_ENABLED) and peers:
+            new_zero, zero_rx = eval_zero_rx(
+                self._zero_state.get(iface), rx_total, tx_total, now,
+                timeout=settings.get("zero_rx_timeout_sec",
+                                     DEFAULT_ZERO_RX_TIMEOUT_SEC))
+            if new_zero is None:
+                self._zero_state.pop(iface, None)
+            else:
+                self._zero_state[iface] = new_zero
+
         # Активная проба через туннель (если включена). Учитываем ТРИ исхода:
         # ok=True (жив) сбрасывает счётчик; ok=False (отказ через туннель)
         # инкрементит; ok=None (привязку к туннелю подтвердить не удалось)
@@ -528,7 +588,8 @@ class AwgWatchdog:
             probe_consecutive_fails=probe_fails,
             probe_threshold=settings.get("probe_fail_threshold",
                                          DEFAULT_PROBE_FAIL_THRESHOLD),
-            rx_stalled=rx_stalled)
+            rx_stalled=rx_stalled,
+            zero_rx=zero_rx)
         if not should:
             return
 
@@ -568,6 +629,7 @@ class AwgWatchdog:
                     self._last_restart[iface] = now
                     self._probe_fails[iface] = 0
                     self._rx_state.pop(iface, None)
+                    self._zero_state.pop(iface, None)
             except Exception as e:
                 log.warning("awg-watchdog: restart %s: %s" % (iface, e),
                             source="awg")
@@ -643,6 +705,7 @@ class AwgWatchdog:
             with self._lock:
                 self._last_restart[name] = now
                 self._rx_state.pop(name, None)
+                self._zero_state.pop(name, None)
                 history.append(now)
             if not r.get("ok"):
                 log.warning("awg-watchdog: не удалось поднять %s: %s"

@@ -4,6 +4,7 @@ Unit-тесты для core/awg_watchdog.py — pure logic (без фоново�
 """
 
 import socket
+import threading
 import time
 import unittest
 from unittest import mock
@@ -749,3 +750,118 @@ class TestMaybeRestartProbeTriState(unittest.TestCase):
             s = wd.get_status()
         self.assertIn("probe_last", s)
         self.assertEqual(s["probe_last"]["awg0"], "cant_bind")
+
+
+class TestEvalZeroRx(unittest.TestCase):
+    """Детектор «трафик стоит, 0 байт»: rx == 0 при tx > 0 дольше порога."""
+
+    def _eval(self, state, rx, tx, now, timeout=60):
+        return awg_watchdog.eval_zero_rx(state, rx, tx, now, timeout=timeout)
+
+    def test_first_sample_starts_countdown(self):
+        state, stalled = self._eval(None, 0, 148, now=1000.0)
+        self.assertEqual(state, {"since": 1000.0, "tx": 148})
+        self.assertFalse(stalled)
+
+    def test_zero_rx_after_timeout_stalls(self):
+        state, _ = self._eval(None, 0, 148, now=1000.0)
+        state, stalled = self._eval(state, 0, 1800, now=1030.0)
+        self.assertFalse(stalled)
+        state, stalled = self._eval(state, 0, 3000, now=1060.0)
+        self.assertTrue(stalled)
+        self.assertEqual(state["since"], 1000.0)
+
+    def test_any_rx_resets(self):
+        # Сервер ответил хоть раз (92 Б handshake) — туннель жив.
+        state, stalled = self._eval({"since": 900.0, "tx": 500}, 92, 600,
+                                    now=1000.0)
+        self.assertIsNone(state)
+        self.assertFalse(stalled)
+
+    def test_idle_tunnel_not_stalled(self):
+        # Ничего не шлёт и ничего не принимает — простой, не застой.
+        state, stalled = self._eval({"since": 0.0, "tx": 0}, 0, 0, now=1000.0)
+        self.assertIsNone(state)
+        self.assertFalse(stalled)
+
+    def test_counter_reset_restarts_countdown(self):
+        # tx откатился (демон перезапущен) — старое время не наследуем.
+        state, stalled = self._eval({"since": 0.0, "tx": 5000}, 0, 148,
+                                    now=1000.0)
+        self.assertEqual(state["since"], 1000.0)
+        self.assertFalse(stalled)
+
+    def test_defaults(self):
+        with mock.patch("core.config_manager.get_config_manager",
+                        return_value=FakeConfigManager({})):
+            s = awg_watchdog._get_settings()
+        self.assertTrue(s["zero_rx_enabled"])
+        self.assertEqual(s["zero_rx_timeout_sec"],
+                         awg_watchdog.DEFAULT_ZERO_RX_TIMEOUT_SEC)
+
+    def test_decide_restart_on_zero_rx(self):
+        # Handshake'а не было (age None) — раньше это никогда не рестартило.
+        should, reason = awg_watchdog.decide_restart(
+            handshake_age=None, handshake_timeout=180,
+            probe_enabled=False, probe_consecutive_fails=0, probe_threshold=2,
+            zero_rx=True)
+        self.assertTrue(should)
+        self.assertIn("0 байт", reason)
+
+
+class TestMaybeRestartZeroRx(unittest.TestCase):
+    """Интеграция zero-rx в _maybe_restart (без фонового потока)."""
+
+    def _settings(self, **over):
+        base = {
+            "handshake_timeout_sec": 180,
+            "check_interval_sec":    30,
+            "cooldown_sec":          300,
+            "max_restarts_per_hour": 6,
+            "enabled": True,
+            "rx_stall_enabled": False,      # изолируем эффект zero-rx
+            "zero_rx_enabled": True,
+            "zero_rx_timeout_sec": 60,
+        }
+        base.update(over)
+        return base
+
+    def _status(self, rx, tx, hs=0):
+        return {"peers": [{"latest_handshake": hs,
+                           "rx_bytes": rx, "tx_bytes": tx}]}
+
+    def _join(self):
+        for t in threading.enumerate():
+            if t.name.startswith("awg-restart-"):
+                t.join(timeout=2)
+
+    def test_restarts_when_zero_rx_persists(self):
+        wd  = awg_watchdog.AwgWatchdog()
+        mgr = mock.MagicMock()
+        now = time.time()
+        wd._maybe_restart(mgr, "awg0", self._status(0, 148),
+                          self._settings(), now=now)
+        mgr.restart.assert_not_called()
+        wd._maybe_restart(mgr, "awg0", self._status(0, 2000),
+                          self._settings(), now=now + 61)
+        self._join()
+        mgr.restart.assert_called_once_with("awg0")
+        self.assertNotIn("awg0", wd._zero_state)
+
+    def test_disabled_holds(self):
+        wd  = awg_watchdog.AwgWatchdog()
+        mgr = mock.MagicMock()
+        now = time.time()
+        wd._zero_state["awg0"] = {"since": now - 300, "tx": 100}
+        wd._maybe_restart(mgr, "awg0", self._status(0, 2000),
+                          self._settings(zero_rx_enabled=False), now=now)
+        mgr.restart.assert_not_called()
+
+    def test_idle_tunnel_holds(self):
+        wd  = awg_watchdog.AwgWatchdog()
+        mgr = mock.MagicMock()
+        now = time.time()
+        for i in range(5):
+            wd._maybe_restart(mgr, "awg0", self._status(0, 0),
+                              self._settings(), now=now + i * 60)
+        mgr.restart.assert_not_called()

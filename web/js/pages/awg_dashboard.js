@@ -802,7 +802,9 @@ const AwgDashboardPage = (() => {
             </label>
             <p class="text-muted" style="font-size:12px; margin:6px 0 0;">
                 Следит за туннелем и автоматически перезапускает его при
-                зависании. Ловит три случая: handshake устарел; туннель
+                зависании. Ловит четыре случая: <b>трафик стоит</b> — с
+                подъёма не принято ни байта, хотя туннель шлёт; handshake
+                устарел; туннель
                 <b>шлёт, но не принимает</b> (данные встали, хотя handshake
                 ещё «свежий» — частая причина «сайты тормозят, потом сеть
                 отваливается»); активная проба не проходит. Детектор «приём
@@ -815,6 +817,12 @@ const AwgDashboardPage = (() => {
             </p>
             <div id="wd-advanced" style="margin-top:10px; ${reconnectOn ? '' : 'display:none;'}">
                 <div style="display:grid; grid-template-columns:200px 1fr; gap:6px 12px; max-width:560px; align-items:center;">
+                    <label class="text-muted" style="font-size:12px;">Трафик стоит (0 байт), с → рестарт</label>
+                    <span style="display:flex; align-items:center; gap:8px;">
+                        <input type="checkbox" id="wd-zero-on" ${s.zero_rx_enabled === false ? '' : 'checked'}>
+                        <input type="number" id="wd-zero" class="form-control" style="max-width:100px;"
+                               min="30" max="3600" value="${escapeAttr(s.zero_rx_timeout_sec || 60)}">
+                    </span>
                     <label class="text-muted" style="font-size:12px;">Нет приёма данных, с → рестарт</label>
                     <input type="number" id="wd-rxstall" class="form-control" style="max-width:100px;"
                            min="30" max="3600" value="${escapeAttr(s.rx_stall_timeout_sec || 120)}">
@@ -842,11 +850,15 @@ const AwgDashboardPage = (() => {
         const thr = (document.getElementById('wd-probe-thr') || {}).value;
         const hs = (document.getElementById('wd-hs') || {}).value;
         const rx = (document.getElementById('wd-rxstall') || {}).value;
+        const zeroBox = document.getElementById('wd-zero-on');
+        const zero = (document.getElementById('wd-zero') || {}).value;
         const payload = { enabled: on, probe_enabled: on };
         if (host) payload.probe_host = String(host).trim();
         if (thr) payload.probe_fail_threshold = parseInt(thr, 10) || 2;
         if (hs) payload.handshake_timeout_sec = parseInt(hs, 10) || 180;
         if (rx) payload.rx_stall_timeout_sec = parseInt(rx, 10) || 120;
+        if (zeroBox) payload.zero_rx_enabled = !!zeroBox.checked;
+        if (zero) payload.zero_rx_timeout_sec = parseInt(zero, 10) || 60;
         try {
             const r = await API.post('/api/awg/watchdog', payload);
             if (r && r.ok) {

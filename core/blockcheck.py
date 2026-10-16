@@ -531,29 +531,7 @@ class BlockcheckRunner:
     ) -> None:
         """DNS-проверка через существующий core.diagnostics.check_dns() + DoH-валидация."""
         from core.diagnostics import check_dns
-        import urllib.request
-
-        def _check_doh(domain: str) -> list[str]:
-            urls = [
-                f"https://cloudflare-dns.com/dns-query?name={domain}&type=A",
-                f"https://dns.google/dns-query?name={domain}&type=A"
-            ]
-            for url in urls:
-                try:
-                    req = urllib.request.Request(
-                        url, headers={"Accept": "application/dns-json"}
-                    )
-                    with urllib.request.urlopen(req, timeout=2.0) as response:
-                        data = json.loads(response.read().decode())
-                        ips = []
-                        for ans in data.get("Answer", []):
-                            if ans.get("type") == 1:  # A record
-                                ips.append(ans.get("data"))
-                        if ips:
-                            return ips
-                except Exception:
-                    pass
-            return []
+        from core.testers import doh_check
 
         # Признаки подменённого ответа живут в core/testers/probe.py — там же
         # их берёт block-detector, чтобы «DNS-подмена» означала одно и то же
@@ -598,24 +576,33 @@ class BlockcheckRunner:
                     is_dns_fake = True
                     fake_reason = f"IP блок-страницы провайдера ({hit})"
 
-            # 2. Если есть IP, сравниваем с DoH — но флажим фейк ТОЛЬКО когда
-            #    среди системных IP есть непубличный (private/reserved). Иначе
-            #    CDN/geo-балансировка (Google/Akamai/Cloudflare) штатно даёт
-            #    непересекающиеся ПУБЛИЧНЫЕ наборы IP у локального резолвера и
-            #    DoH → ложный «DNS Spoofing». Реальный ISP-перехват уводит на
-            #    свой IP (часто private-блокстраница), что и ловим здесь.
+            # 2. Сверка с DoH (Яндекс → Google → Cloudflare). Разные наборы
+            #    сами по себе — не подмена: CDN/гео-балансировка штатно
+            #    отдают разным резолверам разные публичные адреса. Подмена —
+            #    когда (а) у роутера непубличный адрес, или (б) адреса
+            #    роутера не открываются по TCP, а адреса из DoH открываются
+            #    (core/testers/doh_check.verdict). Во втором случае лечит
+            #    DNS, а не стратегия и не туннель.
+            doh_note = ""
+            doh_ips: list[str] = []
             if ok and resolved_ips and not is_dns_fake:
                 try:
-                    doh_ips = _check_doh(domain)
-                    if doh_ips:
-                        sys_set = set(resolved_ips)
-                        doh_set = set(doh_ips)
-                        if sys_set.is_disjoint(doh_set) and \
-                                has_non_public_ip(resolved_ips):
-                            is_dns_fake = True
-                            fake_reason = "расходится с DoH, непубличный IP"
+                    cross = doh_check.cross_check(domain, resolved_ips)
                 except Exception:
-                    pass
+                    cross = {"kind": "unknown", "fake": False,
+                             "doh_ips": []}
+                doh_ips = cross.get("doh_ips") or []
+                if doh_ips and set(resolved_ips).isdisjoint(doh_ips) and \
+                        has_non_public_ip(resolved_ips):
+                    is_dns_fake = True
+                    fake_reason = "расходится с DoH, непубличный IP"
+                elif cross.get("fake"):
+                    is_dns_fake = True
+                    fake_reason = cross.get("reason", "")
+                elif cross.get("kind") == "differs":
+                    doh_note = "; DoH (%s): %s — %s" % (
+                        cross.get("provider", ""),
+                        ", ".join(doh_ips[:3]), cross.get("reason", ""))
 
             # Создаём SingleTestResult
             if is_dns_fake:
@@ -624,7 +611,8 @@ class BlockcheckRunner:
                 error_code = "DNS_FAKE"
             elif ok and resolved_ips:
                 status = TestStatus.SUCCESS.value
-                details = f"Resolved: {', '.join(str(ip) for ip in resolved_ips[:3])}"
+                details = (f"Resolved: {', '.join(str(ip) for ip in resolved_ips[:3])}"
+                           + doh_note)
                 error_code = ""
             elif error_str:
                 status = TestStatus.FAILED.value
@@ -647,6 +635,7 @@ class BlockcheckRunner:
                 raw_data={
                     "resolved_ips": resolved_ips,
                     "dns_server": dns_result.get("dns_server", ""),
+                    "doh_ips": doh_ips,
                 },
             )
 

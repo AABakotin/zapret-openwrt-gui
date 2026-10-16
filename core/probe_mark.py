@@ -162,29 +162,69 @@ def _install() -> None:
                 self.close()
                 raise MarkError("метка 0x%x на сокет не встала (нужен "
                                 "CAP_NET_ADMIN)" % mark)
+            ports = getattr(_tls, "ports", None)
+            if ports:
+                try:
+                    _bind_port(self, ports)
+                except OSError:
+                    self.close()
+                    raise
 
         socket.socket.__init__ = __init__
         _installed = True
 
 
+def _bind_port(sock, ports: tuple) -> None:
+    """Занять исходный порт из диапазона ``ports`` (по кругу).
+
+    По порту правила песочницы узнают дорожку параллельного подбора
+    (core/scan_parallel.py). ``SO_REUSEADDR`` — чтобы порт в TIME_WAIT
+    от прошлой пробы не выбивал диапазон из 64 портов за минуту.
+    """
+    lo, hi = int(ports[0]), int(ports[1])
+    span = hi - lo + 1
+    start = getattr(_tls, "next_port", lo)
+    if not lo <= start <= hi:
+        start = lo
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    host = "::" if sock.family == socket.AF_INET6 else "0.0.0.0"
+    last = None
+    for i in range(span):
+        port = lo + (start - lo + i) % span
+        try:
+            sock.bind((host, port))
+        except OSError as e:
+            last = e
+            continue
+        _tls.next_port = lo + (port - lo + 1) % span
+        return
+    raise last or OSError("порты %d–%d заняты" % (lo, hi))
+
+
 @contextlib.contextmanager
-def marking(mark: int):
+def marking(mark: int, ports: tuple = None):
     """Все новые сокеты текущего потока внутри блока — с меткой ``mark``.
 
     ``mark=0`` — блок ничего не меняет. Метка не встала — сокет не
     создаётся вовсе (:class:`MarkError`): проба без неё ушла бы мимо
     нужной очереди, и её результат был бы про другое.
+
+    ``ports=(lo, hi)`` — ещё и исходный порт из диапазона (дорожка
+    параллельного подбора).
     """
     if not mark:
         yield
         return
     _install()
     previous = getattr(_tls, "mark", 0)
+    previous_ports = getattr(_tls, "ports", None)
     _tls.mark = int(mark)
+    _tls.ports = tuple(ports) if ports else None
     try:
         yield
     finally:
         _tls.mark = previous
+        _tls.ports = previous_ports
 
 
 def rules_carry_mark(rules, mark: int) -> bool:

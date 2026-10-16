@@ -148,6 +148,10 @@ const ScanPage = (() => {
                                     <input type="checkbox" id="scan-confirm" checked>
                                     Перепроверить лучшие несколько раз (надёжнее)
                                 </label>
+                                <label class="checkbox-option" title="Несколько стратегий разом в песочнице — сколько выдержит память роутера (128 МБ — 5, 256 МБ — 10, больше — 15). Нужен nfqws2 1.0.5+. Находки перепроверяются по одной.">
+                                    <input type="checkbox" id="scan-parallel">
+                                    Проверять несколько разом (быстрее)
+                                </label>
                             </div>
                         </div>
 
@@ -406,6 +410,7 @@ const ScanPage = (() => {
             mode: document.getElementById('scan-mode')?.value || 'quick',
             stop_after: parseInt(document.getElementById('scan-stop-after')?.value || '0', 10) || 0,
             confirm: !!document.getElementById('scan-confirm')?.checked,
+            parallel: !!document.getElementById('scan-parallel')?.checked,
         };
         if (resume) body.resume = true;
         if (body.mode === 'custom') {
@@ -567,7 +572,7 @@ const ScanPage = (() => {
         setElText('scan-btn-resume-label',
                   data.stopped_early ? 'Искать дальше' : 'Продолжить с места остановки');
 
-        ['scan-target', 'scan-protocol', 'scan-mode', 'scan-stop-after', 'scan-confirm', 'scan-custom'].forEach(id => {
+        ['scan-target', 'scan-protocol', 'scan-mode', 'scan-stop-after', 'scan-confirm', 'scan-parallel', 'scan-custom'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.disabled = isRunning;
         });
@@ -669,6 +674,11 @@ const ScanPage = (() => {
                 ? ['info', 'Кандидаты проверяются в отдельном экземпляре nfqws2 — обход для устройств сети работает как обычно.']
                 : ['warn', 'Обход сети на время подбора остановлен'
                     + (data.isolation_note ? ' (' + data.isolation_note + ')' : '') + '.']);
+        }
+        if (data.status === 'running' && data.parallel > 0) {
+            notes.push(['info', 'Проверяем до ' + data.parallel + ' стратегий разом (по памяти роутера); находки перепроверяются по одной.']);
+        } else if (data.status === 'running' && data.parallel_note) {
+            notes.push(['info', 'Проверяем по одной: ' + data.parallel_note + '.']);
         }
         if (data.rules_reapplied > 0) {
             notes.push(['warn', 'Системный firewall ' + plural(data.rules_reapplied, 'раз', 'раза', 'раз')

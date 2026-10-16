@@ -129,6 +129,9 @@ def register(app):
             stop_after=stop_after,
             confirm=confirm,
             custom=custom,
+            # Нет в запросе — по настройке scan.parallel.
+            parallel=(bool(body["parallel"]) if "parallel" in body
+                      else None),
         )
 
         if not started:

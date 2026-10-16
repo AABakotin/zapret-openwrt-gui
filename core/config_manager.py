@@ -279,6 +279,10 @@ DEFAULT_CONFIG = {
         "isolated": "auto",
         # Очередь песочницы; 0 — основная + 1. С основной совпасть не может.
         "sandbox_queue_num": 0,
+        # Параллельный подбор (core/scan_parallel.py): off — по одной, auto —
+        # пачками, сколько выдержит память, число 2-15 — не больше стольких.
+        # Галка в форме подбора главнее.
+        "parallel": "off",
     },
 
     # --- Healthcheck (фоновый watchdog для autocircular) ---

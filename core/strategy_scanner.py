@@ -217,6 +217,11 @@ class StrategyScanner:
         # (_decide_isolation); причина — в isolation_note статуса.
         self._isolated = False
         self._isolation_note = ""
+        # Параллельный подбор (core/scan_parallel.py): дорожек в пачке
+        # (0 — по одной), почему выключен, что просили при старте.
+        self._parallel = 0
+        self._parallel_note = ""
+        self._parallel_req = None
         self._sandbox = None
         self._sandbox_mark = 0
         # Метка проб baseline: при работающем движке сети замер «без
@@ -261,6 +266,7 @@ class StrategyScanner:
         confirm: bool = True,
         require_isolation: bool = False,
         custom: Optional[list] = None,
+        parallel: Optional[bool] = None,
     ) -> bool:
         """
         Запустить сканирование стратегий в фоновом потоке.
@@ -283,6 +289,9 @@ class StrategyScanner:
             custom:      «Своя стратегия»: кандидаты из
                          ``custom_candidates.check()`` вместо каталога;
                          режим прогона — ``custom``.
+            parallel:    Проверять пачками в одной песочнице
+                         (core/scan_parallel.py); None — по настройке
+                         ``scan.parallel``.
 
         Returns:
             True если сканирование запущено.
@@ -331,6 +340,8 @@ class StrategyScanner:
             self._confirm = confirm
             self._require_isolation = bool(require_isolation)
             self._custom = custom
+            self._parallel_req = parallel
+            self._parallel, self._parallel_note = 0, ""
             self._stopped_early = False
             self._rules_reapplied = 0
             self._stage = STAGE_PREPARE
@@ -431,6 +442,9 @@ class StrategyScanner:
                 # Песочница: кандидаты во втором nfqws2, обход сети цел.
                 "isolated": self._isolated,
                 "isolation_note": self._isolation_note,
+                # Параллельно: сколько дорожек (0 — по одной) и почему нет.
+                "parallel": self._parallel,
+                "parallel_note": self._parallel_note,
             }
 
     def _probe_kind_name(self) -> str:
@@ -631,6 +645,7 @@ class StrategyScanner:
                                     "недоступна: %s" % self._isolation_note)
                     return
                 self._stop_current_nfqws()
+            self._decide_parallel(len(strategies))
 
             # 4. Baseline тест (без обхода). При работающем движке сети
             #    пробы идут с меткой мимо очереди.
@@ -660,11 +675,16 @@ class StrategyScanner:
             self._set_stage(STAGE_SCAN)
             self._set_phase("Перебор стратегий")
 
+            batch: dict = {}
             for idx, entry in enumerate(strategies):
                 if self._cancelled:
                     break
 
                 actual_idx = self._start_index + idx
+                # Параллельно: пачка начиная с этой стратегии — разом;
+                # дальше цикл берёт готовые итоги по одному.
+                if self._parallel and idx not in batch:
+                    batch = self._probe_batch(strategies, idx)
                 with self._lock:
                     self._progress = idx + 1
                     self._current_strategy_name = entry.name
@@ -700,7 +720,11 @@ class StrategyScanner:
 
                 # Пробуем одну стратегию
                 probe_start = time.time()
-                result = self._probe_one_strategy(entry, actual_idx)
+                from_batch = idx in batch
+                if from_batch:
+                    result = batch.pop(idx)
+                else:
+                    result = self._probe_one_strategy(entry, actual_idx)
                 probe_elapsed = time.time() - probe_start
                 result.from_memory = entry.section_id in self._memory_ids
 
@@ -775,7 +799,8 @@ class StrategyScanner:
                     break
 
                 # Пауза между стратегиями
-                if not self._cancelled and idx < len(strategies) - 1:
+                if (not self._cancelled and not from_batch
+                        and idx < len(strategies) - 1):
                     time.sleep(INTER_STRATEGY_DELAY)
 
             # 7. Перепроверка лучших: один замер — это совпадение,
@@ -1405,7 +1430,47 @@ class StrategyScanner:
             elapsed_ms = (time.time() - start_time) * 1000
 
             # 7. Формируем результат
-            return StrategyProbeResult(
+            return self._probe_result(entry, probe, args_full, elapsed_ms)
+
+        except Exception as e:
+            elapsed_ms = (time.time() - start_time) * 1000
+            log.error(
+                "Ошибка пробы стратегии %s: %s" % (entry.name, e),
+                source="scanner",
+            )
+            return self._exception_result(entry, e, elapsed_ms)
+
+        finally:
+            # КРИТИЧНО: гарантируем cleanup после каждой стратегии
+            try:
+                if nfqws_started:
+                    nfqws.stop()
+            except Exception as e:
+                log.warning(
+                    "Ошибка остановки nfqws2: %s" % e,
+                    source="scanner",
+                )
+
+    def _exception_result(self, entry, e, elapsed_ms: float):
+        return StrategyProbeResult(
+            strategy_id=entry.section_id,
+            strategy_name=entry.name,
+            target=self._target,
+            success=False,
+            latency_ms=round(elapsed_ms, 2),
+            error="EXCEPTION",
+            protocol=self._protocol,
+            raw_data={
+                "detail": str(e)[:200],
+                "source_file": entry.source_file,
+                "level": entry.level,
+            },
+        )
+
+    def _probe_result(self, entry, probe: dict, args_full: str,
+                      elapsed_ms: float):
+        """Итог глубокой пробы → StrategyProbeResult."""
+        return StrategyProbeResult(
                 strategy_id=entry.section_id,
                 strategy_name=entry.name,
                 target=self._target,
@@ -1433,37 +1498,139 @@ class StrategyScanner:
                 },
             )
 
-        except Exception as e:
-            elapsed_ms = (time.time() - start_time) * 1000
-            log.error(
-                "Ошибка пробы стратегии %s: %s" % (entry.name, e),
-                source="scanner",
-            )
-            return StrategyProbeResult(
-                strategy_id=entry.section_id,
-                strategy_name=entry.name,
-                target=self._target,
-                success=False,
-                latency_ms=round(elapsed_ms, 2),
-                error="EXCEPTION",
-                protocol=self._protocol,
-                raw_data={
-                    "detail": str(e)[:200],
-                    "source_file": entry.source_file,
-                    "level": entry.level,
-                },
-            )
+    # ─────────────────── Параллельный подбор ───────────────────
 
-        finally:
-            # КРИТИЧНО: гарантируем cleanup после каждой стратегии
+    def _decide_parallel(self, count: int) -> None:
+        """Пачками или по одной — и почему (в статус и журнал)."""
+        from core import scan_parallel
+        self._parallel, self._parallel_note = 0, ""
+        req = getattr(self, "_parallel_req", None)
+        if req is None:
             try:
-                if nfqws_started:
-                    nfqws.stop()
-            except Exception as e:
-                log.warning(
-                    "Ошибка остановки nfqws2: %s" % e,
-                    source="scanner",
-                )
+                from core.config_manager import get_config_manager
+                value = get_config_manager().get("scan", "parallel",
+                                                 default="off")
+            except Exception:                   # noqa: BLE001 — граница
+                value = "off"
+        else:
+            value = "auto" if req else "off"
+        if not scan_parallel.enabled(value):
+            return
+        if not self._isolated or self._sandbox is None:
+            note = "нужна песочница: %s" % (self._isolation_note or "нет")
+        elif count < scan_parallel.PAR_MIN:
+            note = "кандидатов меньше %d" % scan_parallel.PAR_MIN
+        elif not self._sandbox.supports_option("filter-mark"):
+            note = "nfqws2 старше 1.0.5: нет --filter-mark"
+        else:
+            note = ""
+        if note:
+            self._parallel_note = note
+            log.info("Параллельный подбор выключен: %s" % note,
+                     source="scanner")
+            return
+        self._parallel = scan_parallel.limit(value)
+        log.info("Параллельный подбор: до %d стратегий разом (по памяти "
+                 "— перед каждой пачкой)" % self._parallel, source="scanner")
+
+    @staticmethod
+    def _meminfo() -> str:
+        try:
+            with open("/proc/meminfo", "r") as f:
+                return f.read()
+        except OSError:
+            return ""
+
+    def _probe_batch(self, strategies: list, idx: int) -> dict:
+        """Пачка с ``idx`` разом; {индекс: результат}. Не вошедшие (и
+        пачка, которую nfqws2 не принял) — пустые: их цикл проверит по
+        одной. Находка пачки сразу перепроверяется в одиночку."""
+        from core import scan_parallel
+        slots = min(self._parallel,
+                    scan_parallel.slots_for_memory(self._meminfo()))
+        chunk = strategies[idx:idx + slots]
+        if slots < 2 or len(chunk) < 2:
+            return {}
+        args_lists = []
+        for entry in chunk:
+            try:
+                args_lists.append(self._build_strategy_args(entry))
+            except Exception:                   # noqa: BLE001 — по одной
+                args_lists.append([])
+        argv, packed, _alone = scan_parallel.combine(args_lists)
+        if len(packed) < 2:
+            return {}
+        entries = [chunk[i] for i in packed]
+        self._set_phase("Перебор стратегий: %d разом" % len(entries))
+        results = self._run_batch(entries, argv,
+                                  [" ".join(args_lists[i]) for i in packed])
+        if results is None:
+            log.info("Пачка не поднялась — эти %d по одной" % len(entries),
+                     source="scanner")
+            return {}
+        out = {}
+        for i, result in zip(packed, results):
+            if result.success and not self._cancelled:
+                with self._lock:
+                    self._current_strategy_name = chunk[i].name
+                solo = self._probe_one_strategy(
+                    chunk[i], self._start_index + idx + i)
+                if solo.raw_data is None:
+                    solo.raw_data = {}
+                solo.raw_data["parallel"] = (
+                    "найдена в пачке, перепроверена по одной")
+                result = solo
+            out[idx + i] = result
+        return out
+
+    def _run_batch(self, entries: list, argv: list, previews: list):
+        """Один nfqws2 песочницы на пачку, пробы — параллельно."""
+        from core import probe_mark, scan_parallel
+        from core.firewall import get_firewall_manager
+
+        nfqws = self._sandbox
+        if nfqws is None or not self._ensure_scan_rules(
+                get_firewall_manager()):
+            return None
+        start_time = time.time()
+        if not nfqws.start(argv):
+            return None
+        try:
+            time.sleep(self._get_stabilization_delay())
+            if not nfqws.is_running():
+                return None
+            probes = [None] * len(entries)
+
+            def work(k):
+                try:
+                    with probe_mark.marking(self._sandbox_mark,
+                                            ports=scan_parallel.slot_ports(k)):
+                        probes[k] = self._deep_probe()
+                except Exception as e:          # noqa: BLE001 — в итог
+                    probes[k] = e
+
+            threads = [threading.Thread(target=work, args=(k,), daemon=True,
+                                        name="scan-slot-%d" % k)
+                       for k in range(len(entries))]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        finally:
+            try:
+                nfqws.stop()
+            except Exception as e:              # noqa: BLE001
+                log.warning("Ошибка остановки nfqws2: %s" % e,
+                            source="scanner")
+        elapsed_ms = (time.time() - start_time) * 1000
+        out = []
+        for entry, probe, preview in zip(entries, probes, previews):
+            if isinstance(probe, dict):
+                out.append(self._probe_result(entry, probe, preview,
+                                              elapsed_ms))
+            else:
+                out.append(self._exception_result(entry, probe, elapsed_ms))
+        return out
 
     # ─────────────────── Правила на весь прогон ───────────────────
 
@@ -1487,8 +1654,10 @@ class StrategyScanner:
     def _apply_scan_rules(self, fw) -> bool:
         """Основные правила — или только правила песочницы."""
         if self._isolated:
-            return fw.apply_sandbox_rules(self._sandbox_queue(),
-                                          self._sandbox_mark)
+            from core import scan_parallel
+            return fw.apply_sandbox_rules(
+                self._sandbox_queue(), self._sandbox_mark,
+                slots=scan_parallel.PAR_MAX if self._parallel else 0)
         return fw.apply_rules()
 
     def _sandbox_queue(self) -> int:

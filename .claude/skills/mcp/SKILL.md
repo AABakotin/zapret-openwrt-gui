@@ -325,6 +325,7 @@ UI), и `tools_by_scope`.
 | `tunnels_status` | read | нет | `tools/tunnels.py` | engine?, logs?, running_only?, instances?, offset?, limit? | шесть движков одним ответом: установлен/запущен/конфиги/трафик/последняя ошибка |
 | `diagnostics_run` | read | нет | `tools/diagnostics.py` | checks?, services?, offset?, limit? | окружение, конфликты, предпосылки; сетевые пробы — по разрешению `probes` |
 | `dpi_report` | read | нет | `tools/diagnostics.py` | targets?, offset?, limit? | последняя классификация DPI из blockcheck; **проб не запускает** |
+| `site_trace` | read | нет | `tools/diagnostics.py` | domain, resolve? | куда пойдёт сайт: hosts → DNS-правила → единый слой → списки → профиль nfqws2 по HTTPS/QUIC/HTTP; наружу — только DNS-запрос |
 | `updates_check` | read | нет | `tools/updates.py` | refresh?, updates_only?, offset?, limit? | версии движков и обновления; по умолчанию из кеша, `refresh` — по `probes` |
 | `config_writable_paths` | read | нет | `tools/config.py` | section?, search?, offset?, limit? | что можно менять: путь, тип, текущее значение, `enum` |
 | `audit_list` | read | нет | `tools/audit.py` | tool?, status?, mutating_only?, offset?, limit? | последние вызовы MCP из журнала, новые первыми, с пометкой «ещё откатывается» |

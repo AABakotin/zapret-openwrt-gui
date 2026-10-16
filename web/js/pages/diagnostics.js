@@ -74,6 +74,22 @@ const DiagnosticsPage = (() => {
                 </button>
             </div>
 
+            <!-- «Куда пойдёт сайт» (core/site_trace.py) -->
+            <div class="card" id="diag-trace-card">
+                <div class="card-header"><h3 class="card-title">Куда пойдёт сайт</h3></div>
+                <p class="form-hint" style="margin-top:0;">
+                    Почему сайт идёт не так, как настроено: hosts, DNS, маршруты единого
+                    слоя (туннель забирает трафик мимо nfqws2) и какой профиль стратегии
+                    возьмёт HTTPS, QUIC и HTTP — и почему пропущены остальные.
+                </p>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <input class="form-input" id="diag-trace-domain" placeholder="youtube.com"
+                           style="max-width:320px;" onkeydown="if(event.key==='Enter')DiagnosticsPage.traceSite()">
+                    <button class="btn btn-primary btn-sm" onclick="DiagnosticsPage.traceSite()">Проверить</button>
+                </div>
+                <div id="diag-trace-result" style="margin-top:10px;"></div>
+            </div>
+
             <!-- Отчёт для помощи -->
             <div class="modal-backdrop" id="diag-report-modal" style="display:none;">
                 <div class="modal-content" style="max-width:760px;">
@@ -1460,6 +1476,49 @@ const DiagnosticsPage = (() => {
         box.value = (variant && variant.text) || '';
     }
 
+    async function traceSite() {
+        const input = document.getElementById('diag-trace-domain');
+        const box = document.getElementById('diag-trace-result');
+        if (!input || !box) return;
+        const domain = input.value.trim();
+        if (!domain) return;
+        box.innerHTML = '<div class="text-muted">Проверяю…</div>';
+        try {
+            const r = await API.get('/api/diagnostics/site-trace?domain=' + encodeURIComponent(domain));
+            box.innerHTML = renderTrace(r);
+        } catch (e) {
+            box.textContent = 'Ошибка: ' + e.message;
+        }
+    }
+
+    function renderTrace(r) {
+        if (!r.ok) return '<div class="text-muted">' + _esc(r.error || 'Не удалось') + '</div>';
+        let html = '<div style="font-size:13px;"><b>' + _esc(r.domain) + '</b>'
+            + (r.ips && r.ips.length ? ' <span class="text-muted">(' + _esc(r.ips.join(', ')) + ')</span>' : '')
+            + '<ul style="margin:6px 0 0 18px; padding:0;">'
+            + (r.summary || []).map(l => '<li>' + _esc(l) + '</li>').join('') + '</ul>';
+        const flows = (r.nfqws && r.nfqws.flows) || {};
+        const skipped = Object.keys(flows).filter(k => (flows[k].skipped || []).length);
+        if (skipped.length) {
+            html += '<details style="margin-top:6px;"><summary>Почему пропущены другие профили</summary>'
+                + skipped.map(k => '<div style="margin-top:4px;"><b>' + _esc(flows[k].title) + '</b>'
+                    + '<ul style="margin:2px 0 0 18px; padding:0;">'
+                    + flows[k].skipped.map(s => '<li>профиль ' + s.profile + ': ' + _esc(s.reason) + '</li>').join('')
+                    + '</ul></div>').join('') + '</details>';
+        }
+        const lists = r.lists || {};
+        const inLists = (lists.hostlists || []).map(x => x.name + ' (' + x.match + ')')
+            .concat((lists.named || []).map(x => '«' + x.name + '» (' + x.match + ')'));
+        html += '<div class="text-muted" style="margin-top:6px;">Есть в списках: '
+            + (inLists.length ? _esc(inLists.join(', ')) : 'нигде') + '</div>';
+        const errs = Object.keys(r.errors || {});
+        if (errs.length) {
+            html += '<div class="text-muted" style="margin-top:4px;">Не удалось проверить: '
+                + _esc(errs.map(k => k + ' — ' + r.errors[k]).join('; ')) + '</div>';
+        }
+        return html + '</div>';
+    }
+
     function closeHelpReport() {
         const modal = document.getElementById('diag-report-modal');
         if (modal) modal.style.display = 'none';
@@ -1498,6 +1557,7 @@ const DiagnosticsPage = (() => {
         showHelpReport,
         renderHelpReport,
         closeHelpReport,
+        traceSite,
         copyHelpReport,
     };
 })();

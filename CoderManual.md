@@ -567,7 +567,7 @@ stdout). Период опроса задаёт сам
 | `update_checker.py` | `/api/updates` | проверка обновлений всех движков разом |
 | `block_detector.py` / `auto_remediation.py` / `geosite.py` | … | фоновой детектор блокировок / авто-починка / импорт geosite |
 | `connectivity.py` / `devices.py` | … | матрица связности / устройства LAN |
-| `diagnostics.py` | `/api/diagnostics` | ping/http/dns/conflicts/**known-conflicts**/firewall/system/**selfcheck**/**help-report** («Отчёт для помощи», `core/help_report.py`: оба варианта маски одним ответом) |
+| `diagnostics.py` | `/api/diagnostics` | ping/http/dns/conflicts/**known-conflicts**/firewall/system/**selfcheck**/**help-report** («Отчёт для помощи», `core/help_report.py`: оба варианта маски одним ответом)/**site-trace** («Куда пойдёт сайт», `core/site_trace.py`: разбор профилей и выбор профиля — чистые функции, слои — ввод-вывод; тот же ответ у MCP `site_trace`) |
 | `notify.py` | `/api/notify` | уведомления в Telegram: настройки (токен не отдаётся), пробное сообщение, поиск чата, отправка очереди |
 | `history.py` | `/api/history`, `/api/safe-apply` | история файлов (список, diff, restore, undo, scan) / применение с проверкой (start, confirm, rollback, mark-working, restore-working) |
 | `healthcheck.py` | `/api/healthcheck` | autocircular-демон: enable/disable/run/status/config |

@@ -604,7 +604,11 @@ bt_handshake utp_bt_handshake`.
 `ip6_destopt2`, `ip6_routing`, `ip6_ah`, `tcp_seq=<±int>`, `tcp_ack=<±int>`,
 `tcp_ts=<±int>` (работает, только если клиент шлёт метки TCP — Windows по
 умолчанию не шлёт; линтер `tcp_ts_only_fooling`), `tcp_md5[=16byte_hex]`, `tcp_flags_set=FIN,SYN,…`,
-`tcp_flags_unset=ack`, `tcp_ts_up`, `tcp_nop_del`, `fool=<custom_lua_fn>`,
+`tcp_flags_unset=ack`, `tcp_ts_up` (поднять опцию timestamp первой: Linux
+стабильно отбрасывает badack-сегмент — `tcp_ack` без `tcp_seq`, — только если
+метка идёт первой; nfqws1 ставил её первой всегда, nfqws2 сохраняет порядок
+клиента, поэтому `tcp_ack` у фейка — только в паре с `tcp_ts_up`; линтер
+`badack_without_ts_up`, «Уточнение» добавляет пару сам), `tcp_nop_del`, `fool=<custom_lua_fn>`,
 `badsum`, `badseq`.
 
 **`ipid`:** `ip_id=seq|rnd|zero|none` (default `seq` для send-функций, `none`

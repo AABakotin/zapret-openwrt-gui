@@ -33,10 +33,14 @@ import re
 MAX_VARIANTS = 20
 
 # Способы обмануть DPI для фейка (fooling): каждый — отдельный вариант.
+# tcp_ack — только с tcp_ts_up: Linux-сервер стабильно отбрасывает
+# badack-фейк, лишь когда метка TCP идёт первой опцией, а ставит её туда
+# tcp_ts_up (линтер badack_without_ts_up).
 FOOLINGS_TCP = ("tcp_md5", "tcp_seq=-10000", "badsum",
-                "ip_autottl=-2,3-20", "tcp_ack=-66000")
+                "ip_autottl=-2,3-20", "tcp_ack=-66000:tcp_ts_up")
 # Ключи fooling, которые вариант заменяет целиком.
-_FOOLING_KEYS = ("tcp_md5", "tcp_seq", "tcp_ack", "tcp_ts", "badsum",
+_FOOLING_KEYS = ("tcp_md5", "tcp_seq", "tcp_ack", "tcp_ts", "tcp_ts_up",
+                 "badsum",
                  "badseq", "ip_ttl", "ip6_ttl", "ip_autottl", "ip6_autottl")
 REPEATS = (6, 11, 20)
 FAKE_SNI = "www.google.com"
@@ -158,8 +162,11 @@ def _variants_heavier(segs: list, protocol: str) -> list:
     if protocol == "tcp":
         base = [o for o in opts if _key(o) not in _FOOLING_KEYS]
         for fool in FOOLINGS_TCP:
-            k, _, v = fool.partition("=")
-            new = _join(fn, _set(base, k, v or None))
+            fooled = base
+            for part in fool.split(":"):
+                k, _, v = part.partition("=")
+                fooled = _set(fooled, k, v or None)
+            new = _join(fn, fooled)
             if new != steps[i]:
                 out.append(("обман DPI: %s" % fool, with_step(new)))
         if fn == "fake":

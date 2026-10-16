@@ -296,6 +296,26 @@ def register(app):
 
         return {"ok": True, "is_favorite": is_favorite}
 
+    @app.post("/api/strategies/import")
+    def api_strategies_import():
+        """Чужой профиль → наши профили: пути перенесены, лишнее убрано.
+
+        Body: {"text": "…"} — конфиг zapret2 / nfqws2-keenetic или строка
+        nfqws2. Ничего не сохраняет: ответ открывается в редакторе.
+        """
+        response.content_type = "application/json; charset=utf-8"
+        try:
+            body = request.json or {}
+        except Exception:
+            body = {}
+        text = str(body.get("text") or "")
+        if not text.strip() or len(text) > 64000:
+            response.status = 400
+            return {"ok": False, "error": "вставьте конфиг или строку "
+                                          "nfqws2 (до 64 КБ)"}
+        from core.profile_import import import_text
+        return import_text(text)
+
     @app.post("/api/strategies/preview")
     def api_strategies_preview():
         """

@@ -2314,17 +2314,49 @@ const StrategiesPage = (() => {
 
     // Открыть редактор СОЗДАНИЯ, предзаполненный профилями из буфера.
     // Автоматически НЕ сохраняем — решение за пользователем (§3).
-    function _openPasteEditor(text) {
-        const profiles = _parseStrategyArgs(text);
-        if (!profiles.length) { Toast.warning('В буфере нет распознаваемой стратегии'); return; }
+    // Сначала — разбор на сервере (core/profile_import.py): конфиг другого
+    // роутера, пути к lua/блобам/спискам переносятся на наши, опции
+    // движка убираются. Не вышло — прежний разбор здесь же.
+    async function _openPasteEditor(text) {
+        let profiles = [];
+        let res = null;
+        try {
+            res = await API.post('/api/strategies/import', { text });
+            if (res && res.ok) profiles = res.profiles || [];
+        } catch (_e) { res = null; }
+        if (!profiles.length) profiles = _parseStrategyArgs(text);
+        if (!profiles.length) {
+            Toast.warning((res && res.error) || 'В буфере нет распознаваемой стратегии');
+            return;
+        }
+        const imported = res && res.ok && res.kind && res.kind !== 'args';
         openEditor({
             id: '',
             name: '',
-            description: 'Вставлено из буфера обмена',
+            description: imported ? 'Импорт: ' + res.kind_title : 'Вставлено из буфера обмена',
             type: profiles.length > 1 ? 'combined' : 'single',
             profiles,
         }, 'create');
+        const notes = ((res && res.warnings) || []).slice();
+        if (res && res.dropped && res.dropped.length) {
+            notes.push('Убрано: ' + res.dropped.join(' '));
+        }
+        const body = document.getElementById('modal-body');
+        if (body && notes.length) {
+            const box = document.createElement('div');
+            box.className = 'alert alert-warning';
+            box.style.marginBottom = '12px';
+            box.innerHTML = '<div class="alert-title">Что поменяно при вставке</div><ul style="margin:4px 0 0 18px; padding:0;">'
+                + notes.map(n => '<li>' + _escHtml(n) + '</li>').join('') + '</ul>';
+            body.prepend(box);
+        }
         Toast.info('Стратегия из буфера — задайте ID/имя, проверьте и сохраните');
+    }
+
+    function _escHtml(t) {
+        const d = document.createElement('div');
+        d.textContent = String(t == null ? '' : t);
+        return d.innerHTML;
     }
 
     // Копирование в буфер с fallback на execCommand (работает и по http,

@@ -868,7 +868,53 @@ def create_app(config_dir: str = None) -> Bottle:
     # чтобы не блокировать старт веб-сервера и API-запросы.
     import threading
 
+    def _ensure_dns_routing_file():
+     """Гарантировать /opt/zapret2/lists/dns-routing.conf.
+    
+    Если в /etc/config/dhcp есть addnmount на этот файл, но файла нет,
+    dnsmasq не запустится → DHCP сломается → роутер не раздаёт IP.
+    Файл мог быть удалён:
+      - вручную (rm -rf /opt/zapret2)
+      - обновлением пакета zapret2 (reinstall)
+      - при очистке /opt перед переустановкой
+    
+    No-op, если:
+      - addnmount нет вовсе (DNS-маршрутизация не используется)
+      - addnmount на другой файл
+      - файл уже существует
+    """
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["uci", "get", "dhcp.@dnsmasq[0].addnmount"],
+            capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            return  # нет addnmount
+        addnmount_path = (r.stdout or "").strip()
+        if not addnmount_path or "dns-routing.conf" not in addnmount_path:
+            return  # не наш файл
+        if os.path.exists(addnmount_path):
+            return  # всё хорошо
+        # Файл потерян — создать пустой
+        os.makedirs(os.path.dirname(addnmount_path), exist_ok=True)
+        open(addnmount_path, "a").close()
+        from core.log_buffer import log
+        log.warning(
+            "Файл %s отсутствовал, но dhcp.addnmount на него ссылается — "
+            "создан пустым (иначе dnsmasq не запустится и DHCP сломается)"
+            % addnmount_path,
+            source="app",
+        )
+    except Exception as e:
+        try:
+            from core.log_buffer import log
+            log.debug("Проверка dns-routing.conf: %s" % e, source="app")
+        except Exception:
+            pass            
+
+
     def _background_boot_init():
+        _ensure_dns_routing_file()
         # Автоприменение сохранённой стратегии при старте
         # (для платформ без отдельного nfqws2-init: Ubuntu/systemd и пр.)
         try:
